@@ -23,6 +23,8 @@ jobs:
           node-version: '22'
       - run: npm install --no-audit --no-fund
       - run: npm run typecheck
+      - name: Validate D1 migrations locally
+        run: npx wrangler d1 migrations apply school-of-nursing-faq-bot-db --local --env test
       - name: Wrangler dry-run bundle
         run: npx wrangler deploy --dry-run --env test --outdir dist
       - name: Refresh deployment artifact
