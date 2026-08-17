@@ -5,8 +5,6 @@ export type BotCommand = {
   description: string;
 };
 
-export const COMMAND_SCHEMA_VERSION = "2026-08-18-v1";
-
 const PUBLIC_COMMANDS: BotCommand[] = [
   { command: "start", description: "Start School of Nursing assistant" },
   { command: "whoami", description: "Show my Telegram identity" },
@@ -25,6 +23,12 @@ const OWNER_COMMANDS: BotCommand[] = [
   { command: "ai", description: "Configure AI agent" },
   { command: "staff", description: "Configure staff and monitoring" },
 ];
+
+export const COMMAND_SCHEMA_VERSION = JSON.stringify({
+  public: PUBLIC_COMMANDS,
+  admin: ADMIN_COMMANDS,
+  owner: OWNER_COMMANDS,
+});
 
 export function commandsForRole(role: AdminRole): BotCommand[] {
   if (role === "owner") return OWNER_COMMANDS;
