@@ -25,7 +25,7 @@ Production Telegram FAQ assistant for a university School of Nursing in Burmese,
 - Public repo; secrets never committed
 
 ## Phase 0 — Foundation v0.1
-Status: IMPLEMENTED ON `test`; RUNTIME VALIDATION PENDING
+Status: IMPLEMENTED ON `test`; CLOUDFLARE RUNTIME VALIDATION IN PROGRESS
 
 Completed on `test`:
 - Repository/project operating rules in `AGENTS.md`.
@@ -41,11 +41,20 @@ Completed on `test`:
 - Telegram user metadata upsert and free-text question logging when D1 is bound.
 - Runtime secret placeholders only; no secrets committed.
 - Current tooling versions aligned with the package registry on 2026-08-18.
+- Cloudflare D1 database provisioned: `school-of-nursing-faq-bot-db`.
+- D1 database ID recorded in `wrangler.jsonc`: `9109c1ef-3613-49f8-aee3-c62a3dbdd744`.
+- D1 migration applied and verified in Cloudflare: 4 tables + 2 indexes.
+- `wrangler.jsonc` now includes `DB` binding and a separate `test` environment targeting Worker `school-of-nursing-faq-bot-test`.
+- Direct-API deployment artifact `deploy/worker.mjs` added and syntax-validated locally with Node.
+- Verified Cloudflare infrastructure handoff recorded in `docs/CLOUDFLARE_HANDOFF.md`.
 
 Validation state:
 - Repository writes/reads on `test` verified through the GitHub connector.
-- Local clone/install/typecheck could not run in the available execution container because outbound DNS to `github.com` is unavailable. This is an environment limitation, not a reported TypeScript failure.
-- Do not merge Foundation v0.1 to `main` until a real dependency install/typecheck or equivalent Cloudflare validation passes.
+- Local dependency install/typecheck could not run in the available execution container because outbound DNS to `github.com` is unavailable. This is an environment limitation, not a reported TypeScript failure.
+- `deploy/worker.mjs` passed `node --check` locally.
+- Cloudflare D1 schema is live and verified.
+- Test Worker deployment and `/health` runtime validation remain pending.
+- Do not merge Foundation v0.1 to `main` until the test Worker is deployed and runtime validation is green.
 
 ## Phase 1 — Telegram MVP
 Status: PLANNED
@@ -83,11 +92,11 @@ Status: PLANNED
 ## Phase 4 — Production deployment
 Status: PLANNED
 
-- Provision Cloudflare D1.
+- Deploy canonical `main` to Worker `school-of-nursing-faq-bot` only after validated merge.
 - Configure Worker secrets/bindings.
 - Configure Telegram webhook.
 - Configure GitHub Actions secrets/workflow if used.
-- Deploy and run focused production smoke checks.
+- Run focused production smoke checks.
 
 ## Phase 5 — Operations
 Status: PLANNED
@@ -101,4 +110,4 @@ Status: PLANNED
 The source FAQ document contains 22 core questions. Canonical Burmese facts are the source of truth; English and Simplified Chinese translations must preserve meaning. Do not invent or silently alter dates, costs, accreditation, eligibility, application, scholarship/loan/bond, or policy facts.
 
 ## Next recommended slice
-Validate Foundation v0.1 with a real Worker dependency install/typecheck, provision the Cloudflare D1 binding, then connect and smoke-test the first live Telegram webhook. Keep the work on `test`; merge to `main` only after validation is green.
+Deploy the exact `deploy/worker.mjs` artifact from `test` to Cloudflare Worker `school-of-nursing-faq-bot-test`, attach D1 binding `DB`, set `APP_ENV=test`, and verify `GET /health`. If green, return Cloudflare runtime evidence to the GitHub session, update continuity docs, then proceed to Telegram secret/webhook setup without merging to `main` prematurely.
