@@ -3,11 +3,11 @@ import {
   aiSettingsKeyboard,
   aiStatus,
   bindSelectedModel,
-  chooseModel,
   consumeAiSetupText,
   fetchProviderModels,
   startProviderSetup,
 } from "./ai";
+import { chooseModelForPing, selectedModelPassedPing, testSelectedModel } from "./ai_ping";
 import { findFaq, type Language } from "./faq";
 
 export interface Env {
@@ -97,17 +97,11 @@ async function telegramApi(env: Env, method: string, body: unknown) {
     },
   );
 
-  if (!response.ok) {
-    console.error(`Telegram ${method} failed`, response.status);
-  }
+  if (!response.ok) console.error(`Telegram ${method} failed`, response.status);
 }
 
 async function sendTelegramMessage(env: Env, chatId: number, text: string, replyMarkup?: unknown) {
-  await telegramApi(env, "sendMessage", {
-    chat_id: chatId,
-    text,
-    reply_markup: replyMarkup,
-  });
+  await telegramApi(env, "sendMessage", { chat_id: chatId, text, reply_markup: replyMarkup });
 }
 
 async function deleteTelegramMessage(env: Env, chatId: number, messageId: number) {
@@ -115,10 +109,7 @@ async function deleteTelegramMessage(env: Env, chatId: number, messageId: number
 }
 
 async function answerCallbackQuery(env: Env, callbackQueryId: string, text?: string) {
-  await telegramApi(env, "answerCallbackQuery", {
-    callback_query_id: callbackQueryId,
-    text,
-  });
+  await telegramApi(env, "answerCallbackQuery", { callback_query_id: callbackQueryId, text });
 }
 
 async function upsertUser(db: D1Database, user: TelegramUser) {
@@ -137,7 +128,6 @@ async function getLanguage(db: D1Database, telegramUserId: number): Promise<Lang
   const row = await db.prepare(
     `SELECT language FROM users WHERE telegram_user_id = ?1`,
   ).bind(telegramUserId).first<{ language: Language | null }>();
-
   return row?.language ?? null;
 }
 
@@ -152,13 +142,7 @@ async function setLanguage(db: D1Database, user: TelegramUser, language: Languag
        last_name = excluded.last_name,
        language = excluded.language,
        updated_at = CURRENT_TIMESTAMP`,
-  ).bind(
-    user.id,
-    user.username ?? null,
-    user.first_name ?? null,
-    user.last_name ?? null,
-    language,
-  ).run();
+  ).bind(user.id, user.username ?? null, user.first_name ?? null, user.last_name ?? null, language).run();
 }
 
 async function logQuestion(
@@ -170,7 +154,6 @@ async function logQuestion(
   answerSource: "canonical_faq" | "unresolved",
 ) {
   if (!message.from || !message.text) return;
-
   await db.prepare(
     `INSERT INTO questions
       (telegram_user_id, chat_id, message_id, question, language, resolution, matched_faq_key, answer_source)
@@ -194,10 +177,7 @@ async function handleLanguageCallback(env: Env, callback: TelegramCallbackQuery)
   const language = match[1] as Language;
   if (env.DB) await setLanguage(env.DB, callback.from, language);
   await answerCallbackQuery(env, callback.id);
-
-  if (callback.message) {
-    await sendTelegramMessage(env, callback.message.chat.id, COPY[language].selected);
-  }
+  if (callback.message) await sendTelegramMessage(env, callback.message.chat.id, COPY[language].selected);
   return true;
 }
 
@@ -228,6 +208,12 @@ async function handleAiCallback(env: Env, callback: TelegramCallbackQuery): Prom
     return true;
   }
 
+  if (data === "ai:ping") {
+    const result = await testSelectedModel(env, callback.from.id);
+    await sendTelegramMessage(env, chatId, result.text, result.keyboard);
+    return true;
+  }
+
   const providerMatch = data.match(/^ai:provider:([a-z0-9_-]+)$/);
   if (providerMatch) {
     const result = await startProviderSetup(env.DB, callback.from.id, providerMatch[1]);
@@ -244,13 +230,17 @@ async function handleAiCallback(env: Env, callback: TelegramCallbackQuery): Prom
 
   const modelMatch = data.match(/^ai:model:([a-z0-9_-]+):([A-Za-z0-9_-]+)$/);
   if (modelMatch) {
-    const result = await chooseModel(env.DB, callback.from.id, modelMatch[1], modelMatch[2]);
+    const result = await chooseModelForPing(env.DB, callback.from.id, modelMatch[1], modelMatch[2]);
     await sendTelegramMessage(env, chatId, result.text, result.keyboard);
     return true;
   }
 
   const bindMatch = data.match(/^ai:bind:(primary|fallback)$/);
   if (bindMatch) {
+    if (!(await selectedModelPassedPing(env.DB, callback.from.id))) {
+      await sendTelegramMessage(env, chatId, "Run Test Ping successfully before binding this model.");
+      return true;
+    }
     const response = await bindSelectedModel(env.DB, callback.from.id, bindMatch[1] as "primary" | "fallback");
     await sendTelegramMessage(env, chatId, response, aiSettingsKeyboard());
     return true;
@@ -294,19 +284,13 @@ async function handleMessage(env: Env, message: TelegramMessage) {
     await sendTelegramMessage(
       env,
       message.chat.id,
-      "AI Agent Settings\nChoose a provider, save a key, fetch models, test the connection, then bind primary and fallback models.",
+      "AI Agent Settings\nChoose a provider, save a key, fetch models, select a model, pass Test Ping, then bind primary and fallback models.",
       aiSettingsKeyboard(),
     );
     return;
   }
 
-  const admin = await handleAdminCommand(
-    env.DB,
-    message.from.id,
-    env.BOT_OWNER_TELEGRAM_ID,
-    text,
-  );
-
+  const admin = await handleAdminCommand(env.DB, message.from.id, env.BOT_OWNER_TELEGRAM_ID, text);
   if (admin.handled) {
     if (admin.response) await sendTelegramMessage(env, message.chat.id, admin.response);
     return;
@@ -361,11 +345,7 @@ export default {
     const url = new URL(request.url);
 
     if (request.method === "GET" && url.pathname === "/health") {
-      return json({
-        ok: true,
-        service: "school-of-nursing-faq-bot",
-        environment: env.APP_ENV,
-      });
+      return json({ ok: true, service: "school-of-nursing-faq-bot", environment: env.APP_ENV });
     }
 
     if (request.method === "POST" && url.pathname === "/telegram/webhook") {
