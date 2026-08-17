@@ -1,3 +1,5 @@
+import { findFaq, type Language } from "./faq";
+
 export interface Env {
   APP_ENV: string;
   DB?: D1Database;
@@ -22,9 +24,17 @@ type TelegramMessage = {
   from?: TelegramUser;
 };
 
+type TelegramCallbackQuery = {
+  id: string;
+  from: TelegramUser;
+  data?: string;
+  message?: TelegramMessage;
+};
+
 type TelegramUpdate = {
   update_id: number;
   message?: TelegramMessage;
+  callback_query?: TelegramCallbackQuery;
 };
 
 const json = (body: unknown, status = 200) =>
@@ -43,33 +53,54 @@ function languageKeyboard() {
   };
 }
 
-async function sendTelegramMessage(
-  env: Env,
-  chatId: number,
-  text: string,
-  replyMarkup?: unknown,
-) {
+const COPY: Record<Language, { selected: string; choose: string; noMatch: string }> = {
+  my: {
+    selected: "ဘာသာစကားကို မြန်မာဘာသာအဖြစ် သတ်မှတ်ပြီးပါပြီ။ မေးလိုသည့် မေးခွန်းကို ပို့နိုင်ပါပြီ။",
+    choose: "ဘာသာစကား ရွေးချယ်ပါ။",
+    noMatch: "ဒီမေးခွန်းကို အတည်ပြုထားသော FAQ အချက်အလက်များဖြင့် ယုံကြည်စိတ်ချစွာ မဖြေနိုင်သေးပါ။ မေးခွန်းကို ဝန်ထမ်းများ ပြန်လည်စစ်ဆေးနိုင်ရန် မှတ်တမ်းတင်ထားပါသည်။",
+  },
+  en: {
+    selected: "Language set to English. You can now send your question.",
+    choose: "Please choose your language.",
+    noMatch: "I cannot answer this confidently from the approved FAQ information yet. Your question has been recorded for authorized staff review.",
+  },
+  zh: {
+    selected: "语言已设置为简体中文。现在可以发送您的问题。",
+    choose: "请选择语言。",
+    noMatch: "目前无法仅根据已批准的 FAQ 信息可靠回答此问题。您的问题已记录，以便授权工作人员进一步核查。",
+  },
+};
+
+async function telegramApi(env: Env, method: string, body: unknown) {
   if (!env.TELEGRAM_BOT_TOKEN) {
     console.warn("TELEGRAM_BOT_TOKEN is not configured");
     return;
   }
 
   const response = await fetch(
-    `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`,
+    `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/${method}`,
     {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        chat_id: chatId,
-        text,
-        reply_markup: replyMarkup,
-      }),
+      body: JSON.stringify(body),
     },
   );
 
   if (!response.ok) {
-    console.error("Telegram sendMessage failed", response.status);
+    console.error(`Telegram ${method} failed`, response.status);
   }
+}
+
+async function sendTelegramMessage(env: Env, chatId: number, text: string, replyMarkup?: unknown) {
+  await telegramApi(env, "sendMessage", {
+    chat_id: chatId,
+    text,
+    reply_markup: replyMarkup,
+  });
+}
+
+async function answerCallbackQuery(env: Env, callbackQueryId: string) {
+  await telegramApi(env, "answerCallbackQuery", { callback_query_id: callbackQueryId });
 }
 
 async function upsertUser(db: D1Database, user: TelegramUser) {
@@ -84,29 +115,84 @@ async function upsertUser(db: D1Database, user: TelegramUser) {
   ).bind(user.id, user.username ?? null, user.first_name ?? null, user.last_name ?? null).run();
 }
 
-async function logQuestion(db: D1Database, message: TelegramMessage) {
+async function getLanguage(db: D1Database, telegramUserId: number): Promise<Language | null> {
+  const row = await db.prepare(
+    `SELECT language FROM users WHERE telegram_user_id = ?1`,
+  ).bind(telegramUserId).first<{ language: Language | null }>();
+
+  return row?.language ?? null;
+}
+
+async function setLanguage(db: D1Database, user: TelegramUser, language: Language) {
+  await db.prepare(
+    `INSERT INTO users
+      (telegram_user_id, username, first_name, last_name, language, updated_at)
+     VALUES (?1, ?2, ?3, ?4, ?5, CURRENT_TIMESTAMP)
+     ON CONFLICT(telegram_user_id) DO UPDATE SET
+       username = excluded.username,
+       first_name = excluded.first_name,
+       last_name = excluded.last_name,
+       language = excluded.language,
+       updated_at = CURRENT_TIMESTAMP`,
+  ).bind(
+    user.id,
+    user.username ?? null,
+    user.first_name ?? null,
+    user.last_name ?? null,
+    language,
+  ).run();
+}
+
+async function logQuestion(
+  db: D1Database,
+  message: TelegramMessage,
+  language: Language,
+  resolution: "answered" | "pending",
+  matchedFaqKey: string | null,
+  answerSource: "canonical_faq" | "unresolved",
+) {
   if (!message.from || !message.text) return;
 
   await db.prepare(
     `INSERT INTO questions
-      (telegram_user_id, chat_id, message_id, question, resolution)
-     VALUES (?1, ?2, ?3, ?4, 'pending')`,
+      (telegram_user_id, chat_id, message_id, question, language, resolution, matched_faq_key, answer_source)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)`,
   ).bind(
     message.from.id,
     message.chat.id,
     message.message_id,
     message.text,
+    language,
+    resolution,
+    matchedFaqKey,
+    answerSource,
   ).run();
+}
+
+async function handleLanguageCallback(env: Env, callback: TelegramCallbackQuery) {
+  const match = callback.data?.match(/^lang:(my|en|zh)$/);
+  if (!match) return;
+
+  const language = match[1] as Language;
+
+  if (env.DB) {
+    await setLanguage(env.DB, callback.from, language);
+  }
+
+  await answerCallbackQuery(env, callback.id);
+
+  if (callback.message) {
+    await sendTelegramMessage(env, callback.message.chat.id, COPY[language].selected);
+  }
 }
 
 async function handleMessage(env: Env, message: TelegramMessage) {
   if (!message.from) return;
 
-  if (env.DB) {
-    await upsertUser(env.DB, message.from);
-  }
+  if (env.DB) await upsertUser(env.DB, message.from);
 
   const text = message.text?.trim() ?? "";
+  if (!text) return;
 
   if (text === "/start" || text === "/language") {
     await sendTelegramMessage(
@@ -118,17 +204,32 @@ async function handleMessage(env: Env, message: TelegramMessage) {
     return;
   }
 
-  if (text && env.DB) {
-    await logQuestion(env.DB, message);
-  }
+  const language = env.DB ? await getLanguage(env.DB, message.from.id) : null;
 
-  if (text) {
+  if (!language) {
     await sendTelegramMessage(
       env,
       message.chat.id,
-      "Your question has been recorded. The FAQ answer engine is being connected in the next implementation slice.",
+      "Please choose your language.\nဘာသာစကား ရွေးချယ်ပါ။\n请选择语言。",
+      languageKeyboard(),
     );
+    return;
   }
+
+  const faq = findFaq(text, language);
+
+  if (faq) {
+    if (env.DB) {
+      await logQuestion(env.DB, message, language, "answered", faq.key, "canonical_faq");
+    }
+    await sendTelegramMessage(env, message.chat.id, faq.answer[language]);
+    return;
+  }
+
+  if (env.DB) {
+    await logQuestion(env.DB, message, language, "pending", null, "unresolved");
+  }
+  await sendTelegramMessage(env, message.chat.id, COPY[language].noMatch);
 }
 
 async function handleTelegramWebhook(request: Request, env: Env) {
@@ -144,6 +245,10 @@ async function handleTelegramWebhook(request: Request, env: Env) {
     update = await request.json<TelegramUpdate>();
   } catch {
     return json({ ok: false, error: "invalid_json" }, 400);
+  }
+
+  if (update.callback_query) {
+    await handleLanguageCallback(env, update.callback_query);
   }
 
   if (update.message) {
