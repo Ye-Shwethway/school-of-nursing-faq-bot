@@ -1,3 +1,4 @@
+import { handleAdminCommand } from "./admin";
 import { findFaq, type Language } from "./faq";
 
 export interface Env {
@@ -53,20 +54,17 @@ function languageKeyboard() {
   };
 }
 
-const COPY: Record<Language, { selected: string; choose: string; noMatch: string }> = {
+const COPY: Record<Language, { selected: string; noMatch: string }> = {
   my: {
     selected: "ဘာသာစကားကို မြန်မာဘာသာအဖြစ် သတ်မှတ်ပြီးပါပြီ။ မေးလိုသည့် မေးခွန်းကို ပို့နိုင်ပါပြီ။",
-    choose: "ဘာသာစကား ရွေးချယ်ပါ။",
     noMatch: "ဒီမေးခွန်းကို အတည်ပြုထားသော FAQ အချက်အလက်များဖြင့် ယုံကြည်စိတ်ချစွာ မဖြေနိုင်သေးပါ။ မေးခွန်းကို ဝန်ထမ်းများ ပြန်လည်စစ်ဆေးနိုင်ရန် မှတ်တမ်းတင်ထားပါသည်။",
   },
   en: {
     selected: "Language set to English. You can now send your question.",
-    choose: "Please choose your language.",
     noMatch: "I cannot answer this confidently from the approved FAQ information yet. Your question has been recorded for authorized staff review.",
   },
   zh: {
     selected: "语言已设置为简体中文。现在可以发送您的问题。",
-    choose: "请选择语言。",
     noMatch: "目前无法仅根据已批准的 FAQ 信息可靠回答此问题。您的问题已记录，以便授权工作人员进一步核查。",
   },
 };
@@ -201,6 +199,18 @@ async function handleMessage(env: Env, message: TelegramMessage) {
       "Please choose your language.\nဘာသာစကား ရွေးချယ်ပါ။\n请选择语言。",
       languageKeyboard(),
     );
+    return;
+  }
+
+  const admin = await handleAdminCommand(
+    env.DB,
+    message.from.id,
+    env.BOT_OWNER_TELEGRAM_ID,
+    text,
+  );
+
+  if (admin.handled) {
+    if (admin.response) await sendTelegramMessage(env, message.chat.id, admin.response);
     return;
   }
 
