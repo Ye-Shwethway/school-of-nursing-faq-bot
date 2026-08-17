@@ -109,17 +109,25 @@ Implemented:
   - OpenRouter
   - Groq
   - Mistral
+  - NanoGPT — Subscription only
+  - NanoGPT — Subscription + Paid (all visible)
   - Custom OpenAI-compatible HTTPS endpoint
 - provider API key entry from Telegram settings
 - AES-256-GCM encryption before D1 persistence
 - master encryption key supplied only as Cloudflare secret `AI_CONFIG_MASTER_KEY`
 - best-effort deletion of Telegram messages containing provider API keys after capture
 - provider model-list fetching from live provider APIs; model IDs are not hard-coded
+- NanoGPT dual catalog/routing modes using one shared encrypted NanoGPT credential:
+  - subscription-only models: `/api/subscription/v1/models?detailed=true`
+  - subscription + paid/all-visible models: `/api/v1/models?detailed=true`
+  - subscription-only Test Ping: `/api/subscription/v1/chat/completions`
+  - all-mode Test Ping: `/api/v1/chat/completions`
+- distinct NanoGPT cache/binding IDs preserve the selected billing/catalog mode (`nanogpt_subscription`, `nanogpt_all`)
 - D1 model cache with short Telegram callback tokens
 - explicit model-level **Test Ping** generation request
 - model cannot be bound until Test Ping has passed
 - save/bind selected model as Primary or Fallback
-- primary and fallback may use different providers
+- primary and fallback may use different providers or NanoGPT modes
 - current binding status view
 - Custom provider base URL + key setup
 - schema migration `migrations/0002_ai_settings.sql`
@@ -132,8 +140,8 @@ Pending:
 - provision `AI_CONFIG_MASTER_KEY` as a Cloudflare secret
 - live Owner `/ai` UI validation
 - live credential encryption/decryption validation
-- model-list tests for supported providers
-- model ping tests
+- model-list tests for supported providers, including both NanoGPT catalog modes
+- model ping tests, including NanoGPT subscription and canonical routing
 - actual grounded fallback inference orchestration using the bound primary/fallback pair
 - fallback-on-provider/model-error behavior
 - unresolved escalation if both models fail or cannot answer from approved context
@@ -164,4 +172,4 @@ The current source document contains 22 core FAQs. Burmese facts are authoritati
 Cloudflare compatibility dates must be based on a UTC-safe date, not merely the Creator's local calendar date. Once a compatibility date is accepted, keep it fixed until a deliberate runtime-compatibility upgrade requires changing it.
 
 ## Next recommended slice
-Stabilize the current combined Telegram MVP + Admin + AI Settings source on `test`, then prepare the current deployable build. When Cloudflare UTC accepts `2026-08-18`, apply D1 migration `0002_ai_settings.sql`, deploy to `school-of-nursing-faq-bot-test`, configure only the minimum required test secrets, and validate `/health`, D1 bindings, language persistence, FAQ answering/logging, Owner/Sudo authorization, encrypted AI credential setup, model fetch, Test Ping, and primary/fallback binding. Do not merge to `main` until the test checkpoint is green.
+Stabilize the current combined Telegram MVP + Admin + AI Settings source on `test`, then prepare the current deployable build. When Cloudflare UTC accepts `2026-08-18`, apply D1 migration `0002_ai_settings.sql`, deploy to `school-of-nursing-faq-bot-test`, configure only the minimum required test secrets, and validate `/health`, D1 bindings, language persistence, FAQ answering/logging, Owner/Sudo authorization, encrypted AI credential setup, provider model fetches including both NanoGPT modes, Test Ping, and primary/fallback binding. Do not merge to `main` until the test checkpoint is green.
