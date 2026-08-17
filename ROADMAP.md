@@ -18,8 +18,10 @@ Production Telegram FAQ assistant for a university School of Nursing in Burmese,
 - configurable multi-provider grounded AI fallback
 - primary + fallback model binding
 - strict AI output decision: `answer` or `handoff`
-- human handoff supports private Staff Inbox group and dedicated private staff responder
-- atomic single-staff claim before reply
+- silent Staff Inbox shadow monitoring with alert escalation
+- conversation-level `Take Over` / `Return to AI`
+- group or dedicated-staff human handoff
+- atomic single-staff ownership before human reply
 - anonymous staff relay to users
 - Bot Owner / Sudo Admin / Staff authority separated by immutable Telegram user ID
 - public repo; secrets never committed
@@ -103,7 +105,7 @@ Implemented:
 AI contract:
 - School of Nursing scope only
 - approved context is the only school-specific factual authority
-- no invented dates, fees, accreditation, eligibility, policy, links, schedules, scholarships/loans/bonds, addresses, or exceptions
+- no invented policy-sensitive facts
 - ambiguous/missing/current-case-specific facts → `handoff`
 - malformed model output is unsafe and must not become a user answer
 - persona changes style only, never facts/authority/handoff threshold
@@ -115,80 +117,90 @@ Pending:
 - provision `AI_CONFIG_MASTER_KEY`
 - live provider model-list/ping/binding tests
 - actual grounded inference orchestration using Primary then Fallback
-- fallback-to-human semantics when both models fail or cannot ground an answer
 
 ## Phase 4 — Human Staff Handoff
-Status: GROUP + DEDICATED ROUTING CORE IMPLEMENTED ON `test`; LIVE VALIDATION PENDING
+Status: GROUP + DEDICATED ROUTING CORE IMPLEMENTED; LIVE VALIDATION PENDING
 
-Implemented:
-- migration `0003_handoff_persona.sql`
+Implemented from migration 0003:
 - `bot_settings`
 - `staff_members`
 - `escalation_cases`
 - `escalation_messages`
-- Owner-selectable handoff route:
-  - `auto` — group first, dedicated staff fallback
-  - `group` — Staff Inbox only
-  - `dedicated` — assigned staff private chat only
+- handoff route `auto | group | dedicated`
 - `/staff status`
 - `/staff route auto|group|dedicated`
 - `/staff inbox here`
-- `/staff dedicated <telegram_user_id>`
-- `/staff add <telegram_user_id>`
-- `/staff remove <telegram_user_id>`
-- dedicated staff private-delivery probe before assignment is saved
-- unresolved case creation and routing
-- `Take Over` button
-- atomic claim: only first authorized staff member can own a case
+- `/staff dedicated <telegram_user_id>` with private-delivery probe
+- `/staff add <telegram_user_id>` / `/staff remove <telegram_user_id>`
+- unresolved case routing
+- atomic case claim
 - claimant-only replies
-- anonymous relay to user as `School of Nursing Staff`
-- `Resolve` action
-- user/staff relay audit rows
-- undelivered cases remain queued in D1 and trigger a best-effort Owner warning
+- anonymous relay as `School of Nursing Staff`
+- resolve action
+- D1 queue preservation + Owner warning when no destination accepts delivery
 
-Dedicated staff requirement:
-- Telegram bot must already be able to reach the staff member privately
-- staff must open the bot and send `/start` before Owner assignment if the bot has never had a private chat with them
+## Phase 5 — Shadow Monitoring + Conversation Takeover
+Status: CORE IMPLEMENTED ON `test`; LIVE TELEGRAM VALIDATION PENDING
 
-Recommended multi-staff topology:
-- private Staff Inbox supergroup
-- if no group is used, dedicated staff routing is a full second workflow
-- `auto` is the recommended default
+Migration `0004_shadow_monitoring.sql` adds:
+- `conversation_control`
+- `monitoring_topics`
+- conversation-control mode index
 
-Concurrency rule:
-- D1 `UPDATE ... WHERE status='open' AND claimed_by IS NULL`
-- first successful update wins
-- later staff receive `Already claimed`
-- non-claimants cannot reply while the case is claimed
+Implemented runtime behavior:
+- recommended default monitoring mode: `all_alerts`
+- Owner monitoring controls:
+  - `/staff monitoring`
+  - `/staff monitoring all_alerts|silent_all|alerts_only|off`
+  - inline mode buttons
+- `all_alerts`: routine conversation mirror is silent; handoff/risk events remain alerts
+- `silent_all`: routine mirror remains silent with no extra monitoring alerts
+- `alerts_only`: routine mirror disabled; critical handoff still delivered
+- `off`: routine monitoring disabled; required human handoff is never disabled
+- Staff Inbox forum topic attempted per Telegram user and persisted in `monitoring_topics`
+- graceful fallback to Staff Inbox main chat when topic creation is unavailable
+- incoming private user text mirrored in routine-monitor modes
+- deterministic FAQ bot responses mirrored silently
+- mirror messages expose `Take Over`
+- conversation takeover stored in D1 and first successful claimant wins
+- human-control mode blocks automated FAQ/AI answering for that user
+- claimant can relay replies from the Staff Inbox topic anonymously
+- `Return to AI` restores automation; Owner may override the claimant for return-to-AI
+- case-level Take Over also moves the user's conversation into human-control mode
+- resolving the current escalation returns the conversation to AI
 
-Current temporary behavior:
-- until grounded AI runtime is wired, deterministic no-match creates a human escalation directly
-- after AI inference is wired, case creation moves behind `AgentDecision.action === 'handoff'`
+Contract:
+- human-control traffic has precedence over notification preferences; an active human takeover must not lose user follow-up merely because routine monitoring is off
+- critical handoff is independent of shadow-monitoring mode
+- grounded AI answers will use the same mirror/takeover path once AI inference is wired
+
+Docs: `docs/SHADOW_MONITORING.md`.
 
 Pending:
-- apply migration 0003 live
-- live Staff Inbox route test
-- live dedicated-staff private route test
-- multi-staff atomic claim race test
-- anonymous reply/resolve test
-- monitoring mode implementation: silent conversation mirror + alert escalation + Take Over/Return to AI
-- optional claim release/Owner override
+- apply migration 0004 live
+- verify forum-topic creation against the actual Staff Inbox supergroup
+- verify silent delivery (`disable_notification=true`)
+- verify atomic Take Over race behavior
+- verify claimant-only topic relay
+- verify Return to AI
+- verify monitoring modes and fallback when forum topics are unavailable
 
-## Phase 5 — Production deployment
+## Phase 6 — Test deployment and production promotion
 Status: PLANNED
 
 - regenerate a current bundled Worker artifact; old `deploy/worker.mjs` is stale Foundation-only code
-- apply migrations 0002 + 0003 to test D1
+- apply migrations 0002 + 0003 + 0004 to test D1
 - deploy `school-of-nursing-faq-bot-test`
 - configure minimum test secrets
 - run focused runtime tests
+- wire grounded Primary/Fallback AI inference through `src/agent_policy.ts`
+- validate AI answer/handoff + shadow monitoring together
 - merge verified checkpoint to `main`
 - only then deploy production Worker `school-of-nursing-faq-bot`
 
-## Phase 6 — Operations
+## Phase 7 — Operations
 Status: PLANNED
 
-- silent shadow monitoring / alert modes
 - unresolved-case review tooling
 - user lookup/follow-up
 - FAQ update workflow
@@ -200,4 +212,4 @@ Status: PLANNED
 Burmese FAQ facts remain authoritative. EN/ZH preserve meaning. Policy-sensitive facts must never be invented or silently altered by AI.
 
 ## Next recommended slice
-Validate/build the combined current source, apply migrations 0002 and 0003 in Cloudflare, deploy the current `test` Worker, then validate health, FAQ flow, Owner/Sudo controls, AI settings/persona, both human handoff routes, atomic claim, and anonymous staff reply. Then wire grounded Primary/Fallback AI inference plus silent shadow monitoring/alert escalation before any production merge.
+Finish build/type validation for the combined current source, then return to Cloudflare: apply migrations 0002–0004, deploy the current `test` Worker, and validate foundation + FAQ + admin + AI settings/persona + both human handoff routes + shadow monitoring + Take Over/Return to AI. After those runtime primitives are green, wire grounded Primary/Fallback inference before any production merge.
