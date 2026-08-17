@@ -56,7 +56,7 @@ Implemented:
 - `/start` language selector: မြန်မာ / English / 简体中文
 - `/language` language switcher
 - Telegram callback-query handling for `lang:my`, `lang:en`, `lang:zh`
-- D1 language preference persistence on immutable Telegram user ID
+- D1 language preference persistence by immutable Telegram user ID
 - canonical FAQ answer selection before AI
 - answered-question logging with `matched_faq_key` and `answer_source=canonical_faq`
 - unresolved-question logging with `resolution=pending` and `answer_source=unresolved`
@@ -67,22 +67,36 @@ Pending validation/work:
 - live Telegram callback test
 - live D1 persistence test
 - webhook secret configuration
-- review/polish of EN/ZH translation wording without changing Burmese source facts
-- regenerate the direct Cloudflare deployment artifact after Phase 1 code stabilizes; the existing `deploy/worker.mjs` represents the earlier Foundation v0.1 source and must not be treated as the current Phase 1 build
+- EN/ZH wording review without changing Burmese source facts
+- regenerate direct Cloudflare deployment artifact after current source stabilizes; existing `deploy/worker.mjs` is the earlier Foundation v0.1 artifact
 
-Acceptance: a real Telegram webhook receives a user question, resolves/persists language, answers a canonical FAQ deterministically, and persists the interaction.
+Acceptance: a real Telegram webhook receives a question, resolves/persists language, answers a canonical FAQ deterministically, and persists the interaction.
 
 ## Phase 2 — Owner / Sudo Admin
-Status: PLANNED
+Status: AUTHORIZATION CORE IMPLEMENTED ON `test`; RUNTIME VALIDATION PENDING
 
-- Bootstrap Owner from configured immutable Telegram user ID.
-- Owner-only Sudo Admin grant/revoke.
-- Admin status/help/list commands.
-- Recent unanswered/escalated-question view.
-- User lookup by Telegram ID/username where available.
-- Auditable privileged actions.
+Implemented in `src/admin.ts` and wired into `src/index.ts`:
+- Owner identity sourced only from `BOT_OWNER_TELEGRAM_ID`
+- numeric immutable Telegram user ID validation
+- D1-backed `sudo_admin` role lookup
+- `/admin` and `/admin status`
+- `/admin help`
+- `/admins` authorized administrator listing
+- Owner-only `/sudo grant <telegram_user_id>`
+- Owner-only `/sudo revoke <telegram_user_id>`
+- protection against revoking/downgrading the Owner through Sudo Admin management
+- server-side authorization checks; usernames are not authority
+- audit rows for Sudo Admin grant/revoke operations
+- admin commands bypass normal FAQ/question logging
 
-Acceptance: unauthorized users cannot access admin functions; authorized staff can identify users/questions requiring follow-up.
+Pending:
+- live Owner secret configuration
+- unauthorized-user negative tests
+- live D1 role grant/revoke/list tests
+- admin view for unresolved questions
+- user lookup/follow-up tooling
+
+Acceptance: unauthorized users cannot modify roles; Owner can grant/revoke Sudo Admins by Telegram user ID; privileged mutations are auditable.
 
 ## Phase 3 — Grounded Gemini fallback
 Status: PLANNED
@@ -116,4 +130,4 @@ The current source document contains 22 core FAQs. Burmese facts are authoritati
 Cloudflare compatibility dates must be based on a UTC-safe date, not merely the Creator's local calendar date. Once a compatibility date is accepted, keep it fixed until a deliberate runtime-compatibility upgrade requires changing it.
 
 ## Next recommended slice
-While waiting for Cloudflare UTC rollover, validate and harden the Phase 1 deterministic FAQ matcher on `test`, then regenerate the current direct-deployment artifact. After Cloudflare accepts the compatibility date, deploy the current `test` build to `school-of-nursing-faq-bot-test`, verify `/health`, D1 binding, language callback persistence, canonical answering, and unresolved-question logging. Do not merge to `main` until those checks are green.
+Continue on `test` while Cloudflare waits for UTC rollover: validate/harden FAQ matching and admin authorization behavior, then regenerate the current Phase 1/2 direct deployment artifact. After Cloudflare accepts `2026-08-18`, deploy the current build to `school-of-nursing-faq-bot-test` and validate `/health`, D1 binding, language persistence, canonical answering, unresolved logging, and Owner/Sudo Admin authorization before any `main` merge.
