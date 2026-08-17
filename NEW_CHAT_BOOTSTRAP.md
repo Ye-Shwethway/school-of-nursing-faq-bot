@@ -6,207 +6,183 @@ Development branch: `test`
 Canonical branch: `main`
 
 ## Startup sequence
-Read in this order before development:
+Read in order:
 1. `AGENTS.md`
 2. `NEW_CHAT_BOOTSTRAP.md`
 3. `ROADMAP.md`
-4. only task-relevant docs/source referenced by those files
+4. task-relevant docs/source only
 
-Treat the live repository plus verified Cloudflare/Telegram evidence as authoritative over remembered chat context.
+Treat live repository plus verified Cloudflare/Telegram evidence as authoritative over remembered chat context.
 
 ## Branch contract
-- Work on `test`.
-- Do not implement directly on `main`.
-- Validate on `test`.
-- Merge to `main` only when the checkpoint is verified.
-- Validation Worker: `school-of-nursing-faq-bot-test`.
-- Production Worker after validated merge: `school-of-nursing-faq-bot`.
+- work on `test`
+- do not implement directly on `main`
+- validation Worker: `school-of-nursing-faq-bot-test`
+- production Worker after validated merge: `school-of-nursing-faq-bot`
 
 ## Current checkpoint
-**Foundation v0.1, Telegram MVP core, Owner/Sudo Admin authorization core, and Telegram-managed AI provider settings core are implemented on `test`. Cloudflare D1 initial schema is live/verified. Test Worker deployment still waits for the UTC-safe compatibility-date retry, and AI migration 0002 has not yet been applied to live D1.**
+Foundation, Telegram FAQ MVP core, Owner/Sudo core, Telegram-managed AI provider settings, strict AI policy, Owner-selectable AI persona, and human Staff Inbox handoff core are implemented on `test`.
 
-## Implemented repository surface
-- `AGENTS.md`
-- `ROADMAP.md`
-- `NEW_CHAT_BOOTSTRAP.md`
-- `docs/TELEGRAM_DESIGN_RULES.md`
-- `docs/ARCHITECTURE.md`
-- `docs/CLOUDFLARE_HANDOFF.md`
-- `docs/FAQ_CONTENT_POLICY.md`
-- `docs/AI_SETTINGS.md`
-- `package.json`
-- `tsconfig.json`
-- `wrangler.jsonc`
-- `migrations/0001_initial.sql`
-- `migrations/0002_ai_settings.sql`
+Cloudflare live state still has only migration 0001. Migrations 0002 and 0003 are repository-only and not yet applied live. Test Worker has not yet been successfully deployed.
+
+## Current source surface
 - `src/index.ts`
 - `src/faq.ts`
 - `src/admin.ts`
 - `src/ai.ts`
 - `src/ai_ping.ts`
-- `deploy/worker.mjs` (STALE Foundation v0.1 artifact; do not deploy as current build)
+- `src/agent_policy.ts`
+- `src/persona.ts`
+- `src/handoff.ts`
+- `migrations/0001_initial.sql`
+- `migrations/0002_ai_settings.sql`
+- `migrations/0003_handoff_persona.sql`
+- `docs/FAQ_CONTENT_POLICY.md`
+- `docs/AI_SETTINGS.md`
+- `docs/AI_AGENT_POLICY.md`
+- `docs/HUMAN_HANDOFF.md`
+- `docs/TELEGRAM_DESIGN_RULES.md`
+- `docs/CLOUDFLARE_HANDOFF.md`
 
-## Telegram MVP core
-- `/start` and `/language` language selector
-- callback-query handling for `lang:my`, `lang:en`, `lang:zh`
-- language preference persisted in D1 by immutable Telegram user ID
-- 22 canonical FAQ records
-- Burmese canonical source facts
-- English and Simplified Chinese meaning-preserving translations
-- deterministic per-language matching before AI
-- canonical answer logging: `resolution=answered`, `matched_faq_key`, `answer_source=canonical_faq`
-- unresolved logging: `resolution=pending`, `answer_source=unresolved`
-- localized unresolved/human-review response
+`deploy/worker.mjs` is stale Foundation-only code. Do not deploy it as the current application build.
 
-## Owner / Sudo Admin core
-Authority is based on immutable numeric Telegram user ID only.
+## FAQ core
+- 22 FAQ records
+- Burmese source facts authoritative
+- English + Simplified Chinese translation layers
+- deterministic matching before AI
+- `/start`, `/language`
+- D1 language persistence
+- canonical answer logging
+- unresolved logging
 
-Implemented:
-- Owner config from `BOT_OWNER_TELEGRAM_ID`
-- D1-backed `sudo_admin` role lookup
-- `/admin` / `/admin status`
-- `/admin help`
-- `/admins`
-- Owner-only `/sudo grant <telegram_user_id>`
-- Owner-only `/sudo revoke <telegram_user_id>`
-- Owner cannot be revoked/downgraded through Sudo management
-- role mutations stored in `admin_audit`
-- admin commands are handled before normal FAQ/question logging
+Canonical source: `SCHOOL of Nursing FAQ.docx`.
 
-## AI provider settings core
-Owner-only Telegram command:
+## Owner / Sudo core
+- Owner identity: immutable numeric ID from `BOT_OWNER_TELEGRAM_ID`
+- `/admin`, `/admin status`, `/admin help`, `/admins`
+- Owner-only `/sudo grant <id>` and `/sudo revoke <id>`
+- privileged mutations audited
 
-`/ai`
+## AI settings
+Owner-only `/ai`.
 
-Supported provider modes:
+Providers/modes:
 - OpenAI
 - Anthropic
 - Google Gemini
 - OpenRouter
 - Groq
 - Mistral
-- NanoGPT — Subscription only
-- NanoGPT — Subscription + Paid (all visible)
-- Custom OpenAI-compatible HTTPS endpoint
+- NanoGPT Subscription only
+- NanoGPT Subscription + Paid/all-visible
+- Custom OpenAI-compatible HTTPS
 
-NanoGPT uses one shared encrypted credential record (`nanogpt`) but two explicit model-cache/binding route IDs:
+Flow:
+provider → encrypted key → fetch models → select model → Test Ping → bind Primary/Fallback.
+
+Primary and fallback may use different providers.
+
+NanoGPT uses one shared encrypted credential but separate route IDs:
 - `nanogpt_subscription`
 - `nanogpt_all`
 
-NanoGPT API routing:
-- subscription model catalog: `GET /api/subscription/v1/models?detailed=true`
-- all-visible/canonical model catalog: `GET /api/v1/models?detailed=true`
-- subscription Test Ping: `POST /api/subscription/v1/chat/completions`
-- all-mode Test Ping: `POST /api/v1/chat/completions`
-
-The all-visible catalog follows NanoGPT account visibility settings; when the NanoGPT account is set to also show paid models, this path exposes the combined subscription + paid set. The subscription route remains restricted to subscription-included models.
-
-Implemented AI settings flow:
-1. Owner selects provider/catalog mode.
-2. For Custom provider, Owner supplies HTTPS base URL first.
-3. Owner sends provider API key when a reusable credential is not already stored.
-4. Worker encrypts the key with AES-256-GCM before D1 persistence.
-5. Bot makes a best-effort attempt to delete the Telegram message that contained the plaintext key.
-6. Owner taps **Fetch models**; models are retrieved from the selected live catalog rather than hard-coded.
-7. Model catalog is cached in D1 with short callback tokens.
-8. Owner selects a model.
-9. Owner runs explicit **Test Ping** using that exact provider/catalog route.
-10. Bind buttons are allowed only after a successful ping.
-11. Save as Primary or Fallback.
-12. Primary and fallback may use different providers or NanoGPT modes.
-
 Required Cloudflare secret:
+`AI_CONFIG_MASTER_KEY` = base64 encoding of exactly 32 random bytes.
 
-`AI_CONFIG_MASTER_KEY`
+## AI policy
+Runtime policy implementation: `src/agent_policy.ts`.
 
-Contract: base64 encoding of exactly 32 random bytes. Never commit it or store it in D1. Provider keys become unreadable if this master key is lost.
+Structured output:
 
-Migration `0002_ai_settings.sql` adds:
-- `ai_provider_credentials`
-- `ai_model_cache`
-- `ai_model_tests`
-- `ai_model_bindings`
-- `admin_sessions`
-- model-cache provider index
+```json
+{
+  "action": "answer" | "handoff",
+  "answer": "user-facing response",
+  "reason": "short internal reason"
+}
+```
 
-Current model ping paths:
-- OpenAI: Responses API
-- Anthropic: Messages API
-- Gemini: `generateContent`
-- OpenRouter/Groq/Mistral/Custom OpenAI-compatible: chat-completions style endpoint
-- NanoGPT subscription mode: subscription chat-completions endpoint
-- NanoGPT all mode: canonical chat-completions endpoint
+Rules:
+- School of Nursing scope only
+- approved context is the only authority for school-specific facts
+- never invent/estimate/infer missing policy facts
+- missing, ambiguous, conflicting, exception-specific, or current-status facts → handoff
+- malformed model output is unsafe
+- never fabricate a human staff response
 
-AI settings remain Owner-only; Sudo Admin does not inherit API credential-management rights.
+Grounded inference orchestration is not yet wired. Until it is, deterministic no-match currently escalates directly to humans.
 
-## Canonical FAQ source
-Creator-provided document: `SCHOOL of Nursing FAQ.docx`.
+## AI persona
+Owner can select from `/ai` inline buttons:
+- Male persona
+- Female persona
 
-It contains 22 FAQ items. Burmese facts are authoritative. EN/ZH are translation layers. See `docs/FAQ_CONTENT_POLICY.md`.
+Stored in `bot_settings` as `agent_persona`.
 
-## Verified Cloudflare infrastructure
+Persona changes presentation only. It cannot change facts, policy, authority, or handoff threshold.
+
+## Human Staff Inbox
+Recommended surface: private Telegram supergroup.
+
+Do not use a broadcast-only channel as the operational reply surface. If an organizational channel is required, use a linked private discussion group for claims/replies.
+
+Setup:
+1. Owner manually creates private Staff Inbox supergroup.
+2. Add bot with adequate group permissions.
+3. In that group Owner sends `/staff inbox here`.
+4. Owner adds authorized responders with `/staff add <telegram_user_id>`.
+5. Remove with `/staff remove <telegram_user_id>`.
+
+Unresolved case flow:
+- create D1 escalation case
+- post case card to Staff Inbox
+- staff taps `Claim`
+- atomic D1 update allows one claimant only
+- later Claim attempts receive already-claimed result
+- only claimant may reply to original case message
+- bot relays reply privately to user as `School of Nursing Staff`
+- staff identity remains hidden from user
+- claimant may `Resolve`
+
+Tables from migration 0003:
+- `bot_settings`
+- `staff_members`
+- `escalation_cases`
+- `escalation_messages`
+
+## Verified Cloudflare state
 - Account ID: `abd28e59860f09dab81b7e09de467f38`
 - D1: `school-of-nursing-faq-bot-db`
 - D1 ID: `9109c1ef-3613-49f8-aee3-c62a3dbdd744`
 - Region: APAC
-- Binding: `DB`
-- Live schema currently verified from migration 0001: `users`, `questions`, `admin_roles`, `admin_audit`
-- verified indexes: `idx_questions_user_created`, `idx_questions_resolution_created`
-- migration 0002 is repository-only and NOT yet applied live
-- workers.dev account subdomain: `ye-shwethway13`
+- binding name: `DB`
+- live migration 0001 verified
+- workers.dev subdomain: `ye-shwethway13`
 - no production Worker
 - no test Worker yet
-- no KV, Durable Objects, Queues; R2 not enabled
 
-## Cloudflare upload attempt evidence
-The first Foundation v0.1 upload was rejected before Worker creation with:
-
+First Worker upload was rejected before creation with:
 `10021: Can't set compatibility date in the future: 2026-08-18`
 
-Cloudflare was still on UTC 2026-08-17. No infrastructure drift occurred.
-
-Compatibility-date rule: use a UTC-safe date. Once accepted, keep it fixed until a deliberate compatibility upgrade.
-
-## Important deployment-artifact state
-`deploy/worker.mjs` belongs to the earlier Foundation v0.1 source and is now stale.
-
-Current source imports `faq.ts`, `admin.ts`, `ai.ts`, and `ai_ping.ts`. **Do not deploy the old `deploy/worker.mjs` as the current application build.** Build/regenerate a current bundled Worker artifact before the next Cloudflare deployment attempt.
+No infrastructure drift occurred. Keep future compatibility-date changes UTC-safe.
 
 ## Validation state
-- GitHub read/write on `test`: verified.
-- D1 migration 0001: live and verified.
-- migration 0002: not applied live yet.
-- full npm/type validation: pending because the GitHub-side execution container cannot directly check out the repository over external GitHub DNS, although local `tsc` exists.
-- Telegram MVP runtime behavior: not yet live-validated.
-- Owner/Sudo runtime behavior: not yet live-validated.
-- AI encrypted credential/model fetch/ping/binding flow: not yet live-validated.
-- NanoGPT subscription/all catalog behavior: implemented from current official NanoGPT API contract but not yet live-validated with the Owner account.
-- do not merge to `main` yet.
+Pending:
+- build/type validation of current combined source
+- regenerate current deployable Worker artifact
+- apply migrations 0002 + 0003 live
+- deploy test Worker
+- configure Telegram test secrets and Owner ID
+- live FAQ/language tests
+- live Owner/Sudo tests
+- live AI provider fetch/ping/binding/persona tests
+- create/bind Staff Inbox
+- multi-staff atomic claim test
+- anonymous staff reply/resolve test
+- grounded Primary/Fallback inference orchestration
 
-## Security notes
-- repository is public; never commit provider keys, Telegram secrets, Cloudflare credentials, or D1 exports
-- provider keys are encrypted before D1 storage
-- `AI_CONFIG_MASTER_KEY` exists only as a Cloudflare secret
-- API keys are never echoed back through settings
-- Telegram deletion of plaintext key messages is best-effort; credential setup should be performed in the private bot chat
-- AI remains downstream of canonical FAQ matching and may not invent policy facts
+Do not merge to `main` yet.
 
-## Current known gaps
-- current build/type validation
-- regenerate/build current deployable Worker artifact
-- apply D1 migration 0002
-- Cloudflare test Worker deployment/runtime checks
-- Telegram bot token/webhook secret installation
-- live language callback/persistence test
-- live FAQ answer and unresolved logging test
-- EN/ZH wording review
-- live Owner/Sudo authorization tests
-- admin unresolved-question/user lookup tooling
-- live AI provider model-list tests
-- live NanoGPT subscription-only and all-visible catalog tests
-- live model Test Ping tests
-- actual grounded AI fallback orchestration using primary + fallback model binding
-- fallback/escalation semantics when provider/model calls fail
-
-## Recommended next slice
-Stabilize and validate the combined current source on `test`, prepare a current Worker build, then return to the Cloudflare MCP session. Apply `migrations/0002_ai_settings.sql`, deploy `school-of-nursing-faq-bot-test` with `DB` and `APP_ENV=test`, provision only the required test secrets (`AI_CONFIG_MASTER_KEY`, then Telegram/Owner secrets when ready), and validate foundation + FAQ + admin + AI settings behavior, including both NanoGPT catalog modes. Do not create/deploy the production Worker or merge to `main` until the test checkpoint is green.
+## Next recommended slice
+Prepare and validate a current Worker build, then return to Cloudflare MCP: apply migrations 0002 + 0003, deploy `school-of-nursing-faq-bot-test`, configure minimum test secrets, and validate foundation + FAQ + admin + AI settings/persona + Staff Inbox behavior. Then wire grounded AI inference using `src/agent_policy.ts` before production merge.
