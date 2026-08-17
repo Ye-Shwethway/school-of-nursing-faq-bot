@@ -15,10 +15,14 @@ import {
   caseForStaffReply,
   claimCase,
   createEscalationCase,
-  getStaffInboxChatId,
+  getDedicatedStaffId,
+  getHandoffDestination,
+  handoffStatus,
   logStaffReply,
   removeStaffMember,
   resolveCase,
+  setDedicatedStaff,
+  setHandoffRoute,
   setStaffInbox,
 } from "./handoff";
 import { getAgentPersona, setAgentPersona } from "./persona";
@@ -71,6 +75,12 @@ function isOwner(userId: number, configuredOwnerId?: string): boolean {
   return Boolean(configuredOwnerId && String(userId) === configuredOwnerId.trim());
 }
 
+function configuredOwnerId(value?: string): number | null {
+  if (!value || !/^\d+$/.test(value.trim())) return null;
+  const parsed = Number(value.trim());
+  return Number.isSafeInteger(parsed) ? parsed : null;
+}
+
 function languageKeyboard() {
   return {
     inline_keyboard: [[
@@ -82,7 +92,9 @@ function languageKeyboard() {
 }
 
 function aiMenuKeyboard() {
-  const base = aiSettingsKeyboard() as { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> };
+  const base = aiSettingsKeyboard() as {
+    inline_keyboard: Array<Array<{ text: string; callback_data: string }>>;
+  };
   return {
     inline_keyboard: [
       ...base.inline_keyboard,
@@ -137,8 +149,17 @@ async function telegramApi(env: Env, method: string, body: unknown): Promise<any
   }
 }
 
-async function sendTelegramMessage(env: Env, chatId: number, text: string, replyMarkup?: unknown): Promise<any | null> {
-  return telegramApi(env, "sendMessage", { chat_id: chatId, text, reply_markup: replyMarkup });
+async function sendTelegramMessage(
+  env: Env,
+  chatId: number,
+  text: string,
+  replyMarkup?: unknown,
+): Promise<any | null> {
+  return telegramApi(env, "sendMessage", {
+    chat_id: chatId,
+    text,
+    reply_markup: replyMarkup,
+  });
 }
 
 async function deleteTelegramMessage(env: Env, chatId: number, messageId: number) {
@@ -179,7 +200,13 @@ async function setLanguage(db: D1Database, user: TelegramUser, language: Languag
        last_name = excluded.last_name,
        language = excluded.language,
        updated_at = CURRENT_TIMESTAMP`,
-  ).bind(user.id, user.username ?? null, user.first_name ?? null, user.last_name ?? null, language).run();
+  ).bind(
+    user.id,
+    user.username ?? null,
+    user.first_name ?? null,
+    user.last_name ?? null,
+    language,
+  ).run();
 }
 
 async function logQuestion(
@@ -216,7 +243,9 @@ async function handleLanguageCallback(env: Env, callback: TelegramCallbackQuery)
   const language = match[1] as Language;
   if (env.DB) await setLanguage(env.DB, callback.from, language);
   await answerCallbackQuery(env, callback.id);
-  if (callback.message) await sendTelegramMessage(env, callback.message.chat.id, COPY[language].selected);
+  if (callback.message) {
+    await sendTelegramMessage(env, callback.message.chat.id, COPY[language].selected);
+  }
   return true;
 }
 
@@ -239,19 +268,33 @@ async function handleAiCallback(env: Env, callback: TelegramCallbackQuery): Prom
 
   if (data === "ai:menu") {
     const persona = await getAgentPersona(env.DB);
-    await sendTelegramMessage(env, chatId, `AI Agent Settings\nPersona: ${persona}\nChoose a provider, model, or persona.`, aiMenuKeyboard());
+    await sendTelegramMessage(
+      env,
+      chatId,
+      `AI Agent Settings\nPersona: ${persona}\nChoose a provider, model, or persona.`,
+      aiMenuKeyboard(),
+    );
     return true;
   }
 
   if (data === "ai:status") {
     const persona = await getAgentPersona(env.DB);
-    await sendTelegramMessage(env, chatId, `${await aiStatus(env.DB)}\nPersona: ${persona}`, aiMenuKeyboard());
+    await sendTelegramMessage(
+      env,
+      chatId,
+      `${await aiStatus(env.DB)}\nPersona: ${persona}`,
+      aiMenuKeyboard(),
+    );
     return true;
   }
 
   const personaMatch = data.match(/^ai:persona:(male|female)$/);
   if (personaMatch) {
-    const response = await setAgentPersona(env.DB, callback.from.id, personaMatch[1] as "male" | "female");
+    const response = await setAgentPersona(
+      env.DB,
+      callback.from.id,
+      personaMatch[1] as "male" | "female",
+    );
     await sendTelegramMessage(env, chatId, response, aiMenuKeyboard());
     return true;
   }
@@ -278,7 +321,12 @@ async function handleAiCallback(env: Env, callback: TelegramCallbackQuery): Prom
 
   const modelMatch = data.match(/^ai:model:([a-z0-9_-]+):([A-Za-z0-9_-]+)$/);
   if (modelMatch) {
-    const result = await chooseModelForPing(env.DB, callback.from.id, modelMatch[1], modelMatch[2]);
+    const result = await chooseModelForPing(
+      env.DB,
+      callback.from.id,
+      modelMatch[1],
+      modelMatch[2],
+    );
     await sendTelegramMessage(env, chatId, result.text, result.keyboard);
     return true;
   }
@@ -289,7 +337,11 @@ async function handleAiCallback(env: Env, callback: TelegramCallbackQuery): Prom
       await sendTelegramMessage(env, chatId, "Run Test Ping successfully before binding this model.");
       return true;
     }
-    const response = await bindSelectedModel(env.DB, callback.from.id, bindMatch[1] as "primary" | "fallback");
+    const response = await bindSelectedModel(
+      env.DB,
+      callback.from.id,
+      bindMatch[1] as "primary" | "fallback",
+    );
     await sendTelegramMessage(env, chatId, response, aiMenuKeyboard());
     return true;
   }
@@ -310,17 +362,54 @@ async function handleCaseCallback(env: Env, callback: TelegramCallbackQuery): Pr
     const result = await claimCase(env.DB, caseId, callback.from.id);
     await answerCallbackQuery(env, callback.id, result.message);
     if (result.ok && callback.message) {
-      await sendTelegramMessage(env, callback.message.chat.id, `${result.message}\nReply directly to the original case message to answer anonymously.`, {
-        inline_keyboard: [[{ text: "Resolve", callback_data: `case:resolve:${caseId}` }]],
-      });
+      await sendTelegramMessage(
+        env,
+        callback.message.chat.id,
+        `${result.message}\nReply directly to the original case message to answer anonymously.`,
+        { inline_keyboard: [[{ text: "Resolve", callback_data: `case:resolve:${caseId}` }]] },
+      );
     }
     return true;
   }
 
   const result = await resolveCase(env.DB, caseId, callback.from.id);
   await answerCallbackQuery(env, callback.id, result.message);
-  if (callback.message) await sendTelegramMessage(env, callback.message.chat.id, result.message);
+  if (callback.message) {
+    await sendTelegramMessage(env, callback.message.chat.id, result.message);
+  }
   return true;
+}
+
+function staffCaseText(
+  caseId: number,
+  message: TelegramMessage,
+  language: Language,
+  route: "group" | "dedicated",
+): string {
+  const displayName = [message.from?.first_name, message.from?.last_name]
+    .filter(Boolean)
+    .join(" ") || "—";
+
+  return [
+    `New FAQ Escalation #${caseId}`,
+    `Route: ${route}`,
+    `Language: ${language}`,
+    `User ID: ${message.from?.id ?? "—"}`,
+    `Username: ${message.from?.username ? `@${message.from.username}` : "—"}`,
+    `Name: ${displayName}`,
+    "",
+    message.text ?? "",
+  ].join("\n");
+}
+
+async function notifyOwnerOfUndeliveredCase(env: Env, caseId: number): Promise<void> {
+  const ownerId = configuredOwnerId(env.BOT_OWNER_TELEGRAM_ID);
+  if (!ownerId) return;
+  await sendTelegramMessage(
+    env,
+    ownerId,
+    `Human handoff warning\nCase #${caseId} is queued in D1 but no configured staff destination accepted the notification.`,
+  );
 }
 
 async function postEscalationToStaff(
@@ -330,41 +419,39 @@ async function postEscalationToStaff(
   sourceQuestionId: number | null,
 ): Promise<void> {
   if (!env.DB || !message.from || !message.text) return;
-  const staffChatId = await getStaffInboxChatId(env.DB);
+
+  const destination = await getHandoffDestination(env.DB);
   const caseId = await createEscalationCase(env.DB, {
     telegramUserId: message.from.id,
     sourceQuestionId,
     language,
     question: message.text,
-    staffChatId,
+    staffChatId: destination?.chatId ?? null,
   });
-  if (!caseId || !staffChatId) return;
+  if (!caseId) return;
 
-  const displayName = [message.from.first_name, message.from.last_name].filter(Boolean).join(" ") || "—";
+  if (!destination) {
+    await notifyOwnerOfUndeliveredCase(env, caseId);
+    return;
+  }
+
   const staffMessage = await sendTelegramMessage(
     env,
-    staffChatId,
-    [
-      `New FAQ Escalation #${caseId}`,
-      `Language: ${language}`,
-      `User ID: ${message.from.id}`,
-      `Username: ${message.from.username ? `@${message.from.username}` : "—"}`,
-      `Name: ${displayName}`,
-      "",
-      message.text,
-    ].join("\n"),
-    { inline_keyboard: [[{ text: "Claim", callback_data: `case:claim:${caseId}` }]] },
+    destination.chatId,
+    staffCaseText(caseId, message, language, destination.route),
+    { inline_keyboard: [[{ text: "Take Over", callback_data: `case:claim:${caseId}` }]] },
   );
 
   if (staffMessage?.message_id) {
-    await attachStaffMessage(env.DB, caseId, staffChatId, Number(staffMessage.message_id));
+    await attachStaffMessage(env.DB, caseId, destination.chatId, Number(staffMessage.message_id));
+    return;
   }
+
+  await notifyOwnerOfUndeliveredCase(env, caseId);
 }
 
 async function handleStaffReply(env: Env, message: TelegramMessage): Promise<boolean> {
   if (!env.DB || !message.from || !message.text || !message.reply_to_message) return false;
-  const staffInbox = await getStaffInboxChatId(env.DB);
-  if (!staffInbox || message.chat.id !== staffInbox) return false;
 
   const target = await caseForStaffReply(
     env.DB,
@@ -372,42 +459,133 @@ async function handleStaffReply(env: Env, message: TelegramMessage): Promise<boo
     message.reply_to_message.message_id,
     message.from.id,
   );
-  if (!target) {
-    await sendTelegramMessage(env, message.chat.id, "Only the staff member who claimed this case may reply to it.");
-    return true;
-  }
+  if (!target) return false;
 
-  await sendTelegramMessage(env, target.telegramUserId, `School of Nursing Staff\n\n${message.text}`);
+  await sendTelegramMessage(
+    env,
+    target.telegramUserId,
+    `School of Nursing Staff\n\n${message.text}`,
+  );
   await logStaffReply(env.DB, target.caseId, message.from.id, message.text);
-  await sendTelegramMessage(env, message.chat.id, `Reply delivered anonymously for Case #${target.caseId}.`);
+  await sendTelegramMessage(
+    env,
+    message.chat.id,
+    `Reply delivered anonymously for Case #${target.caseId}.`,
+  );
   return true;
 }
 
 async function handleStaffCommand(env: Env, message: TelegramMessage, text: string): Promise<boolean> {
   if (!message.from || !text.startsWith("/staff")) return false;
   if (!isOwner(message.from.id, env.BOT_OWNER_TELEGRAM_ID)) {
-    await sendTelegramMessage(env, message.chat.id, "Staff configuration is available to the Bot Owner only.");
+    await sendTelegramMessage(
+      env,
+      message.chat.id,
+      "Staff configuration is available to the Bot Owner only.",
+    );
     return true;
   }
 
   if (text === "/staff inbox here") {
-    await sendTelegramMessage(env, message.chat.id, await setStaffInbox(env.DB, message.from.id, message.chat.id));
+    await sendTelegramMessage(
+      env,
+      message.chat.id,
+      await setStaffInbox(env.DB, message.from.id, message.chat.id),
+    );
+    return true;
+  }
+
+  if (text === "/staff status") {
+    await sendTelegramMessage(env, message.chat.id, await handoffStatus(env.DB));
+    return true;
+  }
+
+  const routeMatch = text.match(/^\/staff route (auto|group|dedicated)$/);
+  if (routeMatch) {
+    await sendTelegramMessage(
+      env,
+      message.chat.id,
+      await setHandoffRoute(env.DB, message.from.id, routeMatch[1] as "auto" | "group" | "dedicated"),
+    );
+    return true;
+  }
+
+  const dedicatedMatch = text.match(/^\/staff dedicated (\d+)$/);
+  if (dedicatedMatch) {
+    const staffId = Number(dedicatedMatch[1]);
+    if (!Number.isSafeInteger(staffId)) {
+      await sendTelegramMessage(env, message.chat.id, "Invalid Telegram user ID.");
+      return true;
+    }
+
+    const probe = await sendTelegramMessage(
+      env,
+      staffId,
+      "School of Nursing Staff assignment check\n\nThe Bot Owner is assigning you as a dedicated human responder. If you can read this, private handoff delivery is available.",
+    );
+
+    if (!probe) {
+      await sendTelegramMessage(
+        env,
+        message.chat.id,
+        "Dedicated staff was not saved because the bot could not reach that private chat. Ask the staff member to open the bot and send /start, then retry.",
+      );
+      return true;
+    }
+
+    await sendTelegramMessage(
+      env,
+      message.chat.id,
+      await setDedicatedStaff(env.DB, message.from.id, staffId),
+    );
     return true;
   }
 
   const addMatch = text.match(/^\/staff add (\d+)$/);
   if (addMatch) {
-    await sendTelegramMessage(env, message.chat.id, await addStaffMember(env.DB, message.from.id, Number(addMatch[1])));
+    await sendTelegramMessage(
+      env,
+      message.chat.id,
+      await addStaffMember(env.DB, message.from.id, Number(addMatch[1])),
+    );
     return true;
   }
 
   const removeMatch = text.match(/^\/staff remove (\d+)$/);
   if (removeMatch) {
-    await sendTelegramMessage(env, message.chat.id, await removeStaffMember(env.DB, Number(removeMatch[1])));
+    const staffId = Number(removeMatch[1]);
+    const dedicated = await getDedicatedStaffId(env.DB);
+    if (dedicated === staffId) {
+      await sendTelegramMessage(
+        env,
+        message.chat.id,
+        "This staff member is currently the dedicated responder. Assign another dedicated staff member or change the route before disabling them.",
+      );
+      return true;
+    }
+    await sendTelegramMessage(
+      env,
+      message.chat.id,
+      await removeStaffMember(env.DB, staffId),
+    );
     return true;
   }
 
-  await sendTelegramMessage(env, message.chat.id, "Staff Inbox setup\n/staff inbox here\n/staff add <telegram_user_id>\n/staff remove <telegram_user_id>");
+  await sendTelegramMessage(
+    env,
+    message.chat.id,
+    [
+      "Human Handoff Setup",
+      "/staff status",
+      "/staff route auto|group|dedicated",
+      "/staff inbox here",
+      "/staff dedicated <telegram_user_id>",
+      "/staff add <telegram_user_id>",
+      "/staff remove <telegram_user_id>",
+      "",
+      "Dedicated staff must open this bot and send /start before assignment can be validated.",
+    ].join("\n"),
+  );
   return true;
 }
 
@@ -424,8 +602,12 @@ async function handleMessage(env: Env, message: TelegramMessage) {
   if (isOwner(message.from.id, env.BOT_OWNER_TELEGRAM_ID)) {
     const setup = await consumeAiSetupText(env, message.from.id, text);
     if (setup.handled) {
-      if (setup.secretInput) await deleteTelegramMessage(env, message.chat.id, message.message_id);
-      if (setup.text) await sendTelegramMessage(env, message.chat.id, setup.text, setup.keyboard);
+      if (setup.secretInput) {
+        await deleteTelegramMessage(env, message.chat.id, message.message_id);
+      }
+      if (setup.text) {
+        await sendTelegramMessage(env, message.chat.id, setup.text, setup.keyboard);
+      }
       return;
     }
   }
@@ -442,7 +624,11 @@ async function handleMessage(env: Env, message: TelegramMessage) {
 
   if (text === "/ai" || text === "/ai settings") {
     if (!isOwner(message.from.id, env.BOT_OWNER_TELEGRAM_ID)) {
-      await sendTelegramMessage(env, message.chat.id, "This setting is available to the Bot Owner only.");
+      await sendTelegramMessage(
+        env,
+        message.chat.id,
+        "This setting is available to the Bot Owner only.",
+      );
       return;
     }
     const persona = await getAgentPersona(env.DB);
@@ -455,9 +641,16 @@ async function handleMessage(env: Env, message: TelegramMessage) {
     return;
   }
 
-  const admin = await handleAdminCommand(env.DB, message.from.id, env.BOT_OWNER_TELEGRAM_ID, text);
+  const admin = await handleAdminCommand(
+    env.DB,
+    message.from.id,
+    env.BOT_OWNER_TELEGRAM_ID,
+    text,
+  );
   if (admin.handled) {
-    if (admin.response) await sendTelegramMessage(env, message.chat.id, admin.response);
+    if (admin.response) {
+      await sendTelegramMessage(env, message.chat.id, admin.response);
+    }
     return;
   }
 
@@ -474,7 +667,9 @@ async function handleMessage(env: Env, message: TelegramMessage) {
 
   const faq = findFaq(text, language);
   if (faq) {
-    if (env.DB) await logQuestion(env.DB, message, language, "answered", faq.key, "canonical_faq");
+    if (env.DB) {
+      await logQuestion(env.DB, message, language, "answered", faq.key, "canonical_faq");
+    }
     await sendTelegramMessage(env, message.chat.id, faq.answer[language]);
     return;
   }
@@ -489,7 +684,9 @@ async function handleMessage(env: Env, message: TelegramMessage) {
 async function handleTelegramWebhook(request: Request, env: Env) {
   if (env.TELEGRAM_WEBHOOK_SECRET) {
     const supplied = request.headers.get("X-Telegram-Bot-Api-Secret-Token");
-    if (supplied !== env.TELEGRAM_WEBHOOK_SECRET) return json({ ok: false }, 401);
+    if (supplied !== env.TELEGRAM_WEBHOOK_SECRET) {
+      return json({ ok: false }, 401);
+    }
   }
 
   let update: TelegramUpdate;
@@ -503,11 +700,16 @@ async function handleTelegramWebhook(request: Request, env: Env) {
     const handledCase = await handleCaseCallback(env, update.callback_query);
     if (!handledCase) {
       const handledAi = await handleAiCallback(env, update.callback_query);
-      if (!handledAi) await handleLanguageCallback(env, update.callback_query);
+      if (!handledAi) {
+        await handleLanguageCallback(env, update.callback_query);
+      }
     }
   }
 
-  if (update.message) await handleMessage(env, update.message);
+  if (update.message) {
+    await handleMessage(env, update.message);
+  }
+
   return json({ ok: true });
 }
 
@@ -516,7 +718,11 @@ export default {
     const url = new URL(request.url);
 
     if (request.method === "GET" && url.pathname === "/health") {
-      return json({ ok: true, service: "school-of-nursing-faq-bot", environment: env.APP_ENV });
+      return json({
+        ok: true,
+        service: "school-of-nursing-faq-bot",
+        environment: env.APP_ENV,
+      });
     }
 
     if (request.method === "POST" && url.pathname === "/telegram/webhook") {
