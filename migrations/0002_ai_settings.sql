@@ -22,6 +22,15 @@ CREATE TABLE IF NOT EXISTS ai_model_cache (
 CREATE INDEX IF NOT EXISTS idx_ai_model_cache_provider
 ON ai_model_cache(provider, fetched_at DESC);
 
+CREATE TABLE IF NOT EXISTS ai_model_tests (
+  provider TEXT NOT NULL,
+  model_id TEXT NOT NULL,
+  tested_by INTEGER NOT NULL,
+  tested_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  ok INTEGER NOT NULL,
+  PRIMARY KEY (provider, model_id)
+);
+
 CREATE TABLE IF NOT EXISTS ai_model_bindings (
   binding_key TEXT PRIMARY KEY,
   primary_provider TEXT,
