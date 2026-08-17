@@ -1,3 +1,5 @@
+import { describeTelegramUser } from "./identity";
+
 export type AdminRole = "owner" | "sudo_admin" | "user";
 
 export type AdminCommandResult = {
@@ -60,14 +62,18 @@ async function listAdmins(db: D1Database, ownerIdValue?: string) {
   ).all<{ telegram_user_id: number; granted_by: number; granted_at: string }>();
 
   const lines = ["Authorized administrators:"];
-  if (ownerId !== null) lines.push(`Owner: ${ownerId}`);
+  if (ownerId !== null) {
+    lines.push(`Owner: ${await describeTelegramUser(db, ownerId)}`);
+  }
 
   if (rows.results.length === 0) {
     lines.push("Sudo Admins: none");
   } else {
     lines.push("Sudo Admins:");
     for (const row of rows.results) {
-      lines.push(`- ${row.telegram_user_id} (granted by ${row.granted_by}, ${row.granted_at})`);
+      const admin = await describeTelegramUser(db, row.telegram_user_id);
+      const granter = await describeTelegramUser(db, row.granted_by);
+      lines.push(`- ${admin}\n  Granted by: ${granter}\n  Granted at: ${row.granted_at}`);
     }
   }
 
@@ -98,7 +104,7 @@ async function grantSudo(
   ).bind(targetId, actorId).run();
 
   await writeAudit(db, actorId, "sudo_admin_granted", targetId);
-  return `Sudo Admin granted to Telegram user ID ${targetId}.`;
+  return `Sudo Admin granted: ${await describeTelegramUser(db, targetId)}`;
 }
 
 async function revokeSudo(
@@ -115,6 +121,7 @@ async function revokeSudo(
     return "Denied. The Bot Owner role cannot be revoked through Sudo Admin management.";
   }
 
+  const targetLabel = await describeTelegramUser(db, targetId);
   const result = await db.prepare(
     `DELETE FROM admin_roles
      WHERE telegram_user_id = ?1 AND role = 'sudo_admin'`,
@@ -123,8 +130,8 @@ async function revokeSudo(
   await writeAudit(db, actorId, "sudo_admin_revoked", targetId, JSON.stringify({ changed: result.meta.changes }));
 
   return result.meta.changes > 0
-    ? `Sudo Admin revoked from Telegram user ID ${targetId}.`
-    : `No Sudo Admin role was found for Telegram user ID ${targetId}.`;
+    ? `Sudo Admin revoked: ${targetLabel}`
+    : `No Sudo Admin role was found for ${targetLabel}`;
 }
 
 function parseTargetId(raw?: string) {
@@ -151,7 +158,7 @@ export async function handleAdminCommand(
     if (parts[1]?.toLowerCase() === "status" || parts.length === 1) {
       return {
         handled: true,
-        response: `Admin status: ${role}\nTelegram user ID: ${telegramUserId}`,
+        response: `Admin status: ${role}\n${await describeTelegramUser(db, telegramUserId)}`,
       };
     }
 
@@ -161,7 +168,7 @@ export async function handleAdminCommand(
         response: role === "owner"
           ? "Owner commands:\n/admin status\n/admin help\n/admins\n/sudo grant <telegram_user_id>\n/sudo revoke <telegram_user_id>"
           : role === "sudo_admin"
-            ? "Sudo Admin commands:\n/admin status\n/admin help\n/admins"
+            ? "Sudo Admin commands:\n/admin status\n/admin help\n/admins\n/faq"
             : "You do not have administrative access.",
       };
     }
