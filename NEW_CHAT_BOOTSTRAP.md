@@ -19,9 +19,11 @@ Treat the live repository plus verified Cloudflare/Telegram production evidence 
 - Do not implement directly on `main`.
 - Validate the current slice on `test`.
 - Merge to `main` only when the slice is verified and ready to become canonical.
+- Validation deployment target: `school-of-nursing-faq-bot-test`.
+- Production Worker target after validated merge: `school-of-nursing-faq-bot`.
 
 ## Current checkpoint
-**Foundation v0.1 is implemented on `test` but not yet merged to `main`.**
+**Foundation v0.1 is implemented on `test`; Cloudflare D1 is provisioned and verified; test Worker deployment is the next action.**
 
 Implemented repository surface:
 - `AGENTS.md`
@@ -29,11 +31,13 @@ Implemented repository surface:
 - `NEW_CHAT_BOOTSTRAP.md`
 - `docs/TELEGRAM_DESIGN_RULES.md`
 - `docs/ARCHITECTURE.md`
+- `docs/CLOUDFLARE_HANDOFF.md`
 - `package.json`
 - `tsconfig.json`
 - `wrangler.jsonc`
 - `migrations/0001_initial.sql`
 - `src/index.ts`
+- `deploy/worker.mjs`
 
 Runtime foundation currently includes:
 - `GET /health`
@@ -44,13 +48,35 @@ Runtime foundation currently includes:
 - free-text question logging when D1 is bound
 - D1 tables for users, questions, Sudo Admin roles, and privileged audit events
 
-No production Telegram webhook or Cloudflare deployment should be assumed active until verified in the live services.
+## Verified Cloudflare infrastructure
+- Account ID: `abd28e59860f09dab81b7e09de467f38`
+- D1 database: `school-of-nursing-faq-bot-db`
+- D1 database ID: `9109c1ef-3613-49f8-aee3-c62a3dbdd744`
+- Region: APAC
+- Binding name: `DB`
+- Migration: applied and verified
+- Verified tables: `users`, `questions`, `admin_roles`, `admin_audit`
+- Verified indexes: `idx_questions_user_created`, `idx_questions_resolution_created`
+- Worker: not deployed yet at this checkpoint
+
+`wrangler.jsonc` contains the D1 binding and a `test` environment whose Worker name is `school-of-nursing-faq-bot-test` and whose `APP_ENV` is `test`.
+
+## Direct Cloudflare API deployment artifact
+Because the Cloudflare MCP session may not have a TypeScript build environment, `deploy/worker.mjs` is the exact GitHub-side JavaScript deployment artifact derived from the current `src/index.ts` foundation.
+
+- Source TypeScript blob: `1b5a5772d799e165fa9f8449cd333d02dc6fdd58`
+- Deployment artifact SHA-256: `05c2a5ba086469a559bc5a9d6eddd0c65c334e93a11d6fd89cd79e3475dbde98`
+- Local `node --check` validation: PASS
+
+Cloudflare must upload this exact artifact rather than independently rewriting application behavior.
 
 ## Validation evidence
 - GitHub repository read/write access is working on `test`.
-- Current Worker tooling versions were checked against the package registry on 2026-08-18.
-- A real local `npm install`/`npm run typecheck` could not execute in the available container because outbound DNS to `github.com` is unavailable. No TypeScript failure has been observed; validation is simply incomplete.
-- Do not merge this checkpoint to `main` until dependency/type validation or equivalent Cloudflare validation is green.
+- Local dependency install/typecheck could not execute in the available container because outbound DNS to `github.com` is unavailable. No TypeScript failure has been observed; validation is incomplete rather than failed.
+- `deploy/worker.mjs` passed local JavaScript syntax validation.
+- D1 schema is live and verified in Cloudflare.
+- Runtime Worker `/health` validation remains pending.
+- Do not merge this checkpoint to `main` until the test Worker runtime is green.
 
 ## Product contract
 Build a dignified university School of Nursing Telegram FAQ bot with:
@@ -84,13 +110,13 @@ A meaningful implementation slice is not complete until both this file and `ROAD
 - exact recommended next slice
 
 ## Current known gaps
-- Foundation dependency/type validation is still pending.
+- Test Worker `school-of-nursing-faq-bot-test` has not yet been deployed/health-checked.
+- Full dependency/type validation is still pending because the GitHub-side execution container has no outbound GitHub DNS.
 - Canonical 22-FAQ dataset has not yet been committed to this repository.
 - Language callback handling/persistence is not yet implemented.
-- Cloudflare D1 resource and Worker deployment must be provisioned/verified.
-- Telegram bot token/webhook configuration must be supplied through secrets.
+- Telegram bot token/webhook configuration is not yet installed.
 - Gemini fallback is not yet production-enabled.
 - Owner Telegram user ID must be configured securely before privileged management is enabled.
 
 ## Recommended next slice
-Validate the Worker foundation in a real Cloudflare-capable environment, provision D1 and bind it to the Worker on `test`, then connect and smoke-test the first Telegram webhook. After that, import the approved 22-FAQ multilingual dataset and implement deterministic answering. Merge to `main` only after the current validated checkpoint is green.
+In the Cloudflare MCP session, upload the exact `deploy/worker.mjs` payload to Worker `school-of-nursing-faq-bot-test`, attach D1 binding `DB` → `9109c1ef-3613-49f8-aee3-c62a3dbdd744`, set plain variable `APP_ENV=test`, and verify `GET /health`. Return the verified Worker URL, deployment/version evidence, binding evidence, and health response to the GitHub session. Then continue Telegram secret/webhook setup on `test`; do not merge to `main` yet.
