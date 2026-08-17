@@ -25,28 +25,34 @@ Production Telegram FAQ assistant for a university School of Nursing in Burmese,
 - Public repo; secrets never committed
 
 ## Phase 0 — Foundation v0.1
-Status: IN PROGRESS
+Status: IMPLEMENTED ON `test`; RUNTIME VALIDATION PENDING
 
-Completed:
-- Repository initialized on `main`.
-- `test` development branch created.
-- Project/security baseline documented.
-- Branch policy locked: develop on `test`, merge verified work to `main`.
-- `ROADMAP.md` and `NEW_CHAT_BOOTSTRAP.md` defined as mandatory living continuity files.
+Completed on `test`:
+- Repository/project operating rules in `AGENTS.md`.
+- Mandatory branch policy: develop/validate on `test`, merge verified state to `main`.
+- Living continuity docs: `ROADMAP.md` and `NEW_CHAT_BOOTSTRAP.md`.
+- University-grade Telegram UX/design contract.
+- Architecture baseline.
+- TypeScript/Cloudflare Worker project configuration.
+- Initial D1 schema for users, questions, Sudo Admin roles, and admin audit events.
+- Worker routes: `GET /health` and `POST /telegram/webhook`.
+- Optional Telegram webhook secret-header verification.
+- `/start` and `/language` multilingual language-selection keyboard foundation.
+- Telegram user metadata upsert and free-text question logging when D1 is bound.
+- Runtime secret placeholders only; no secrets committed.
+- Current tooling versions aligned with the package registry on 2026-08-18.
 
-Current work:
-- agent/project rules
-- Telegram design rules
-- Worker/TypeScript skeleton
-- D1 schema for users, questions, roles, audit events
-- deployment configuration without secrets
-- language-selection and admin foundations
+Validation state:
+- Repository writes/reads on `test` verified through the GitHub connector.
+- Local clone/install/typecheck could not run in the available execution container because outbound DNS to `github.com` is unavailable. This is an environment limitation, not a reported TypeScript failure.
+- Do not merge Foundation v0.1 to `main` until a real dependency install/typecheck or equivalent Cloudflare validation passes.
 
 ## Phase 1 — Telegram MVP
 Status: PLANNED
 
 - `/start` language selector: မြန်မာ / English / 简体中文
 - `/language` switcher with persisted preference
+- callback-query handling and persisted language choice
 - canonical FAQ loader and deterministic matching
 - aligned meaning across all three languages
 - no-match path and human escalation
@@ -95,4 +101,4 @@ Status: PLANNED
 The source FAQ document contains 22 core questions. Canonical Burmese facts are the source of truth; English and Simplified Chinese translations must preserve meaning. Do not invent or silently alter dates, costs, accreditation, eligibility, application, scholarship/loan/bond, or policy facts.
 
 ## Next recommended slice
-Finish Foundation v0.1 on `test`, verify repository/runtime configuration, then provision Cloudflare resources and connect the first live Telegram webhook.
+Validate Foundation v0.1 with a real Worker dependency install/typecheck, provision the Cloudflare D1 binding, then connect and smoke-test the first live Telegram webhook. Keep the work on `test`; merge to `main` only after validation is green.
