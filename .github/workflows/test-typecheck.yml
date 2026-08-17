@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: test-build-${{ github.ref }}
@@ -25,3 +25,15 @@ jobs:
       - run: npm run typecheck
       - name: Wrangler dry-run bundle
         run: npx wrangler deploy --dry-run --env test --outdir dist
+      - name: Refresh deployment artifact
+        run: |
+          cp dist/worker.js deploy/worker.mjs
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet -- deploy/worker.mjs; then
+            echo "Deployment artifact is already current."
+            exit 0
+          fi
+          git add deploy/worker.mjs
+          git commit -m "build: refresh validated Worker artifact [skip ci]"
+          git push origin HEAD:test
