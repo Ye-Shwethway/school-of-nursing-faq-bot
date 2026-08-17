@@ -2,31 +2,110 @@ export type HandoffEnv = {
   DB?: D1Database;
 };
 
+export type HandoffRoute = "auto" | "group" | "dedicated";
+
+async function setBotSetting(
+  db: D1Database,
+  key: string,
+  value: string,
+  ownerId: number,
+): Promise<void> {
+  await db.prepare(
+    `INSERT INTO bot_settings (setting_key, setting_value, updated_by, updated_at)
+     VALUES (?1, ?2, ?3, CURRENT_TIMESTAMP)
+     ON CONFLICT(setting_key) DO UPDATE SET
+       setting_value=excluded.setting_value,
+       updated_by=excluded.updated_by,
+       updated_at=CURRENT_TIMESTAMP`,
+  ).bind(key, value, ownerId).run();
+}
+
+async function getBotSetting(db: D1Database | undefined, key: string): Promise<string | null> {
+  if (!db) return null;
+  const row = await db.prepare(
+    `SELECT setting_value FROM bot_settings WHERE setting_key=?1`,
+  ).bind(key).first<{ setting_value: string }>();
+  return row?.setting_value ?? null;
+}
+
 export async function setStaffInbox(
   db: D1Database | undefined,
   ownerId: number,
   chatId: number,
 ): Promise<string> {
   if (!db) return "D1 is not bound.";
-  await db.prepare(
-    `INSERT INTO bot_settings (setting_key, setting_value, updated_by, updated_at)
-     VALUES ('staff_inbox_chat_id', ?1, ?2, CURRENT_TIMESTAMP)
-     ON CONFLICT(setting_key) DO UPDATE SET
-       setting_value=excluded.setting_value,
-       updated_by=excluded.updated_by,
-       updated_at=CURRENT_TIMESTAMP`,
-  ).bind(String(chatId), ownerId).run();
-  return `Staff Inbox bound to chat ${chatId}.`;
+  await setBotSetting(db, "staff_inbox_chat_id", String(chatId), ownerId);
+  await addStaffMember(db, ownerId, ownerId);
+  return `Staff Inbox bound to chat ${chatId}. Owner enabled as staff.`;
 }
 
 export async function getStaffInboxChatId(db?: D1Database): Promise<number | null> {
-  if (!db) return null;
-  const row = await db.prepare(
-    `SELECT setting_value FROM bot_settings WHERE setting_key='staff_inbox_chat_id'`,
-  ).first<{ setting_value: string }>();
-  if (!row) return null;
-  const value = Number(row.setting_value);
+  const raw = await getBotSetting(db, "staff_inbox_chat_id");
+  if (!raw) return null;
+  const value = Number(raw);
   return Number.isSafeInteger(value) ? value : null;
+}
+
+export async function setHandoffRoute(
+  db: D1Database | undefined,
+  ownerId: number,
+  route: HandoffRoute,
+): Promise<string> {
+  if (!db) return "D1 is not bound.";
+  await setBotSetting(db, "handoff_route", route, ownerId);
+  return `Human handoff route set to: ${route}`;
+}
+
+export async function getHandoffRoute(db?: D1Database): Promise<HandoffRoute> {
+  const raw = await getBotSetting(db, "handoff_route");
+  return raw === "group" || raw === "dedicated" ? raw : "auto";
+}
+
+export async function setDedicatedStaff(
+  db: D1Database | undefined,
+  ownerId: number,
+  staffId: number,
+): Promise<string> {
+  if (!db) return "D1 is not bound.";
+  await addStaffMember(db, ownerId, staffId);
+  await setBotSetting(db, "dedicated_staff_id", String(staffId), ownerId);
+  return `Dedicated staff assigned: ${staffId}`;
+}
+
+export async function getDedicatedStaffId(db?: D1Database): Promise<number | null> {
+  const raw = await getBotSetting(db, "dedicated_staff_id");
+  if (!raw) return null;
+  const value = Number(raw);
+  return Number.isSafeInteger(value) ? value : null;
+}
+
+export async function getHandoffDestination(
+  db?: D1Database,
+): Promise<{ route: "group" | "dedicated"; chatId: number } | null> {
+  if (!db) return null;
+  const mode = await getHandoffRoute(db);
+  const groupChatId = await getStaffInboxChatId(db);
+  const dedicatedStaffId = await getDedicatedStaffId(db);
+
+  if (mode === "group") return groupChatId ? { route: "group", chatId: groupChatId } : null;
+  if (mode === "dedicated") return dedicatedStaffId ? { route: "dedicated", chatId: dedicatedStaffId } : null;
+
+  if (groupChatId) return { route: "group", chatId: groupChatId };
+  if (dedicatedStaffId) return { route: "dedicated", chatId: dedicatedStaffId };
+  return null;
+}
+
+export async function handoffStatus(db?: D1Database): Promise<string> {
+  if (!db) return "D1 is not bound.";
+  const route = await getHandoffRoute(db);
+  const group = await getStaffInboxChatId(db);
+  const dedicated = await getDedicatedStaffId(db);
+  return [
+    "Human Handoff Settings",
+    `Route: ${route}`,
+    `Staff Inbox: ${group ?? "not configured"}`,
+    `Dedicated staff: ${dedicated ?? "not configured"}`,
+  ].join("\n");
 }
 
 export async function addStaffMember(
@@ -109,7 +188,7 @@ export async function claimCase(
   staffId: number,
 ): Promise<{ ok: boolean; message: string }> {
   if (!db) return { ok: false, message: "D1 is not bound." };
-  if (!(await isStaffMember(db, staffId))) return { ok: false, message: "Not authorized for Staff Inbox." };
+  if (!(await isStaffMember(db, staffId))) return { ok: false, message: "Not authorized for human handoff." };
 
   const result = await db.prepare(
     `UPDATE escalation_cases
