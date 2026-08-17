@@ -1,0 +1,65 @@
+# NEW CHAT BOOTSTRAP
+
+Last updated: 2026-08-18
+Repository: `Ye-Shwethway/school-of-nursing-faq-bot`
+Development branch: `test`
+Canonical branch: `main`
+
+## Startup sequence
+Read in this order before development:
+1. `AGENTS.md`
+2. `NEW_CHAT_BOOTSTRAP.md`
+3. `ROADMAP.md`
+4. only the task-relevant docs/source referenced by those files
+
+Treat the live repository plus verified Cloudflare/Telegram production evidence as authoritative over remembered chat context.
+
+## Branch contract
+- Work on `test`.
+- Do not implement directly on `main`.
+- Validate the current slice on `test`.
+- Merge to `main` only when the slice is verified and ready to become canonical.
+
+## Current checkpoint
+The project is at **Foundation v0.1** on `test`. Repository initialization is complete and the first architecture/runtime skeleton is being established. No production Telegram webhook or Cloudflare deployment should be assumed active until verified in the live services.
+
+## Product contract
+Build a dignified university School of Nursing Telegram FAQ bot with:
+- Burmese, English, Simplified Chinese
+- `/start` language selection and `/language` switching
+- deterministic approved FAQ answer first
+- grounded Gemini fallback only after deterministic matching fails
+- human escalation when uncertain/unanswered
+- Bot Owner and Sudo Admin management
+- recording Telegram user ID, username when available, names when available, language, timestamps, and questions for authorized follow-up
+- Cloudflare Workers + D1
+- GitHub Actions deployment later if useful
+
+## Canonical knowledge contract
+The source FAQ document contains 22 core FAQs. Burmese canonical facts are authoritative; EN/ZH are meaning-preserving translations. Policy-sensitive content such as dates, fees, eligibility, accreditation, applications, scholarships/loans/bonds must never be invented by AI.
+
+## Security contract
+The repository is public. Never commit Telegram bot tokens, Gemini API keys, Cloudflare credentials, webhook secrets, private user logs, or production database exports.
+
+Admin authority is based on immutable Telegram user ID, not username.
+
+## UX contract
+Follow `docs/TELEGRAM_DESIGN_RULES.md`: clean, restrained, university-appropriate, button-led where useful, concise multilingual copy, no clutter or gimmicky styling.
+
+## Continuity rule
+A meaningful implementation slice is not complete until both this file and `ROADMAP.md` are updated to reflect:
+- what changed
+- verified state/evidence
+- unresolved gaps
+- current architecture/schema changes
+- exact recommended next slice
+
+## Current known gaps
+- Canonical 22-FAQ dataset has not yet been committed to this repository.
+- Cloudflare D1 resource and Worker deployment must be provisioned/verified.
+- Telegram bot token/webhook configuration must be supplied through secrets.
+- Gemini fallback is not yet production-enabled.
+- Owner Telegram user ID must be configured securely before privileged management is enabled.
+
+## Recommended next slice
+Complete Foundation v0.1 repository skeleton on `test`, verify the branch contents, then provision Cloudflare D1/Worker bindings and establish the first live Telegram webhook. After webhook smoke validation, import the approved 22-FAQ multilingual dataset and enable deterministic answering.
