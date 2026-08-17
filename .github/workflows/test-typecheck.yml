@@ -40,7 +40,7 @@ jobs:
           sha256sum deploy/worker.mjs > deploy/worker.sha256
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          if git diff --quiet -- deploy/worker.mjs deploy/worker.sha256; then
+          if [ -z "$(git status --porcelain -- deploy/worker.mjs deploy/worker.sha256)" ]; then
             echo "Deployment artifact and checksum are already current."
             exit 0
           fi
