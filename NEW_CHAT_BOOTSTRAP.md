@@ -21,7 +21,7 @@ Treat live repository plus verified Cloudflare/Telegram evidence as authoritativ
 - production Worker after validated merge: `school-of-nursing-faq-bot`
 
 ## Current checkpoint
-Foundation, Telegram FAQ MVP core, Owner/Sudo core, Telegram-managed AI provider settings, strict AI policy, Owner-selectable AI persona, and human Staff Inbox handoff core are implemented on `test`.
+Foundation, Telegram FAQ MVP core, Owner/Sudo core, Telegram-managed AI provider settings, strict AI policy, Owner-selectable AI persona, and dual human-handoff routing are implemented on `test`.
 
 Cloudflare live state still has only migration 0001. Migrations 0002 and 0003 are repository-only and not yet applied live. Test Worker has not yet been successfully deployed.
 
@@ -122,34 +122,81 @@ Stored in `bot_settings` as `agent_persona`.
 
 Persona changes presentation only. It cannot change facts, policy, authority, or handoff threshold.
 
-## Human Staff Inbox
-Recommended surface: private Telegram supergroup.
+## Human handoff routes
+Human-support membership is separate from Sudo Admin authority.
 
-Do not use a broadcast-only channel as the operational reply surface. If an organizational channel is required, use a linked private discussion group for claims/replies.
+Owner commands:
+- `/staff status`
+- `/staff route auto|group|dedicated`
+- `/staff inbox here`
+- `/staff dedicated <telegram_user_id>`
+- `/staff add <telegram_user_id>`
+- `/staff remove <telegram_user_id>`
 
-Setup:
-1. Owner manually creates private Staff Inbox supergroup.
-2. Add bot with adequate group permissions.
-3. In that group Owner sends `/staff inbox here`.
-4. Owner adds authorized responders with `/staff add <telegram_user_id>`.
-5. Remove with `/staff remove <telegram_user_id>`.
+Routing modes:
+- `auto`: use Staff Inbox group when configured, otherwise dedicated staff
+- `group`: Staff Inbox group only
+- `dedicated`: assigned staff private chat only
 
-Unresolved case flow:
-- create D1 escalation case
-- post case card to Staff Inbox
-- staff taps `Claim`
-- atomic D1 update allows one claimant only
-- later Claim attempts receive already-claimed result
-- only claimant may reply to original case message
-- bot relays reply privately to user as `School of Nursing Staff`
-- staff identity remains hidden from user
-- claimant may `Resolve`
+Recommended default: `auto`.
+
+### Group workflow
+Recommended operational surface is a private Telegram supergroup.
+
+1. Owner creates private Staff Inbox group manually.
+2. Add bot with adequate permissions.
+3. Owner sends `/staff inbox here` in the group.
+4. Owner adds staff IDs.
+5. Escalation card arrives with `Take Over`.
+6. First successful atomic claim wins.
+7. Claimant replies directly to original case message.
+8. Bot relays privately to user as `School of Nursing Staff`.
+9. Claimant resolves case.
+
+### Dedicated staff workflow
+A group is optional.
+
+Owner assigns one responder with:
+`/staff dedicated <telegram_user_id>`
+
+The bot first sends a private probe message. Assignment is saved only when Telegram confirms private delivery.
+
+The staff member must previously open the bot and send `/start`; Telegram bots cannot begin an arbitrary private chat with a user who has never initiated the bot.
+
+Once assigned:
+- escalation case card goes to the staff member's private bot chat
+- staff taps `Take Over`
+- atomic D1 claim applies exactly as in group mode
+- staff replies to the case message
+- bot relays anonymously to user
+- staff resolves the case
+
+The same `staff_chat_id + staff_message_id + claimed_by` mapping authorizes replies in both group and private modes.
+
+If no valid destination exists or a staff notification cannot be delivered:
+- escalation case remains queued in D1
+- user is not given a fabricated answer or response-time promise
+- Worker attempts a private warning to the configured Owner
 
 Tables from migration 0003:
 - `bot_settings`
 - `staff_members`
 - `escalation_cases`
 - `escalation_messages`
+
+Dedicated routing uses existing `bot_settings`; no migration beyond 0003 is required.
+
+## Monitoring direction
+Approved design direction, not yet fully implemented:
+- default monitoring mode should be `All + Alerts`
+- user and bot/AI messages silently mirror to Staff Inbox topics when group monitoring is enabled
+- normal mirrors should be silent/no notification
+- handoff/risky/error events should alert
+- staff may `Take Over`; atomic ownership pauses automated replies for that conversation
+- claimant handles anonymous replies
+- later `Return to AI`/`Resolve` restores lifecycle as appropriate
+
+This shadow-monitoring layer is still pending implementation.
 
 ## Verified Cloudflare state
 - Account ID: `abd28e59860f09dab81b7e09de467f38`
@@ -177,12 +224,14 @@ Pending:
 - live FAQ/language tests
 - live Owner/Sudo tests
 - live AI provider fetch/ping/binding/persona tests
-- create/bind Staff Inbox
+- live Staff Inbox route test
+- live dedicated-staff route test
 - multi-staff atomic claim test
 - anonymous staff reply/resolve test
 - grounded Primary/Fallback inference orchestration
+- silent shadow monitoring + alert/takeover workflow
 
 Do not merge to `main` yet.
 
 ## Next recommended slice
-Prepare and validate a current Worker build, then return to Cloudflare MCP: apply migrations 0002 + 0003, deploy `school-of-nursing-faq-bot-test`, configure minimum test secrets, and validate foundation + FAQ + admin + AI settings/persona + Staff Inbox behavior. Then wire grounded AI inference using `src/agent_policy.ts` before production merge.
+Prepare and validate a current Worker build, then return to Cloudflare MCP: apply migrations 0002 + 0003, deploy `school-of-nursing-faq-bot-test`, configure minimum test secrets, and validate foundation + FAQ + admin + AI settings/persona + both human-handoff routes. Then wire grounded AI inference and shadow monitoring before production merge.
