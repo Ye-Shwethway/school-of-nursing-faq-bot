@@ -3,7 +3,6 @@ type AiPingEnv = {
   AI_CONFIG_MASTER_KEY?: string;
 };
 
-const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
 function base64ToBytes(value: string): Uint8Array {
@@ -33,6 +32,11 @@ function normalizeBaseUrl(value: string): string {
   return value.trim().replace(/\/+$/, "");
 }
 
+function credentialProviderId(provider: string): string {
+  if (provider === "nanogpt_subscription" || provider === "nanogpt_all") return "nanogpt";
+  return provider;
+}
+
 function providerBaseUrl(provider: string, customBaseUrl?: string | null): string {
   switch (provider) {
     case "openai": return "https://api.openai.com/v1";
@@ -41,6 +45,8 @@ function providerBaseUrl(provider: string, customBaseUrl?: string | null): strin
     case "openrouter": return "https://openrouter.ai/api/v1";
     case "groq": return "https://api.groq.com/openai/v1";
     case "mistral": return "https://api.mistral.ai/v1";
+    case "nanogpt_subscription": return "https://nano-gpt.com/api/subscription/v1";
+    case "nanogpt_all": return "https://nano-gpt.com/api/v1";
     case "custom": return normalizeBaseUrl(customBaseUrl ?? "");
     default: return "";
   }
@@ -51,7 +57,7 @@ async function modelPing(provider: string, modelId: string, apiKey: string, cust
   if (!baseUrl) throw new Error("Provider base URL is unavailable");
 
   let url: string;
-  let headers: Record<string, string> = { "content-type": "application/json" };
+  const headers: Record<string, string> = { "content-type": "application/json" };
   let body: unknown;
 
   if (provider === "openai") {
@@ -132,7 +138,7 @@ export async function testSelectedModel(
 
   const credential = await env.DB.prepare(
     `SELECT encrypted_key, key_iv, base_url FROM ai_provider_credentials WHERE provider=?1`,
-  ).bind(session.provider).first<{ encrypted_key: string; key_iv: string; base_url: string | null }>();
+  ).bind(credentialProviderId(session.provider)).first<{ encrypted_key: string; key_iv: string; base_url: string | null }>();
 
   if (!credential) return { text: "Provider credential is missing." };
 
