@@ -27,7 +27,14 @@ jobs:
         run: npx wrangler deploy --dry-run --env test --outdir dist
       - name: Refresh deployment artifact
         run: |
-          cp dist/worker.js deploy/worker.mjs
+          BUNDLE="$(find dist -type f -name '*.js' | head -n 1)"
+          if [ -z "$BUNDLE" ]; then
+            echo "No generated JavaScript bundle found in dist/."
+            find dist -maxdepth 3 -type f -print || true
+            exit 1
+          fi
+          echo "Using generated bundle: $BUNDLE"
+          cp "$BUNDLE" deploy/worker.mjs
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           if git diff --quiet -- deploy/worker.mjs; then
