@@ -78,28 +78,42 @@ Owner-only Telegram command:
 
 `/ai`
 
-Supported providers:
+Supported provider modes:
 - OpenAI
 - Anthropic
 - Google Gemini
 - OpenRouter
 - Groq
 - Mistral
+- NanoGPT — Subscription only
+- NanoGPT — Subscription + Paid (all visible)
 - Custom OpenAI-compatible HTTPS endpoint
 
-Implemented flow:
-1. Owner selects provider.
+NanoGPT uses one shared encrypted credential record (`nanogpt`) but two explicit model-cache/binding route IDs:
+- `nanogpt_subscription`
+- `nanogpt_all`
+
+NanoGPT API routing:
+- subscription model catalog: `GET /api/subscription/v1/models?detailed=true`
+- all-visible/canonical model catalog: `GET /api/v1/models?detailed=true`
+- subscription Test Ping: `POST /api/subscription/v1/chat/completions`
+- all-mode Test Ping: `POST /api/v1/chat/completions`
+
+The all-visible catalog follows NanoGPT account visibility settings; when the NanoGPT account is set to also show paid models, this path exposes the combined subscription + paid set. The subscription route remains restricted to subscription-included models.
+
+Implemented AI settings flow:
+1. Owner selects provider/catalog mode.
 2. For Custom provider, Owner supplies HTTPS base URL first.
-3. Owner sends provider API key.
+3. Owner sends provider API key when a reusable credential is not already stored.
 4. Worker encrypts the key with AES-256-GCM before D1 persistence.
 5. Bot makes a best-effort attempt to delete the Telegram message that contained the plaintext key.
-6. Owner taps **Fetch models**; models are retrieved from the provider API rather than hard-coded.
+6. Owner taps **Fetch models**; models are retrieved from the selected live catalog rather than hard-coded.
 7. Model catalog is cached in D1 with short callback tokens.
 8. Owner selects a model.
-9. Owner runs explicit **Test Ping**; this performs a minimal real generation request appropriate to that provider.
+9. Owner runs explicit **Test Ping** using that exact provider/catalog route.
 10. Bind buttons are allowed only after a successful ping.
 11. Save as Primary or Fallback.
-12. Primary and fallback may use different providers.
+12. Primary and fallback may use different providers or NanoGPT modes.
 
 Required Cloudflare secret:
 
@@ -120,6 +134,8 @@ Current model ping paths:
 - Anthropic: Messages API
 - Gemini: `generateContent`
 - OpenRouter/Groq/Mistral/Custom OpenAI-compatible: chat-completions style endpoint
+- NanoGPT subscription mode: subscription chat-completions endpoint
+- NanoGPT all mode: canonical chat-completions endpoint
 
 AI settings remain Owner-only; Sudo Admin does not inherit API credential-management rights.
 
@@ -164,6 +180,7 @@ Current source imports `faq.ts`, `admin.ts`, `ai.ts`, and `ai_ping.ts`. **Do not
 - Telegram MVP runtime behavior: not yet live-validated.
 - Owner/Sudo runtime behavior: not yet live-validated.
 - AI encrypted credential/model fetch/ping/binding flow: not yet live-validated.
+- NanoGPT subscription/all catalog behavior: implemented from current official NanoGPT API contract but not yet live-validated with the Owner account.
 - do not merge to `main` yet.
 
 ## Security notes
@@ -186,9 +203,10 @@ Current source imports `faq.ts`, `admin.ts`, `ai.ts`, and `ai_ping.ts`. **Do not
 - live Owner/Sudo authorization tests
 - admin unresolved-question/user lookup tooling
 - live AI provider model-list tests
+- live NanoGPT subscription-only and all-visible catalog tests
 - live model Test Ping tests
 - actual grounded AI fallback orchestration using primary + fallback model binding
 - fallback/escalation semantics when provider/model calls fail
 
 ## Recommended next slice
-Stabilize and validate the combined current source on `test`, prepare a current Worker build, then return to the Cloudflare MCP session. Apply `migrations/0002_ai_settings.sql`, deploy `school-of-nursing-faq-bot-test` with `DB` and `APP_ENV=test`, provision only the required test secrets (`AI_CONFIG_MASTER_KEY`, then Telegram/Owner secrets when ready), and validate foundation + FAQ + admin + AI settings behavior. Do not create/deploy the production Worker or merge to `main` until the test checkpoint is green.
+Stabilize and validate the combined current source on `test`, prepare a current Worker build, then return to the Cloudflare MCP session. Apply `migrations/0002_ai_settings.sql`, deploy `school-of-nursing-faq-bot-test` with `DB` and `APP_ENV=test`, provision only the required test secrets (`AI_CONFIG_MASTER_KEY`, then Telegram/Owner secrets when ready), and validate foundation + FAQ + admin + AI settings behavior, including both NanoGPT catalog modes. Do not create/deploy the production Worker or merge to `main` until the test checkpoint is green.
