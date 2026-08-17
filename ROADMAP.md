@@ -9,57 +9,55 @@ Production Telegram FAQ assistant for a university School of Nursing in Burmese,
 - `test` = active development/validation
 - `main` = verified canonical/production
 - no direct implementation on `main`
-- merge only after the current test checkpoint is green
+- merge only after live test validation is green
 
 ## Locked architecture
-- Telegram Bot API webhook
-- Cloudflare Workers + D1
-- public-only `/start` landing
-- `/whoami` for every user
-- role-scoped command menus managed by Worker `setMyCommands`; no recurring BotFather command maintenance
-- immutable Telegram numeric IDs for authority; management surfaces display name/username + ID together
-- D1-managed active FAQ knowledge with revision history
-- deterministic FAQ lookup before AI
-- configurable multi-provider grounded AI with Primary + Fallback
-- AI failures are human-handoff conditions, never crash paths
-- human routing supports Staff Inbox group and dedicated private responder
+- Telegram Bot API webhook on Cloudflare Workers + D1
+- public-only `/start`; `/whoami` for every user
+- role-scoped commands managed automatically by Worker `setMyCommands`
+- immutable Telegram numeric IDs for authority; management UI shows name/username + ID
+- D1-managed active FAQ knowledge + revision history
+- deterministic FAQ → grounded Primary AI → grounded Fallback AI → Human Handoff
+- AI/provider/config failure is a handoff condition, never a crash path
+- Staff Inbox group or dedicated private responder
 - silent shadow monitoring + alert escalation
-- atomic conversation/case Take Over and anonymous staff relay
-- public repo; credentials only in Cloudflare/secure encrypted storage
+- atomic Take Over / Return to AI
+- anonymous human relay
+- public repo; no plaintext credentials in source
 
 ## Phase 0 — Foundation
-Status: IMPLEMENTED ON `test`; CLOUDFLARE RUNTIME VALIDATION PENDING
+Status: REPO GREEN; LIVE CLOUDFLARE VALIDATION PENDING
 
-- Worker routes: `GET /health`, `POST /telegram/webhook`
-- D1: `school-of-nursing-faq-bot-db`
-- D1 ID: `9109c1ef-3613-49f8-aee3-c62a3dbdd744`
-- migration 0001 is live and verified
-- test Worker target: `school-of-nursing-faq-bot-test`
-- first upload was rejected before creation by Cloudflare error 10021 because compatibility date 2026-08-18 was still future in UTC; no infrastructure drift occurred
+- `/health` and `/telegram/webhook`
+- D1 `school-of-nursing-faq-bot-db`
+- D1 ID `9109c1ef-3613-49f8-aee3-c62a3dbdd744`
+- migration 0001 live and verified
+- test Worker target `school-of-nursing-faq-bot-test`
+- first Worker upload was rejected before creation by Cloudflare error 10021 because compatibility date `2026-08-18` was still future in UTC; no infrastructure drift occurred
 
 ## Phase 1 — Public Telegram FAQ UX
-Status: CORE IMPLEMENTED; LIVE VALIDATION PENDING
+Status: IMPLEMENTED; LIVE VALIDATION PENDING
 
-- 22 approved FAQs from `SCHOOL of Nursing FAQ.docx`
+- 22 approved FAQ records from `SCHOOL of Nursing FAQ.docx`
 - Burmese facts authoritative; English + Simplified Chinese preserve meaning
-- `/start` shows public language/inquiry UX only
-- `/language` remains supported but hidden from the command menu
-- user language persists in D1
-- `/whoami` returns human-readable Telegram identity + immutable ID
+- `/start` contains only public language/inquiry UX
+- `/language` supported but hidden from public command menu
+- D1 language persistence
+- `/whoami` displays human-readable identity + immutable ID
 
 ## Phase 2 — Owner / Sudo Admin / Identity
-Status: CORE IMPLEMENTED; LIVE VALIDATION PENDING
+Status: IMPLEMENTED; LIVE VALIDATION PENDING
 
 - Owner from `BOT_OWNER_TELEGRAM_ID`
 - D1 `sudo_admin` role
 - `/admin`, `/admins`, Owner-only `/sudo grant|revoke`
-- privileged mutations audited
-- `/admins`, grant/revoke confirmations, staff status/claim output, and FAQ-change notifications use name/username + ID when metadata exists
+- audit logging
+- management surfaces use name/username + ID whenever metadata exists
 
 ## Phase 3 — Self-managed scoped command menus
 Status: IMPLEMENTED; LIVE TELEGRAM VALIDATION PENDING
 
-Modules:
+Files:
 - `src/command_menu.ts`
 - `src/command_sync.ts`
 - `src/runtime_entry.ts`
@@ -69,10 +67,10 @@ Visibility:
 - Sudo Admin: public + `/admin`, `/admins`, `/faq`
 - Owner: admin + `/sudo`, `/ai`, `/staff`
 
-Command registry content is its own fingerprint. A registry change causes the first webhook after deployment to synchronize public, Owner, and current Sudo Admin command scopes through Telegram `setMyCommands`. Sudo grant/revoke also refreshes the affected private scope. Sync failures are best-effort and must not block bot runtime.
+Command arrays are their own registry fingerprint. A registry change triggers automatic scope synchronization on the first webhook after deployment. Sudo grant/revoke refreshes the affected private scope immediately. Visibility is UX only; server-side authorization remains authoritative.
 
 ## Phase 4 — Configurable grounded AI
-Status: SETTINGS + POLICY + RUNTIME ORCHESTRATION IMPLEMENTED; LIVE PROVIDER VALIDATION PENDING
+Status: SETTINGS + POLICY + RUNTIME IMPLEMENTED; LIVE PROVIDER VALIDATION PENDING
 
 Owner-only `/ai` supports:
 - OpenAI
@@ -86,68 +84,67 @@ Owner-only `/ai` supports:
 - Custom OpenAI-compatible HTTPS
 
 Implemented:
-- AES-256-GCM encrypted provider credentials using Cloudflare-only `AI_CONFIG_MASTER_KEY`
-- provider model fetch
+- AES-256-GCM encrypted provider credentials with `AI_CONFIG_MASTER_KEY`
+- model catalog fetch
 - explicit Test Ping
 - bind only after successful ping
 - cross-provider Primary + Fallback
-- NanoGPT dual catalog/inference routes with shared encrypted credential
-- Male/Female AI persona
-- strict grounded policy: `src/agent_policy.ts`
-- availability/fail-safe contract: `src/ai_fail_safe.ts`
-- runtime inference: `src/ai_runtime.ts`
+- NanoGPT dual routes with shared credential
+- Male/Female persona
+- strict grounded policy in `src/agent_policy.ts`
+- availability/fail-safe in `src/ai_fail_safe.ts`
+- inference orchestration in `src/ai_runtime.ts`
 
 Runtime order:
-`Dynamic deterministic FAQ → Primary AI → Fallback AI → Human Handoff`.
+`Dynamic FAQ → Primary AI → Fallback AI → Human Handoff`.
 
-A safe Primary answer is returned immediately. Primary failure or handoff may try the configured Fallback. If neither produces a valid grounded answer, the user is routed to humans. Missing bindings/keys, decrypt failures, timeout, auth/rate-limit/provider/network errors, malformed model JSON, and model removals are fail-closed for automated answering.
+Missing keys/bindings, decrypt failure, timeout, 401/403, 429, 5xx, network/provider outage, malformed model output, and removed models fail closed to human handling.
 
 ## Phase 5 — Human Staff Handoff
-Status: CORE IMPLEMENTED; LIVE VALIDATION PENDING
+Status: IMPLEMENTED; LIVE VALIDATION PENDING
 
-Migration 0003:
+Migration 0003 provides:
 - `bot_settings`
 - `staff_members`
 - `escalation_cases`
 - `escalation_messages`
 
-Routing:
+Routes:
 - `auto`: group first, dedicated responder fallback
 - `group`: Staff Inbox only
-- `dedicated`: assigned responder private chat only
+- `dedicated`: assigned private responder only
 
 Features:
-- dedicated private-delivery probe before assignment
-- atomic case claim
+- private-delivery probe before dedicated assignment
+- atomic claim
 - claimant-only reply
-- anonymous relay as `School of Nursing Staff`
-- resolve action
-- D1 queue preservation and best-effort Owner warning when staff notification cannot be delivered
-- staff status and claim surfaces show stored human identity + immutable ID
+- anonymous `School of Nursing Staff` relay
+- resolve lifecycle
+- D1 queue preservation + best-effort Owner warning on undelivered case
 
 ## Phase 6 — Shadow Monitoring + Conversation Takeover
-Status: CORE IMPLEMENTED; LIVE VALIDATION PENDING
+Status: IMPLEMENTED; LIVE VALIDATION PENDING
 
-Migration 0004:
+Migration 0004 provides:
 - `conversation_control`
 - `monitoring_topics`
 
 Modes:
-- `all_alerts` recommended default
+- `all_alerts` recommended
 - `silent_all`
 - `alerts_only`
 - `off`
 
-Routine user/assistant traffic can mirror silently into one Staff Inbox forum topic per user. Critical handoff is independent of routine monitoring. `Take Over` atomically moves a conversation into human control; automated FAQ/AI answers stop. Claimant replies anonymously and claimant/Owner can `Return to AI`.
+Routine conversation traffic can mirror silently into one Staff Inbox forum topic per user. Critical handoff remains active independently. `Take Over` atomically pauses automated FAQ/AI answers; claimant answers anonymously; claimant or Owner can `Return to AI`.
 
 ## Phase 7 — Dynamic FAQ Knowledge + Telegram CRUD
-Status: RUNTIME WIRED ON `test`; LIVE D1 VALIDATION PENDING
+Status: IMPLEMENTED + RUNTIME WIRED; LIVE D1 VALIDATION PENDING
 
-Migration 0005:
+Migration 0005 provides:
 - `faq_entries`
 - `faq_revisions`
 
-Modules:
+Files:
 - `src/faq_store.ts`
 - `src/faq_admin.ts`
 - `src/faq_notify.ts`
@@ -155,54 +152,60 @@ Modules:
 - `docs/FAQ_MANAGEMENT.md`
 
 Implemented:
-- automatic seed of the original 22 approved FAQs when the dynamic FAQ table is empty
-- active D1 FAQ rows are deterministic lookup source
-- same active D1 snapshot builds AI approved context on each user request
+- automatic seed of original 22 FAQs when dynamic table is empty
+- active D1 FAQ rows drive deterministic matching
+- same active D1 snapshot builds AI approved context per request
 - Owner + Sudo Admin `/faq` CRUD wizard
 - add/edit/disable/restore; disable is soft-delete
 - revision snapshot on every mutation
-- mutation notification to Owner + all Sudo Admins + Staff Inbox group when configured
-- notification actor displayed by name/username + ID
-- `/faq` now appears automatically in Admin/Owner scoped command menus
+- change notification to Owner + all Sudo Admins + Staff Inbox when configured
+- mutation actor shown with identity + ID
 
-Migration-aware cutover behavior:
-- if migration 0005 is present, `src/runtime_entry.ts` uses the dynamic FAQ + AI path
-- if dynamic FAQ storage is absent during a transitional deployment, the request falls through to the legacy `src/index.ts` static FAQ path instead of crashing
+Migration-aware cutover:
+- migration 0005 present → dynamic FAQ + grounded AI path
+- dynamic storage absent → request safely falls through to retained legacy static FAQ runtime
 
-## Phase 8 — Focused validation and test deployment
-Status: IN PROGRESS
+## Phase 8 — Repository validation + deploy artifact
+Status: GREEN
 
-Focused GitHub Actions workflow:
-- `.github/workflows/test-typecheck.yml`
-- Node 22
-- install dependencies
-- `npm run typecheck`
-- push-to-`test` only; no deployment mutation
+Focused GitHub workflow: `.github/workflows/test-typecheck.yml`.
 
-Local clone/install remains unavailable in the current assistant environment because DNS cannot resolve `github.com`, so GitHub Actions is the canonical remote typecheck surface for now.
+Validated on `test` with Node 22:
+- dependency install ✅
+- `npm run typecheck` ✅
+- local Wrangler D1 migrations 0001 → 0005 ✅
+- `wrangler deploy --dry-run --env test` ✅
+- generated Worker artifact refresh ✅
 
-Before Cloudflare deployment:
-- get latest typecheck green
-- replace/remove stale Foundation-only `deploy/worker.mjs` with a current build artifact strategy
-- apply migrations 0002 → 0003 → 0004 → 0005 in order
-- verify 22 FAQ seed + revision tables
-- provision minimum test secrets
-- deploy `school-of-nursing-faq-bot-test`
+Dry-run evidence:
+- total upload about `182.21 KiB`
+- gzip about `39.71 KiB`
+- binding `DB` → `school-of-nursing-faq-bot-db`
+- `APP_ENV=test`
 
-Live validation then covers:
-- `/health`, webhook secret and malformed webhook
-- `/start`, language persistence, `/whoami`
-- role-scoped commands and Sudo scope refresh
-- FAQ CRUD/revisions/change fan-out/dynamic answer updates
-- AI provider fetch/ping/binding/persona
-- Primary/Fallback/fail-safe/handoff
-- group and dedicated staff routing
-- monitoring topics, silent mirrors, Take Over, anonymous reply, Return to AI
+Deployment artifact:
+- `deploy/worker.mjs`
+- checksum: `deploy/worker.sha256`
+- current SHA-256: `2f15bd2d97ec86917741603b41eccf6c0a49f88172283ed5fc10021925cddff0`
 
-Only after the `test` checkpoint is green: merge to `main` and deploy `school-of-nursing-faq-bot` production.
+The workflow regenerates the bundle and checksum when code/config changes. `src/entry.ts` was removed as superseded; canonical Wrangler entry is `src/runtime_entry.ts`.
+
+## Phase 9 — Live test deployment
+Status: BLOCKED ONLY ON CLOUDFLARE/TELEGRAM RUNTIME SETUP
+
+Exact handoff: `docs/CLOUDFLARE_HANDOFF.md`.
+
+Required next live work:
+1. after Cloudflare UTC reaches compatibility date `2026-08-18`, apply migrations 0002 → 0005
+2. deploy exact `deploy/worker.mjs` to `school-of-nursing-faq-bot-test`
+3. verify `/health`, 404, malformed webhook, D1 binding/integrity
+4. configure `TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET`, `BOT_OWNER_TELEGRAM_ID`, `AI_CONFIG_MASTER_KEY`
+5. validate public UX, scoped commands, admin identity, FAQ CRUD/dynamic knowledge, AI provider flow, Primary/Fallback/fail-safe, both handoff routes, shadow monitoring, Take Over/Return to AI
+
+Only after the live `test` checkpoint is green: merge to `main` and deploy production Worker `school-of-nursing-faq-bot`.
 
 ## Canonical content rule
-Dynamic storage changes the delivery mechanism, not factual authority. Active approved FAQ content is the only School-specific factual authority for deterministic answers and AI grounding. AI must never invent missing policy-sensitive facts.
+Dynamic storage changes delivery, not factual authority. Active approved FAQ content is the only School-specific factual authority for deterministic answers and AI grounding. AI must never invent missing policy-sensitive facts.
 
-## Next recommended slice
-Resolve the focused typecheck to green. Then prepare an exact Cloudflare handoff for migrations 0002–0005 + current `src/runtime_entry.ts` Worker deployment and live Telegram validation. Do not merge `main` before that evidence is green.
+## Next action
+No further feature expansion is required before live validation. Preserve this checkpoint and move to the exact Cloudflare handoff when the UTC compatibility-date boundary and Cloudflare access permit it. Do not merge `main` yet.
