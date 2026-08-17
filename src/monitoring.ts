@@ -123,6 +123,19 @@ export async function getMonitoringTopic(
   return row?.message_thread_id ?? null;
 }
 
+export async function getUserForMonitoringTopic(
+  db: D1Database | undefined,
+  staffChatId: number,
+  messageThreadId: number,
+): Promise<number | null> {
+  if (!db) return null;
+  const row = await db.prepare(
+    `SELECT telegram_user_id FROM monitoring_topics
+     WHERE staff_chat_id=?1 AND message_thread_id=?2`,
+  ).bind(staffChatId, messageThreadId).first<{ telegram_user_id: number }>();
+  return row?.telegram_user_id ?? null;
+}
+
 export async function saveMonitoringTopic(
   db: D1Database | undefined,
   telegramUserId: number,
