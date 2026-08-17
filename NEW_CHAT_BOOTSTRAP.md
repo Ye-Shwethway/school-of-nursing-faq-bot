@@ -21,7 +21,36 @@ Treat the live repository plus verified Cloudflare/Telegram production evidence 
 - Merge to `main` only when the slice is verified and ready to become canonical.
 
 ## Current checkpoint
-The project is at **Foundation v0.1** on `test`. Repository initialization is complete and the first architecture/runtime skeleton is being established. No production Telegram webhook or Cloudflare deployment should be assumed active until verified in the live services.
+**Foundation v0.1 is implemented on `test` but not yet merged to `main`.**
+
+Implemented repository surface:
+- `AGENTS.md`
+- `ROADMAP.md`
+- `NEW_CHAT_BOOTSTRAP.md`
+- `docs/TELEGRAM_DESIGN_RULES.md`
+- `docs/ARCHITECTURE.md`
+- `package.json`
+- `tsconfig.json`
+- `wrangler.jsonc`
+- `migrations/0001_initial.sql`
+- `src/index.ts`
+
+Runtime foundation currently includes:
+- `GET /health`
+- `POST /telegram/webhook`
+- optional Telegram secret-token header verification
+- `/start` and `/language` multilingual language keyboard foundation
+- Telegram user metadata upsert when D1 is bound
+- free-text question logging when D1 is bound
+- D1 tables for users, questions, Sudo Admin roles, and privileged audit events
+
+No production Telegram webhook or Cloudflare deployment should be assumed active until verified in the live services.
+
+## Validation evidence
+- GitHub repository read/write access is working on `test`.
+- Current Worker tooling versions were checked against the package registry on 2026-08-18.
+- A real local `npm install`/`npm run typecheck` could not execute in the available container because outbound DNS to `github.com` is unavailable. No TypeScript failure has been observed; validation is simply incomplete.
+- Do not merge this checkpoint to `main` until dependency/type validation or equivalent Cloudflare validation is green.
 
 ## Product contract
 Build a dignified university School of Nursing Telegram FAQ bot with:
@@ -55,11 +84,13 @@ A meaningful implementation slice is not complete until both this file and `ROAD
 - exact recommended next slice
 
 ## Current known gaps
+- Foundation dependency/type validation is still pending.
 - Canonical 22-FAQ dataset has not yet been committed to this repository.
+- Language callback handling/persistence is not yet implemented.
 - Cloudflare D1 resource and Worker deployment must be provisioned/verified.
 - Telegram bot token/webhook configuration must be supplied through secrets.
 - Gemini fallback is not yet production-enabled.
 - Owner Telegram user ID must be configured securely before privileged management is enabled.
 
 ## Recommended next slice
-Complete Foundation v0.1 repository skeleton on `test`, verify the branch contents, then provision Cloudflare D1/Worker bindings and establish the first live Telegram webhook. After webhook smoke validation, import the approved 22-FAQ multilingual dataset and enable deterministic answering.
+Validate the Worker foundation in a real Cloudflare-capable environment, provision D1 and bind it to the Worker on `test`, then connect and smoke-test the first Telegram webhook. After that, import the approved 22-FAQ multilingual dataset and implement deterministic answering. Merge to `main` only after the current validated checkpoint is green.
