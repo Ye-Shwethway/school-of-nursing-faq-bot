@@ -3,7 +3,16 @@ export type AiEnv = {
   AI_CONFIG_MASTER_KEY?: string;
 };
 
-type ProviderId = "openai" | "anthropic" | "gemini" | "openrouter" | "groq" | "mistral" | "custom";
+type ProviderId =
+  | "openai"
+  | "anthropic"
+  | "gemini"
+  | "openrouter"
+  | "groq"
+  | "mistral"
+  | "nanogpt_subscription"
+  | "nanogpt_all"
+  | "custom";
 
 type ProviderSpec = {
   id: ProviderId;
@@ -18,6 +27,8 @@ export const AI_PROVIDERS: ProviderSpec[] = [
   { id: "openrouter", label: "OpenRouter", defaultBaseUrl: "https://openrouter.ai/api/v1" },
   { id: "groq", label: "Groq", defaultBaseUrl: "https://api.groq.com/openai/v1" },
   { id: "mistral", label: "Mistral", defaultBaseUrl: "https://api.mistral.ai/v1" },
+  { id: "nanogpt_subscription", label: "NanoGPT — Subscription only", defaultBaseUrl: "https://nano-gpt.com/api" },
+  { id: "nanogpt_all", label: "NanoGPT — Subscription + Paid (all)", defaultBaseUrl: "https://nano-gpt.com/api" },
   { id: "custom", label: "Custom OpenAI-compatible", defaultBaseUrl: "" },
 ];
 
@@ -75,11 +86,16 @@ function providerSpec(id: string): ProviderSpec | null {
   return AI_PROVIDERS.find((provider) => provider.id === id) ?? null;
 }
 
+function credentialProviderId(providerId: string): string {
+  if (providerId === "nanogpt_subscription" || providerId === "nanogpt_all") return "nanogpt";
+  return providerId;
+}
+
 async function loadCredential(db: D1Database, provider: string) {
   return db.prepare(
     `SELECT provider, encrypted_key, key_iv, base_url, last_tested_at, last_test_ok
      FROM ai_provider_credentials WHERE provider = ?1`,
-  ).bind(provider).first<{
+  ).bind(credentialProviderId(provider)).first<{
     provider: string;
     encrypted_key: string;
     key_iv: string;
@@ -89,20 +105,35 @@ async function loadCredential(db: D1Database, provider: string) {
   }>();
 }
 
-async function fetchModels(provider: ProviderSpec, apiKey: string, customBaseUrl?: string | null): Promise<Array<{ id: string; name: string }>> {
-  const baseUrl = provider.id === "custom" ? normalizeBaseUrl(customBaseUrl ?? "") : provider.defaultBaseUrl;
-  if (!baseUrl) throw new Error("Custom provider base URL is not configured");
-
-  let url = `${baseUrl}/models`;
+async function fetchModels(
+  provider: ProviderSpec,
+  apiKey: string,
+  customBaseUrl?: string | null,
+): Promise<Array<{ id: string; name: string }>> {
   const headers: Record<string, string> = { accept: "application/json" };
+  let url: string;
 
-  if (provider.id === "gemini") {
-    url = `${baseUrl}/models?key=${encodeURIComponent(apiKey)}`;
-  } else if (provider.id === "anthropic") {
-    headers["x-api-key"] = apiKey;
-    headers["anthropic-version"] = "2023-06-01";
-  } else {
+  if (provider.id === "nanogpt_subscription") {
+    url = "https://nano-gpt.com/api/subscription/v1/models?detailed=true";
     headers.authorization = `Bearer ${apiKey}`;
+  } else if (provider.id === "nanogpt_all") {
+    url = "https://nano-gpt.com/api/v1/models?detailed=true";
+    headers.authorization = `Bearer ${apiKey}`;
+  } else {
+    const baseUrl = provider.id === "custom"
+      ? normalizeBaseUrl(customBaseUrl ?? "")
+      : provider.defaultBaseUrl;
+    if (!baseUrl) throw new Error("Custom provider base URL is not configured");
+
+    url = `${baseUrl}/models`;
+    if (provider.id === "gemini") {
+      url = `${baseUrl}/models?key=${encodeURIComponent(apiKey)}`;
+    } else if (provider.id === "anthropic") {
+      headers["x-api-key"] = apiKey;
+      headers["anthropic-version"] = "2023-06-01";
+    } else {
+      headers.authorization = `Bearer ${apiKey}`;
+    }
   }
 
   const response = await fetch(url, { headers });
@@ -125,7 +156,10 @@ async function fetchModels(provider: ProviderSpec, apiKey: string, customBaseUrl
 
   const models = Array.isArray(body.data) ? body.data : Array.isArray(body) ? body : [];
   return models
-    .map((model: any) => ({ id: String(model.id ?? ""), name: String(model.name ?? model.display_name ?? model.id ?? "") }))
+    .map((model: any) => ({
+      id: String(model.id ?? ""),
+      name: String(model.name ?? model.display_name ?? model.id ?? ""),
+    }))
     .filter((model: { id: string }) => model.id);
 }
 
@@ -171,7 +205,11 @@ export async function aiStatus(db: D1Database | undefined): Promise<string> {
   ].join("\n");
 }
 
-export async function startProviderSetup(db: D1Database | undefined, ownerId: number, providerId: string): Promise<{ text: string; keyboard?: unknown }> {
+export async function startProviderSetup(
+  db: D1Database | undefined,
+  ownerId: number,
+  providerId: string,
+): Promise<{ text: string; keyboard?: unknown }> {
   if (!db) return { text: "D1 is not bound." };
   const provider = providerSpec(providerId);
   if (!provider) return { text: "Unknown provider." };
@@ -183,6 +221,21 @@ export async function startProviderSetup(db: D1Database | undefined, ownerId: nu
        ON CONFLICT(telegram_user_id) DO UPDATE SET state='awaiting_ai_base_url', provider=excluded.provider, payload=NULL, updated_at=CURRENT_TIMESTAMP`,
     ).bind(ownerId, provider.id).run();
     return { text: "Send the Custom OpenAI-compatible base URL (for example https://example.com/v1)." };
+  }
+
+  if (provider.id === "nanogpt_subscription" || provider.id === "nanogpt_all") {
+    const existing = await loadCredential(db, provider.id);
+    if (existing) {
+      return {
+        text: `${provider.label}\nNanoGPT key is already saved. Reuse it or replace it by sending a new key after selecting this provider again from a fresh /ai setup if needed.`,
+        keyboard: {
+          inline_keyboard: [
+            [{ text: "Fetch models", callback_data: `ai:fetch:${provider.id}` }],
+            [{ text: "Back", callback_data: "ai:menu" }],
+          ],
+        },
+      };
+    }
   }
 
   await db.prepare(
@@ -224,6 +277,7 @@ export async function consumeAiSetupText(
     if (apiKey.length < 8) return { handled: true, secretInput: true, text: "That API key looks too short. Please try again." };
     const encrypted = await encryptSecret(env.AI_CONFIG_MASTER_KEY, apiKey);
     const baseUrl = provider.id === "custom" ? session.payload : null;
+    const credentialId = credentialProviderId(provider.id);
 
     await env.DB.prepare(
       `INSERT INTO ai_provider_credentials
@@ -237,14 +291,19 @@ export async function consumeAiSetupText(
          updated_at=CURRENT_TIMESTAMP,
          last_tested_at=NULL,
          last_test_ok=NULL`,
-    ).bind(provider.id, encrypted.encrypted, encrypted.iv, baseUrl, ownerId).run();
+    ).bind(credentialId, encrypted.encrypted, encrypted.iv, baseUrl, ownerId).run();
 
     await env.DB.prepare(`DELETE FROM admin_sessions WHERE telegram_user_id=?1`).bind(ownerId).run();
     return {
       handled: true,
       secretInput: true,
       text: `${provider.label} key encrypted and saved. Choose Fetch models to validate the key and load available models.`,
-      keyboard: { inline_keyboard: [[{ text: "Fetch models", callback_data: `ai:fetch:${provider.id}` }], [{ text: "Back", callback_data: "ai:menu" }]] },
+      keyboard: {
+        inline_keyboard: [
+          [{ text: "Fetch models", callback_data: `ai:fetch:${provider.id}` }],
+          [{ text: "Back", callback_data: "ai:menu" }],
+        ],
+      },
     };
   }
 
@@ -269,7 +328,7 @@ export async function fetchProviderModels(
     await replaceModelCache(env.DB, provider.id, models);
     await env.DB.prepare(
       `UPDATE ai_provider_credentials SET last_tested_at=CURRENT_TIMESTAMP, last_test_ok=1 WHERE provider=?1`,
-    ).bind(provider.id).run();
+    ).bind(credentialProviderId(provider.id)).run();
 
     const rows = await env.DB.prepare(
       `SELECT token, model_id, display_name FROM ai_model_cache WHERE provider=?1 ORDER BY display_name LIMIT 12`,
@@ -277,15 +336,21 @@ export async function fetchProviderModels(
 
     const keyboard = {
       inline_keyboard: [
-        ...(rows.results ?? []).map((row) => [{ text: (row.display_name ?? row.model_id).slice(0, 48), callback_data: `ai:model:${provider.id}:${row.token}` }]),
+        ...(rows.results ?? []).map((row) => [{
+          text: (row.display_name ?? row.model_id).slice(0, 48),
+          callback_data: `ai:model:${provider.id}:${row.token}`,
+        }]),
         [{ text: "Refresh", callback_data: `ai:fetch:${provider.id}` }, { text: "Back", callback_data: "ai:menu" }],
       ],
     };
-    return { text: `${provider.label} connection OK. Fetched ${models.length} model(s). Select a model to bind.`, keyboard };
+    return {
+      text: `${provider.label} connection OK. Fetched ${models.length} model(s). Select a model, then run Test Ping before binding.`,
+      keyboard,
+    };
   } catch (error) {
     await env.DB.prepare(
       `UPDATE ai_provider_credentials SET last_tested_at=CURRENT_TIMESTAMP, last_test_ok=0 WHERE provider=?1`,
-    ).bind(provider.id).run();
+    ).bind(credentialProviderId(provider.id)).run();
     return { text: `${provider.label} test failed: ${error instanceof Error ? error.message : "unknown error"}` };
   }
 }
