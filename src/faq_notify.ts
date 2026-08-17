@@ -1,4 +1,5 @@
 import { getStaffInboxChatId } from "./handoff";
+import { describeTelegramUser } from "./identity";
 import type { FaqMutationResult } from "./faq_store";
 
 export type FaqNotifierSend = (
@@ -20,7 +21,11 @@ async function adminIds(db: D1Database): Promise<number[]> {
   return (rows.results ?? []).map((row) => row.telegram_user_id);
 }
 
-export function faqChangeSummary(result: FaqMutationResult, actorId: number): string {
+export async function faqChangeSummary(
+  db: D1Database,
+  result: FaqMutationResult,
+  actorId: number,
+): Promise<string> {
   const entry = result.entry;
   return [
     "FAQ Knowledge Updated",
@@ -28,7 +33,7 @@ export function faqChangeSummary(result: FaqMutationResult, actorId: number): st
     `Key: ${entry.key}`,
     `Version: ${entry.version}`,
     `Active: ${entry.active ? "yes" : "no"}`,
-    `Changed by Telegram ID: ${actorId}`,
+    `Changed by: ${await describeTelegramUser(db, actorId)}`,
     "",
     `MY: ${entry.question.my}`,
     `EN: ${entry.question.en}`,
@@ -49,7 +54,7 @@ export async function notifyFaqChange(
   if (ownerId !== null) targets.add(ownerId);
   for (const id of await adminIds(db)) targets.add(id);
 
-  const text = faqChangeSummary(result, actorId);
+  const text = await faqChangeSummary(db, result, actorId);
   for (const target of targets) {
     try {
       await send(target, text);
