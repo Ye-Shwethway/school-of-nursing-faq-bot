@@ -13,7 +13,7 @@ Normal users see only:
 - `/start`
 - `/whoami`
 
-`/language` may remain a supported compatibility command but is intentionally hidden from the public command menu because language selection is available through the `/start` UI.
+`/language` remains a supported compatibility command but is intentionally hidden from the public command menu because language selection is available through the `/start` UI.
 
 ## `/whoami`
 Available to every user in the bot's private chat.
@@ -53,19 +53,20 @@ Public/private default:
 - `/start`
 - `/whoami`
 
-Sudo Admin private scope adds:
+Current Sudo Admin private scope adds:
 
 - `/admin`
 - `/admins`
-- `/faq`
 
-Owner private scope adds:
+Current Owner private scope adds:
 
 - `/sudo`
 - `/ai`
 - `/staff`
 
 Owner inherits Admin + public commands.
+
+Only runtime-ready commands are exposed. `/faq` will be added to the Admin/Owner registry when migration 0005 and the dynamic FAQ runtime cutover are complete; adding it to the registry will make it appear automatically without BotFather.
 
 ## Automatic synchronization
 Command definitions live in `src/command_menu.ts`.
