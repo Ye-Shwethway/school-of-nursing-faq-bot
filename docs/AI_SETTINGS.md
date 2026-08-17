@@ -13,7 +13,7 @@ AI provider credentials and model bindings are Bot Owner settings.
 - Usernames are metadata only and are never authority.
 
 ## Supported providers
-Initial provider registry:
+Provider registry:
 
 - OpenAI
 - Anthropic
@@ -21,9 +21,46 @@ Initial provider registry:
 - OpenRouter
 - Groq
 - Mistral
+- NanoGPT — Subscription only
+- NanoGPT — Subscription + Paid (all visible)
 - Custom OpenAI-compatible HTTPS endpoint
 
-Model catalogs are fetched from each provider's models API rather than hard-coding model IDs.
+Model catalogs are fetched from provider APIs rather than hard-coding model IDs.
+
+## NanoGPT catalog modes
+NanoGPT uses one saved encrypted API credential with two selectable catalog/routing modes.
+
+### Subscription only
+Telegram label:
+
+`NanoGPT — Subscription only`
+
+Model list endpoint:
+
+`GET https://nano-gpt.com/api/subscription/v1/models?detailed=true`
+
+Test Ping endpoint:
+
+`POST https://nano-gpt.com/api/subscription/v1/chat/completions`
+
+This mode is intended to remain within NanoGPT subscription-included text models.
+
+### Subscription + Paid (all)
+Telegram label:
+
+`NanoGPT — Subscription + Paid (all)`
+
+Model list endpoint:
+
+`GET https://nano-gpt.com/api/v1/models?detailed=true`
+
+Test Ping endpoint:
+
+`POST https://nano-gpt.com/api/v1/chat/completions`
+
+The canonical NanoGPT catalog respects the account's model-visibility settings. When the NanoGPT account is configured to also show paid models, this mode exposes the combined subscription + paid catalog.
+
+The two NanoGPT modes use distinct model-cache/provider IDs (`nanogpt_subscription` and `nanogpt_all`) so a bound model preserves the selected billing/catalog route, while the encrypted credential itself is shared under one `nanogpt` credential record.
 
 ## Telegram flow
 Entry command:
@@ -33,18 +70,18 @@ Entry command:
 Flow:
 
 1. Owner opens AI Agent Settings.
-2. Select provider.
-3. Send API key in the private bot chat.
+2. Select provider/catalog mode.
+3. Send API key in the private bot chat when no reusable credential exists.
 4. Worker encrypts the key before D1 storage.
 5. Bot attempts to delete the Telegram message containing the plaintext key.
 6. Owner selects **Fetch models**.
-7. A successful model-list request acts as the first connection/authentication test.
-8. Models are cached in D1 with short callback tokens.
-9. Owner selects a model.
-10. Bind as **Primary** or **Fallback**.
+7. Models are fetched and cached in D1 with short callback tokens.
+8. Owner selects a model.
+9. Owner runs **Test Ping** against that exact provider/mode/model.
+10. Only after Test Ping PASS may the Owner choose **Save as Primary** or **Save as Fallback**.
 11. `/ai` → Current binding shows the active configuration.
 
-Primary and fallback may use different providers.
+Primary and fallback may use different providers or NanoGPT modes.
 
 ## Custom provider flow
 For `Custom OpenAI-compatible`:
@@ -53,6 +90,7 @@ For `Custom OpenAI-compatible`:
 2. Send an HTTPS base URL such as `https://example.com/v1`.
 3. Send API key.
 4. The Worker calls `<base-url>/models` using Bearer authentication.
+5. Selected models are pinged through `<base-url>/chat/completions`.
 
 Only HTTPS base URLs are accepted by the current setup flow.
 
@@ -87,6 +125,7 @@ Tables:
 
 - `ai_provider_credentials`
 - `ai_model_cache`
+- `ai_model_tests`
 - `ai_model_bindings`
 - `admin_sessions`
 
@@ -94,10 +133,12 @@ Model binding key used by the FAQ agent:
 
 `faq_agent`
 
-## Current test semantics
-`Fetch models` performs a real authenticated provider request and updates `last_test_ok` / `last_tested_at`.
+## Validation semantics
+`Fetch models` validates credential/catalog access and refreshes the model cache.
 
-This is currently the connection/authentication test. A separate generation-level model ping can be added after the provider abstraction and AI fallback runtime are stabilized.
+`Test Ping` performs a minimal generation request against the exact selected model. A model cannot be saved as Primary or Fallback until that model has a successful ping record.
+
+NanoGPT ping routing follows the selected mode: subscription-only bindings use the subscription chat endpoint; all-mode bindings use the canonical chat endpoint.
 
 ## Safety
 - Never echo saved API keys back to Telegram.
