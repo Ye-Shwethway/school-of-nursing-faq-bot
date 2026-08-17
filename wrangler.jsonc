@@ -5,8 +5,29 @@
   "compatibility_date": "2026-08-18",
   "vars": {
     "APP_ENV": "production"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "school-of-nursing-faq-bot-db",
+      "database_id": "9109c1ef-3613-49f8-aee3-c62a3dbdd744",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "env": {
+    "test": {
+      "name": "school-of-nursing-faq-bot-test",
+      "vars": {
+        "APP_ENV": "test"
+      },
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "school-of-nursing-faq-bot-db",
+          "database_id": "9109c1ef-3613-49f8-aee3-c62a3dbdd744",
+          "migrations_dir": "migrations"
+        }
+      ]
+    }
   }
-  // Add D1 binding after the database is provisioned.
-  // Never commit TELEGRAM_BOT_TOKEN, TELEGRAM_WEBHOOK_SECRET,
-  // GEMINI_API_KEY, or BOT_OWNER_TELEGRAM_ID.
 }
