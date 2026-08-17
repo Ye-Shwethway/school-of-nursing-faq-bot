@@ -1,4 +1,13 @@
 import { handleAdminCommand } from "./admin";
+import {
+  aiSettingsKeyboard,
+  aiStatus,
+  bindSelectedModel,
+  chooseModel,
+  consumeAiSetupText,
+  fetchProviderModels,
+  startProviderSetup,
+} from "./ai";
 import { findFaq, type Language } from "./faq";
 
 export interface Env {
@@ -6,8 +15,8 @@ export interface Env {
   DB?: D1Database;
   TELEGRAM_BOT_TOKEN?: string;
   TELEGRAM_WEBHOOK_SECRET?: string;
-  GEMINI_API_KEY?: string;
   BOT_OWNER_TELEGRAM_ID?: string;
+  AI_CONFIG_MASTER_KEY?: string;
 }
 
 type TelegramUser = {
@@ -43,6 +52,10 @@ const json = (body: unknown, status = 200) =>
     status,
     headers: { "content-type": "application/json; charset=utf-8" },
   });
+
+function isOwner(userId: number, configuredOwnerId?: string): boolean {
+  return Boolean(configuredOwnerId && String(userId) === configuredOwnerId.trim());
+}
 
 function languageKeyboard() {
   return {
@@ -97,8 +110,15 @@ async function sendTelegramMessage(env: Env, chatId: number, text: string, reply
   });
 }
 
-async function answerCallbackQuery(env: Env, callbackQueryId: string) {
-  await telegramApi(env, "answerCallbackQuery", { callback_query_id: callbackQueryId });
+async function deleteTelegramMessage(env: Env, chatId: number, messageId: number) {
+  await telegramApi(env, "deleteMessage", { chat_id: chatId, message_id: messageId });
+}
+
+async function answerCallbackQuery(env: Env, callbackQueryId: string, text?: string) {
+  await telegramApi(env, "answerCallbackQuery", {
+    callback_query_id: callbackQueryId,
+    text,
+  });
 }
 
 async function upsertUser(db: D1Database, user: TelegramUser) {
@@ -167,30 +187,94 @@ async function logQuestion(
   ).run();
 }
 
-async function handleLanguageCallback(env: Env, callback: TelegramCallbackQuery) {
+async function handleLanguageCallback(env: Env, callback: TelegramCallbackQuery): Promise<boolean> {
   const match = callback.data?.match(/^lang:(my|en|zh)$/);
-  if (!match) return;
+  if (!match) return false;
 
   const language = match[1] as Language;
-
-  if (env.DB) {
-    await setLanguage(env.DB, callback.from, language);
-  }
-
+  if (env.DB) await setLanguage(env.DB, callback.from, language);
   await answerCallbackQuery(env, callback.id);
 
   if (callback.message) {
     await sendTelegramMessage(env, callback.message.chat.id, COPY[language].selected);
   }
+  return true;
+}
+
+async function handleAiCallback(env: Env, callback: TelegramCallbackQuery): Promise<boolean> {
+  const data = callback.data ?? "";
+  if (!data.startsWith("ai:")) return false;
+
+  if (!isOwner(callback.from.id, env.BOT_OWNER_TELEGRAM_ID)) {
+    await answerCallbackQuery(env, callback.id, "Owner only");
+    return true;
+  }
+
+  const chatId = callback.message?.chat.id;
+  if (!chatId) {
+    await answerCallbackQuery(env, callback.id);
+    return true;
+  }
+
+  await answerCallbackQuery(env, callback.id);
+
+  if (data === "ai:menu") {
+    await sendTelegramMessage(env, chatId, "AI Agent Settings\nChoose a provider or view the current binding.", aiSettingsKeyboard());
+    return true;
+  }
+
+  if (data === "ai:status") {
+    await sendTelegramMessage(env, chatId, await aiStatus(env.DB), aiSettingsKeyboard());
+    return true;
+  }
+
+  const providerMatch = data.match(/^ai:provider:([a-z0-9_-]+)$/);
+  if (providerMatch) {
+    const result = await startProviderSetup(env.DB, callback.from.id, providerMatch[1]);
+    await sendTelegramMessage(env, chatId, result.text, result.keyboard);
+    return true;
+  }
+
+  const fetchMatch = data.match(/^ai:fetch:([a-z0-9_-]+)$/);
+  if (fetchMatch) {
+    const result = await fetchProviderModels(env, callback.from.id, fetchMatch[1]);
+    await sendTelegramMessage(env, chatId, result.text, result.keyboard);
+    return true;
+  }
+
+  const modelMatch = data.match(/^ai:model:([a-z0-9_-]+):([A-Za-z0-9_-]+)$/);
+  if (modelMatch) {
+    const result = await chooseModel(env.DB, callback.from.id, modelMatch[1], modelMatch[2]);
+    await sendTelegramMessage(env, chatId, result.text, result.keyboard);
+    return true;
+  }
+
+  const bindMatch = data.match(/^ai:bind:(primary|fallback)$/);
+  if (bindMatch) {
+    const response = await bindSelectedModel(env.DB, callback.from.id, bindMatch[1] as "primary" | "fallback");
+    await sendTelegramMessage(env, chatId, response, aiSettingsKeyboard());
+    return true;
+  }
+
+  await sendTelegramMessage(env, chatId, "Unknown AI settings action.", aiSettingsKeyboard());
+  return true;
 }
 
 async function handleMessage(env: Env, message: TelegramMessage) {
   if (!message.from) return;
-
   if (env.DB) await upsertUser(env.DB, message.from);
 
   const text = message.text?.trim() ?? "";
   if (!text) return;
+
+  if (isOwner(message.from.id, env.BOT_OWNER_TELEGRAM_ID)) {
+    const setup = await consumeAiSetupText(env, message.from.id, text);
+    if (setup.handled) {
+      if (setup.secretInput) await deleteTelegramMessage(env, message.chat.id, message.message_id);
+      if (setup.text) await sendTelegramMessage(env, message.chat.id, setup.text, setup.keyboard);
+      return;
+    }
+  }
 
   if (text === "/start" || text === "/language") {
     await sendTelegramMessage(
@@ -198,6 +282,20 @@ async function handleMessage(env: Env, message: TelegramMessage) {
       message.chat.id,
       "Please choose your language.\nဘာသာစကား ရွေးချယ်ပါ။\n请选择语言。",
       languageKeyboard(),
+    );
+    return;
+  }
+
+  if (text === "/ai" || text === "/ai settings") {
+    if (!isOwner(message.from.id, env.BOT_OWNER_TELEGRAM_ID)) {
+      await sendTelegramMessage(env, message.chat.id, "This setting is available to the Bot Owner only.");
+      return;
+    }
+    await sendTelegramMessage(
+      env,
+      message.chat.id,
+      "AI Agent Settings\nChoose a provider, save a key, fetch models, test the connection, then bind primary and fallback models.",
+      aiSettingsKeyboard(),
     );
     return;
   }
@@ -215,7 +313,6 @@ async function handleMessage(env: Env, message: TelegramMessage) {
   }
 
   const language = env.DB ? await getLanguage(env.DB, message.from.id) : null;
-
   if (!language) {
     await sendTelegramMessage(
       env,
@@ -227,27 +324,20 @@ async function handleMessage(env: Env, message: TelegramMessage) {
   }
 
   const faq = findFaq(text, language);
-
   if (faq) {
-    if (env.DB) {
-      await logQuestion(env.DB, message, language, "answered", faq.key, "canonical_faq");
-    }
+    if (env.DB) await logQuestion(env.DB, message, language, "answered", faq.key, "canonical_faq");
     await sendTelegramMessage(env, message.chat.id, faq.answer[language]);
     return;
   }
 
-  if (env.DB) {
-    await logQuestion(env.DB, message, language, "pending", null, "unresolved");
-  }
+  if (env.DB) await logQuestion(env.DB, message, language, "pending", null, "unresolved");
   await sendTelegramMessage(env, message.chat.id, COPY[language].noMatch);
 }
 
 async function handleTelegramWebhook(request: Request, env: Env) {
   if (env.TELEGRAM_WEBHOOK_SECRET) {
     const supplied = request.headers.get("X-Telegram-Bot-Api-Secret-Token");
-    if (supplied !== env.TELEGRAM_WEBHOOK_SECRET) {
-      return json({ ok: false }, 401);
-    }
+    if (supplied !== env.TELEGRAM_WEBHOOK_SECRET) return json({ ok: false }, 401);
   }
 
   let update: TelegramUpdate;
@@ -258,13 +348,11 @@ async function handleTelegramWebhook(request: Request, env: Env) {
   }
 
   if (update.callback_query) {
-    await handleLanguageCallback(env, update.callback_query);
+    const handledAi = await handleAiCallback(env, update.callback_query);
+    if (!handledAi) await handleLanguageCallback(env, update.callback_query);
   }
 
-  if (update.message) {
-    await handleMessage(env, update.message);
-  }
-
+  if (update.message) await handleMessage(env, update.message);
   return json({ ok: true });
 }
 
