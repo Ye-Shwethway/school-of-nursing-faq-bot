@@ -1,4 +1,4 @@
-name: Test Typecheck
+name: Test Build
 
 on:
   push:
@@ -9,11 +9,11 @@ permissions:
   contents: read
 
 concurrency:
-  group: test-typecheck-${{ github.ref }}
+  group: test-build-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  typecheck:
+  validate:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -23,3 +23,5 @@ jobs:
           node-version: '22'
       - run: npm install --no-audit --no-fund
       - run: npm run typecheck
+      - name: Wrangler dry-run bundle
+        run: npx wrangler deploy --dry-run --env test --outdir dist
