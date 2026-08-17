@@ -25,7 +25,7 @@ Production Telegram FAQ assistant for a university School of Nursing in Burmese,
 - Public repo; secrets never committed
 
 ## Phase 0 — Foundation v0.1
-Status: IMPLEMENTED ON `test`; CLOUDFLARE RUNTIME VALIDATION IN PROGRESS
+Status: IMPLEMENTED ON `test`; CLOUDFLARE RUNTIME VALIDATION WAITING FOR UTC DATE ROLLOVER
 
 Completed on `test`:
 - Repository/project operating rules in `AGENTS.md`.
@@ -40,11 +40,10 @@ Completed on `test`:
 - `/start` and `/language` multilingual language-selection keyboard foundation.
 - Telegram user metadata upsert and free-text question logging when D1 is bound.
 - Runtime secret placeholders only; no secrets committed.
-- Current tooling versions aligned with the package registry on 2026-08-18.
 - Cloudflare D1 database provisioned: `school-of-nursing-faq-bot-db`.
 - D1 database ID recorded in `wrangler.jsonc`: `9109c1ef-3613-49f8-aee3-c62a3dbdd744`.
 - D1 migration applied and verified in Cloudflare: 4 tables + 2 indexes.
-- `wrangler.jsonc` now includes `DB` binding and a separate `test` environment targeting Worker `school-of-nursing-faq-bot-test`.
+- `wrangler.jsonc` includes `DB` binding and a separate `test` environment targeting Worker `school-of-nursing-faq-bot-test`.
 - Direct-API deployment artifact `deploy/worker.mjs` added and syntax-validated locally with Node.
 - Verified Cloudflare infrastructure handoff recorded in `docs/CLOUDFLARE_HANDOFF.md`.
 
@@ -53,7 +52,9 @@ Validation state:
 - Local dependency install/typecheck could not run in the available execution container because outbound DNS to `github.com` is unavailable. This is an environment limitation, not a reported TypeScript failure.
 - `deploy/worker.mjs` passed `node --check` locally.
 - Cloudflare D1 schema is live and verified.
-- Test Worker deployment and `/health` runtime validation remain pending.
+- First test Worker upload was attempted and safely rejected by Cloudflare with error `10021: Can't set compatibility date in the future: 2026-08-18` because Cloudflare's API clock was still on UTC 2026-08-17.
+- The failed upload did not create either the test Worker or production Worker, did not create bindings/secrets, and did not alter D1 schema.
+- No code/config change is required. Retry the exact same upload after Cloudflare UTC date reaches 2026-08-18.
 - Do not merge Foundation v0.1 to `main` until the test Worker is deployed and runtime validation is green.
 
 ## Phase 1 — Telegram MVP
@@ -110,4 +111,4 @@ Status: PLANNED
 The source FAQ document contains 22 core questions. Canonical Burmese facts are the source of truth; English and Simplified Chinese translations must preserve meaning. Do not invent or silently alter dates, costs, accreditation, eligibility, application, scholarship/loan/bond, or policy facts.
 
 ## Next recommended slice
-Deploy the exact `deploy/worker.mjs` artifact from `test` to Cloudflare Worker `school-of-nursing-faq-bot-test`, attach D1 binding `DB`, set `APP_ENV=test`, and verify `GET /health`. If green, return Cloudflare runtime evidence to the GitHub session, update continuity docs, then proceed to Telegram secret/webhook setup without merging to `main` prematurely.
+After Cloudflare UTC reaches 2026-08-18, retry the exact existing `deploy/worker.mjs` upload to `school-of-nursing-faq-bot-test` with compatibility date `2026-08-18`, `APP_ENV=test`, and `DB` → `9109c1ef-3613-49f8-aee3-c62a3dbdd744`. Then run `/health`, 404-route, malformed-webhook, binding/settings, and D1-integrity validation. Return verified runtime evidence to the GitHub session before any Telegram secret/webhook work or merge to `main`.
