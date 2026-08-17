@@ -1,0 +1,12 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "school-of-nursing-faq-bot",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-18",
+  "vars": {
+    "APP_ENV": "production"
+  }
+  // Add D1 binding after the database is provisioned.
+  // Never commit TELEGRAM_BOT_TOKEN, TELEGRAM_WEBHOOK_SECRET,
+  // GEMINI_API_KEY, or BOT_OWNER_TELEGRAM_ID.
+}
