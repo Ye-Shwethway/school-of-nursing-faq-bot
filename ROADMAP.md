@@ -18,7 +18,7 @@ Production Telegram FAQ assistant for a university School of Nursing in Burmese,
 - configurable multi-provider grounded AI fallback
 - primary + fallback model binding
 - strict AI output decision: `answer` or `handoff`
-- private Staff Inbox supergroup for unresolved cases
+- human handoff supports private Staff Inbox group and dedicated private staff responder
 - atomic single-staff claim before reply
 - anonymous staff relay to users
 - Bot Owner / Sudo Admin / Staff authority separated by immutable Telegram user ID
@@ -118,7 +118,7 @@ Pending:
 - fallback-to-human semantics when both models fail or cannot ground an answer
 
 ## Phase 4 — Human Staff Handoff
-Status: CORE IMPLEMENTED ON `test`; LIVE STAFF-INBOX VALIDATION PENDING
+Status: GROUP + DEDICATED ROUTING CORE IMPLEMENTED ON `test`; LIVE VALIDATION PENDING
 
 Implemented:
 - migration `0003_handoff_persona.sql`
@@ -126,21 +126,34 @@ Implemented:
 - `staff_members`
 - `escalation_cases`
 - `escalation_messages`
-- Owner-only staff inbox binding command: `/staff inbox here`
-- Owner-only staff add/remove commands
-- unresolved case creation and Staff Inbox notification
-- `Claim` button
+- Owner-selectable handoff route:
+  - `auto` — group first, dedicated staff fallback
+  - `group` — Staff Inbox only
+  - `dedicated` — assigned staff private chat only
+- `/staff status`
+- `/staff route auto|group|dedicated`
+- `/staff inbox here`
+- `/staff dedicated <telegram_user_id>`
+- `/staff add <telegram_user_id>`
+- `/staff remove <telegram_user_id>`
+- dedicated staff private-delivery probe before assignment is saved
+- unresolved case creation and routing
+- `Take Over` button
 - atomic claim: only first authorized staff member can own a case
 - claimant-only replies
 - anonymous relay to user as `School of Nursing Staff`
 - `Resolve` action
 - user/staff relay audit rows
-- Male/Female persona stored in `bot_settings`
+- undelivered cases remain queued in D1 and trigger a best-effort Owner warning
 
-Recommended Telegram topology:
-- private Staff Inbox **supergroup**, not a broadcast channel
-- if an organizational channel is required, use a linked private discussion group for the actual claim/reply workflow
-- bot should be added with enough group permissions to receive replies and use inline callbacks
+Dedicated staff requirement:
+- Telegram bot must already be able to reach the staff member privately
+- staff must open the bot and send `/start` before Owner assignment if the bot has never had a private chat with them
+
+Recommended multi-staff topology:
+- private Staff Inbox supergroup
+- if no group is used, dedicated staff routing is a full second workflow
+- `auto` is the recommended default
 
 Concurrency rule:
 - D1 `UPDATE ... WHERE status='open' AND claimed_by IS NULL`
@@ -149,16 +162,16 @@ Concurrency rule:
 - non-claimants cannot reply while the case is claimed
 
 Current temporary behavior:
-- until the grounded AI runtime is wired, deterministic no-match creates a human escalation directly
+- until grounded AI runtime is wired, deterministic no-match creates a human escalation directly
 - after AI inference is wired, case creation moves behind `AgentDecision.action === 'handoff'`
 
 Pending:
 - apply migration 0003 live
-- create private Staff Inbox supergroup manually in Telegram and add bot
-- bind it using `/staff inbox here`
-- add authorized staff IDs
-- live multi-staff claim race test
-- live anonymous reply/resolve test
+- live Staff Inbox route test
+- live dedicated-staff private route test
+- multi-staff atomic claim race test
+- anonymous reply/resolve test
+- monitoring mode implementation: silent conversation mirror + alert escalation + Take Over/Return to AI
 - optional claim release/Owner override
 
 ## Phase 5 — Production deployment
@@ -175,14 +188,16 @@ Status: PLANNED
 ## Phase 6 — Operations
 Status: PLANNED
 
+- silent shadow monitoring / alert modes
 - unresolved-case review tooling
 - user lookup/follow-up
 - FAQ update workflow
 - retention/privacy policy
+- stale-case reminders/reassignment if later needed
 - right-sized observability
 
 ## Canonical content rule
 Burmese FAQ facts remain authoritative. EN/ZH preserve meaning. Policy-sensitive facts must never be invented or silently altered by AI.
 
 ## Next recommended slice
-Validate/build the combined current source, apply migrations 0002 and 0003 in Cloudflare, deploy the current `test` Worker, then validate health, FAQ flow, Owner/Sudo controls, AI settings/persona, Staff Inbox binding, atomic claim, and anonymous staff reply. After that, wire the grounded Primary/Fallback AI inference path using `src/agent_policy.ts` before any production merge.
+Validate/build the combined current source, apply migrations 0002 and 0003 in Cloudflare, deploy the current `test` Worker, then validate health, FAQ flow, Owner/Sudo controls, AI settings/persona, both human handoff routes, atomic claim, and anonymous staff reply. Then wire grounded Primary/Fallback AI inference plus silent shadow monitoring/alert escalation before any production merge.
