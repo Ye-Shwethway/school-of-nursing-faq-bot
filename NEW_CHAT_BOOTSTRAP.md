@@ -21,53 +21,99 @@ Treat live repository plus verified Cloudflare/Telegram evidence as authoritativ
 - production Worker after validated merge: `school-of-nursing-faq-bot`
 
 ## Current checkpoint
-Foundation, Telegram FAQ MVP core, Owner/Sudo core, Telegram-managed AI provider settings, strict AI policy, Owner-selectable AI persona, dual human-handoff routing, and shadow monitoring / conversation takeover core are implemented on `test`.
+The `test` branch contains:
+- Foundation + multilingual FAQ MVP core
+- Owner/Sudo authorization
+- `/whoami` identity flow
+- role-scoped self-managed Telegram command menus
+- AI provider settings + model fetch/Test Ping/Primary/Fallback binding
+- NanoGPT subscription/all dual paths
+- strict AI policy + AI fail-safe contract
+- Male/Female AI persona
+- group + dedicated human handoff
+- silent shadow monitoring + conversation Take Over/Return to AI
+- D1 dynamic FAQ store + CRUD/revision/notification core
 
-Cloudflare live state still has only migration 0001. Migrations 0002, 0003, and 0004 are repository-only and not yet applied live. Test Worker has not yet been successfully deployed.
+Cloudflare live D1 still has only migration 0001. Migrations 0002–0005 are repository-only and not yet applied live. Test Worker has not yet been successfully deployed.
 
-## Current source surface
-- `src/index.ts`
-- `src/faq.ts`
-- `src/admin.ts`
-- `src/ai.ts`
-- `src/ai_ping.ts`
-- `src/agent_policy.ts`
-- `src/persona.ts`
-- `src/handoff.ts`
-- `src/monitoring.ts`
-- `migrations/0001_initial.sql`
-- `migrations/0002_ai_settings.sql`
-- `migrations/0003_handoff_persona.sql`
-- `migrations/0004_shadow_monitoring.sql`
-- `docs/FAQ_CONTENT_POLICY.md`
-- `docs/AI_SETTINGS.md`
-- `docs/AI_AGENT_POLICY.md`
-- `docs/HUMAN_HANDOFF.md`
-- `docs/SHADOW_MONITORING.md`
-- `docs/TELEGRAM_DESIGN_RULES.md`
-- `docs/CLOUDFLARE_HANDOFF.md`
+## Runtime entrypoint
+`wrangler.jsonc` now points to:
 
-`deploy/worker.mjs` is stale Foundation-only code. Do not deploy it as the current application build.
+`src/entry.ts`
 
-## FAQ core
-- 22 FAQ records
-- Burmese source facts authoritative
-- English + Simplified Chinese translation layers
-- deterministic matching before AI
-- `/start`, `/language`
-- D1 language persistence
-- canonical answer logging
-- unresolved logging
+`src/entry.ts` wraps `src/index.ts` to provide:
+- automatic Telegram command-registry synchronization
+- `/whoami`
+- command-scope self-healing on `/start` and `/whoami`
+- immediate target-scope refresh after Sudo grant/revoke
 
-Canonical source: `SCHOOL of Nursing FAQ.docx`.
+The old `deploy/worker.mjs` is stale Foundation-only code. Do not deploy it as the current application build.
 
-## Owner / Sudo core
-- Owner identity: immutable numeric ID from `BOT_OWNER_TELEGRAM_ID`
-- `/admin`, `/admin status`, `/admin help`, `/admins`
-- Owner-only `/sudo grant <id>` and `/sudo revoke <id>`
-- privileged mutations audited
+## Public UX + commands
+`/start` is public-only UI. Do not mix Owner/Admin controls into it.
 
-## AI settings
+Normal users see only:
+- `/start`
+- `/whoami`
+
+`/language` remains functional but hidden from the command menu; language selection is available through `/start`.
+
+`/whoami` private response uses:
+`Name (@username) — ID: <numeric Telegram ID>`
+
+The immutable numeric ID is the authority key. Usernames are metadata only.
+
+Current Sudo Admin command menu adds:
+- `/admin`
+- `/admins`
+
+Current Owner menu additionally adds:
+- `/sudo`
+- `/ai`
+- `/staff`
+
+Command definitions: `src/command_menu.ts`.
+Automatic sync: `src/command_sync.ts`.
+Identity formatting: `src/identity.ts`.
+Docs: `docs/COMMANDS_AND_IDENTITY.md`.
+
+The command fingerprint is derived from the registry arrays. Adding a runtime-ready command to the registry changes the fingerprint automatically; the first webhook after deployment calls Telegram `setMyCommands` for public, Owner, and current Sudo Admin private scopes. No BotFather command update is required.
+
+Command visibility is UX only; server-side role checks remain authoritative.
+
+## Admin identity rule
+Management UI must show name/username + immutable ID together whenever metadata exists.
+
+Current `/admins`, Sudo grant, and Sudo revoke output follow this rule through `src/identity.ts`.
+
+## FAQ current source + dynamic cutover
+Original canonical source: `SCHOOL of Nursing FAQ.docx`, 22 FAQs.
+
+Current live-code matcher still uses hard-coded `src/faq.ts` because migration 0005 has not been applied.
+
+Dynamic FAQ core already exists:
+- `src/faq_store.ts`
+- `src/faq_admin.ts`
+- `src/faq_notify.ts`
+- `migrations/0005_dynamic_faq.sql`
+- `docs/FAQ_MANAGEMENT.md`
+
+Target D1 behavior:
+- Owner + Sudo Admin CRUD from Telegram
+- add/edit/disable/restore
+- soft delete via inactive state
+- revision snapshots for every mutation
+- mutation notification to Owner + all Sudo Admins + Staff Inbox group when configured
+- active D1 FAQ rows become the shared source for deterministic matching and AI approved context
+
+Safety boundary:
+- `/faq` is intentionally NOT exposed in the command registry yet
+- first seed/verify the existing 22 FAQs in migration-0005 storage
+- switch deterministic matcher + AI context to D1
+- wire FAQ callbacks/text sessions/notifications into runtime
+- only then add `/faq` to the Admin/Owner command registry; it will appear automatically via fingerprint sync
+
+## AI provider settings
 Owner-only `/ai`.
 
 Providers/modes:
@@ -84,151 +130,102 @@ Providers/modes:
 Flow:
 provider → encrypted key → fetch models → select model → Test Ping → bind Primary/Fallback.
 
-Primary and fallback may use different providers.
-
-NanoGPT uses one shared encrypted credential but separate route IDs:
-- `nanogpt_subscription`
-- `nanogpt_all`
-
-Required Cloudflare secret:
+Required secret:
 `AI_CONFIG_MASTER_KEY` = base64 encoding of exactly 32 random bytes.
 
-## AI policy
-Runtime policy: `src/agent_policy.ts`.
+## AI policy + fail-safe
+Policy: `src/agent_policy.ts` / `docs/AI_AGENT_POLICY.md`.
+Fail-safe: `src/ai_fail_safe.ts` / `docs/AI_FAIL_SAFE.md`.
 
-Structured decision:
+Strict runtime order:
+`deterministic FAQ → AI readiness → Primary → Fallback → Human Handoff`.
 
-```json
-{
-  "action": "answer" | "handoff",
-  "answer": "user-facing response",
-  "reason": "short internal reason"
-}
-```
+AI unavailable/failing is a handoff condition, never a crash condition. Missing key/model/binding, decrypt failure, network/provider failure, timeout, 429/5xx, malformed structured output, or both model failures must route safely to humans.
 
-Rules:
-- School of Nursing scope only
-- approved context is the only authority for school-specific facts
-- never invent/estimate/infer missing policy facts
-- missing, ambiguous, conflicting, exception-specific, or current-status facts → handoff
-- malformed model output is unsafe
-- never fabricate a human staff response
+AI may answer only from approved School of Nursing context. Missing/ambiguous/current-case-specific facts must hand off.
 
-Grounded inference orchestration is not yet wired. Until it is, deterministic no-match escalates directly to humans.
+Grounded inference orchestration is not yet wired; deterministic no-match currently goes directly to humans.
 
 ## AI persona
-Owner can choose Male/Female persona from `/ai` inline buttons.
+Owner can select Male/Female persona from `/ai` inline buttons.
+Persona changes presentation only; never facts, authority, grounding, or handoff threshold.
 
-Stored in `bot_settings.agent_persona`.
-Persona changes presentation only, never facts, policy, authority, or handoff threshold.
+## Human handoff
+Routing modes:
+- `auto`: Staff Inbox group first, dedicated staff fallback
+- `group`: Staff Inbox only
+- `dedicated`: assigned private responder only
 
-## Human handoff routes
-Owner commands:
+Owner commands include:
 - `/staff status`
 - `/staff route auto|group|dedicated`
 - `/staff inbox here`
 - `/staff dedicated <telegram_user_id>`
 - `/staff add <telegram_user_id>`
 - `/staff remove <telegram_user_id>`
+- `/staff monitoring ...`
 
-Routing:
-- `auto`: Staff Inbox group first, dedicated staff fallback
-- `group`: Staff Inbox only
-- `dedicated`: assigned private responder only
-
-Dedicated assignment is saved only after a successful private Telegram delivery probe. The staff member must previously open the bot / send `/start` if no private bot chat exists yet.
-
-Critical cases remain queued in D1 when no destination accepts delivery; the Worker attempts a private Owner warning.
+Dedicated assignment requires a successful private delivery probe.
+Cases use atomic single-responder claim, anonymous user relay, and D1 queue preservation if notification delivery fails.
 
 ## Shadow monitoring / takeover
-Implemented from migration `0004_shadow_monitoring.sql` and `src/monitoring.ts`.
-
-Recommended default: `all_alerts`.
-
-Owner controls:
-- `/staff monitoring`
-- `/staff monitoring all_alerts`
-- `/staff monitoring silent_all`
-- `/staff monitoring alerts_only`
-- `/staff monitoring off`
-- inline monitoring-mode buttons
+Migration 0004 + `src/monitoring.ts`.
 
 Modes:
-- `all_alerts`: mirror routine conversation traffic silently; handoff/risk remains normal alert
-- `silent_all`: mirror routine traffic silently
-- `alerts_only`: no routine mirror; critical handoff remains active
-- `off`: no routine monitoring; critical handoff remains active
+- `all_alerts` recommended default
+- `silent_all`
+- `alerts_only`
+- `off`
 
-Staff Inbox monitoring:
-- Worker attempts `createForumTopic` once per Telegram user
-- `monitoring_topics` persists user → Staff Inbox → `message_thread_id`
-- if topic creation is unavailable, mirror delivery falls back to Staff Inbox main chat
-- routine mirror messages use Telegram `disable_notification=true`
-- user messages and deterministic FAQ responses are currently mirrored
-- later grounded AI responses must use the same mirror path
+Routine user/bot traffic can mirror silently to a Staff Inbox forum topic per user. Critical handoff remains enabled in every monitoring mode.
 
-Conversation control:
-- `conversation_control.mode` = `ai | human`
-- mirror messages expose `Take Over`
-- first authorized staff member to atomically move `ai → human` wins
-- once human mode is active, automated FAQ/AI replies for that user stop
-- claimant can answer from the Staff Inbox topic and bot relays as `School of Nursing Staff`
-- claimant identity remains hidden from the user
-- `Return to AI` restores automated handling
-- current claimant or Owner may perform Return to AI
-- case-level Take Over also sets conversation human mode
-- resolving the current handoff case returns the conversation to AI
-
-Important precedence contract:
-- active human-control traffic outranks monitoring notification preference
-- turning routine monitoring off must never cause an already human-controlled user's follow-up to disappear from the claimant workflow
-- critical human handoff is independent of shadow-monitoring mode
+`Take Over` atomically moves a conversation from AI mode to human mode; automated replies stop. Claimant replies anonymously. Claimant or Owner can `Return to AI`.
 
 Docs: `docs/SHADOW_MONITORING.md`.
 
 ## D1 migrations
-Live:
-- `0001_initial.sql` — verified in Cloudflare
+Live in Cloudflare:
+- `0001_initial.sql` — verified
 
 Repository-only / not yet live:
 - `0002_ai_settings.sql`
 - `0003_handoff_persona.sql`
 - `0004_shadow_monitoring.sql`
+- `0005_dynamic_faq.sql`
 
-## Verified Cloudflare state
+## Verified Cloudflare checkpoint
 - Account ID: `abd28e59860f09dab81b7e09de467f38`
 - D1: `school-of-nursing-faq-bot-db`
 - D1 ID: `9109c1ef-3613-49f8-aee3-c62a3dbdd744`
 - Region: APAC
-- binding name: `DB`
+- binding: `DB`
 - workers.dev subdomain: `ye-shwethway13`
 - no production Worker
 - no test Worker yet
 
-First Worker upload was rejected before creation with:
+First upload failed before creation with:
 `10021: Can't set compatibility date in the future: 2026-08-18`
 
-No infrastructure drift occurred. Keep compatibility-date changes UTC-safe.
+No infrastructure drift occurred.
 
 ## Validation state
 Pending:
-- build/type validation of current combined source
+- current build/type validation
 - regenerate current deployable Worker artifact
-- apply migrations 0002 + 0003 + 0004 live
+- prepare/verify migration-0005 seed data from the 22 canonical FAQs
+- apply migrations 0002–0005 live in order
+- dynamic FAQ runtime cutover + `/faq` runtime wiring
 - deploy test Worker
-- configure Telegram test secrets and Owner ID
+- configure Telegram test secrets + Owner ID
+- live command-scope and `/whoami` tests
+- live name+ID admin list tests
 - live FAQ/language tests
-- live Owner/Sudo tests
-- live AI provider fetch/ping/binding/persona tests
-- live group and dedicated handoff route tests
-- forum-topic creation/fallback test
-- `disable_notification` shadow mirror test
-- multi-staff atomic Take Over test
-- claimant-only anonymous topic reply test
-- Return to AI test
+- live AI provider/persona/fail-safe tests
+- live group/dedicated handoff tests
+- live shadow monitoring / Take Over / Return to AI tests
 - grounded Primary/Fallback inference orchestration
 
 Do not merge to `main` yet.
 
 ## Next recommended slice
-Validate/build the current combined Worker source, then return to Cloudflare MCP: apply migrations 0002–0004, deploy `school-of-nursing-faq-bot-test`, configure minimum test secrets, and validate FAQ + admin + AI settings/persona + handoff + monitoring/takeover runtime. Once those primitives are green, wire grounded Primary/Fallback AI inference through `src/agent_policy.ts` before production merge.
+Complete the dynamic FAQ cutover first: seed the 22 approved FAQs into migration-0005 D1 format, wire `src/faq_admin.ts` callbacks/text sessions + `src/faq_notify.ts`, switch deterministic lookup and AI approved context to active D1 FAQs with safe migration behavior, then expose `/faq` through the command registry. After that, build/type validate and move to Cloudflare test deployment.
