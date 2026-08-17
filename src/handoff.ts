@@ -1,3 +1,5 @@
+import { describeTelegramUser } from "./identity";
+
 export type HandoffEnv = {
   DB?: D1Database;
 };
@@ -36,7 +38,7 @@ export async function setStaffInbox(
   if (!db) return "D1 is not bound.";
   await setBotSetting(db, "staff_inbox_chat_id", String(chatId), ownerId);
   await addStaffMember(db, ownerId, ownerId);
-  return `Staff Inbox bound to chat ${chatId}. Owner enabled as staff.`;
+  return `Staff Inbox bound to chat ${chatId}. Owner enabled as staff: ${await describeTelegramUser(db, ownerId)}`;
 }
 
 export async function getStaffInboxChatId(db?: D1Database): Promise<number | null> {
@@ -69,7 +71,7 @@ export async function setDedicatedStaff(
   if (!db) return "D1 is not bound.";
   await addStaffMember(db, ownerId, staffId);
   await setBotSetting(db, "dedicated_staff_id", String(staffId), ownerId);
-  return `Dedicated staff assigned: ${staffId}`;
+  return `Dedicated staff assigned: ${await describeTelegramUser(db, staffId)}`;
 }
 
 export async function getDedicatedStaffId(db?: D1Database): Promise<number | null> {
@@ -89,10 +91,20 @@ export async function getHandoffDestination(
 
   if (mode === "group") return groupChatId ? { route: "group", chatId: groupChatId } : null;
   if (mode === "dedicated") return dedicatedStaffId ? { route: "dedicated", chatId: dedicatedStaffId } : null;
-
   if (groupChatId) return { route: "group", chatId: groupChatId };
   if (dedicatedStaffId) return { route: "dedicated", chatId: dedicatedStaffId };
   return null;
+}
+
+export async function listStaffMembers(db: D1Database | undefined): Promise<string> {
+  if (!db) return "D1 is not bound.";
+  const rows = await db.prepare(
+    `SELECT telegram_user_id FROM staff_members WHERE active=1 ORDER BY added_at ASC`,
+  ).all<{ telegram_user_id: number }>();
+  if (!(rows.results ?? []).length) return "Active staff: none";
+  const lines = ["Active staff:"];
+  for (const row of rows.results ?? []) lines.push(`- ${await describeTelegramUser(db, row.telegram_user_id)}`);
+  return lines.join("\n");
 }
 
 export async function handoffStatus(db?: D1Database): Promise<string> {
@@ -103,8 +115,10 @@ export async function handoffStatus(db?: D1Database): Promise<string> {
   return [
     "Human Handoff Settings",
     `Route: ${route}`,
-    `Staff Inbox: ${group ?? "not configured"}`,
-    `Dedicated staff: ${dedicated ?? "not configured"}`,
+    `Staff Inbox chat ID: ${group ?? "not configured"}`,
+    `Dedicated staff: ${dedicated ? await describeTelegramUser(db, dedicated) : "not configured"}`,
+    "",
+    await listStaffMembers(db),
   ].join("\n");
 }
 
@@ -119,7 +133,7 @@ export async function addStaffMember(
      VALUES (?1, 1, ?2, CURRENT_TIMESTAMP)
      ON CONFLICT(telegram_user_id) DO UPDATE SET active=1, added_by=excluded.added_by, added_at=CURRENT_TIMESTAMP`,
   ).bind(staffId, actorId).run();
-  return `Staff member enabled: ${staffId}`;
+  return `Staff member enabled: ${await describeTelegramUser(db, staffId)}`;
 }
 
 export async function removeStaffMember(
@@ -127,8 +141,9 @@ export async function removeStaffMember(
   staffId: number,
 ): Promise<string> {
   if (!db) return "D1 is not bound.";
+  const label = await describeTelegramUser(db, staffId);
   await db.prepare(`UPDATE staff_members SET active=0 WHERE telegram_user_id=?1`).bind(staffId).run();
-  return `Staff member disabled: ${staffId}`;
+  return `Staff member disabled: ${label}`;
 }
 
 export async function isStaffMember(db: D1Database | undefined, userId: number): Promise<boolean> {
@@ -196,14 +211,19 @@ export async function claimCase(
      WHERE id=?2 AND status='open' AND claimed_by IS NULL`,
   ).bind(staffId, caseId).run();
 
-  if ((result.meta.changes ?? 0) === 1) return { ok: true, message: `Case #${caseId} claimed.` };
+  if ((result.meta.changes ?? 0) === 1) return { ok: true, message: `Case #${caseId} claimed by ${await describeTelegramUser(db, staffId)}` };
 
   const current = await db.prepare(
     `SELECT status, claimed_by FROM escalation_cases WHERE id=?1`,
   ).bind(caseId).first<{ status: string; claimed_by: number | null }>();
   if (!current) return { ok: false, message: `Case #${caseId} not found.` };
   if (current.claimed_by === staffId) return { ok: true, message: `You already own Case #${caseId}.` };
-  return { ok: false, message: `Case #${caseId} is already claimed.` };
+  return {
+    ok: false,
+    message: current.claimed_by
+      ? `Case #${caseId} is already claimed by ${await describeTelegramUser(db, current.claimed_by)}`
+      : `Case #${caseId} is already claimed.`,
+  };
 }
 
 export async function resolveCase(
@@ -218,7 +238,7 @@ export async function resolveCase(
      WHERE id=?1 AND status='claimed' AND claimed_by=?2`,
   ).bind(caseId, staffId).run();
   return (result.meta.changes ?? 0) === 1
-    ? { ok: true, message: `Case #${caseId} resolved.` }
+    ? { ok: true, message: `Case #${caseId} resolved by ${await describeTelegramUser(db, staffId)}` }
     : { ok: false, message: `Only the current claimant can resolve Case #${caseId}.` };
 }
 
