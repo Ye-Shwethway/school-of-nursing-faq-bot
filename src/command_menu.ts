@@ -14,7 +14,6 @@ const ADMIN_COMMANDS: BotCommand[] = [
   ...PUBLIC_COMMANDS,
   { command: "admin", description: "Open administrator tools" },
   { command: "admins", description: "List authorized administrators" },
-  { command: "faq", description: "Manage FAQ knowledge" },
 ];
 
 const OWNER_COMMANDS: BotCommand[] = [
