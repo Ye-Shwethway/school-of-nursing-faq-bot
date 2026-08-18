@@ -1,4 +1,5 @@
 # Main-only production pipeline. Touching this file intentionally triggers a production validation/deploy run.
+# Manual production rerun: Telegram bot token rotated in Cloudflare on 2026-08-18.
 # Spam-protection checkpoint: Owner registry now contains 19 commands.
 name: Deploy PRODUCTION to Cloudflare
 
