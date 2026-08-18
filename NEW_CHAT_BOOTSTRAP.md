@@ -14,7 +14,7 @@ Historical branch: `test` (dormant/reference-only)
 Live repository plus verified Cloudflare/Telegram evidence outranks remembered chat context.
 
 ## Current checkpoint
-The project is main-only and production-live. Owner private-chat `/cases` has already been live-accepted. The newest source slice on `main` adds **normal-user spam protection, progressive cooldowns, `/limits` Owner/Sudo controls, direct test-user lookup, temporary exemptions/restrictions, blocked-warning throttling, and Owner-only permanent ban/unban**. Do not call this latest slice production-green until the single production workflow is verified.
+The project is main-only and production-live. Owner private-chat `/cases` has already been live-accepted. The newest source slice on `main` adds **two-layer spam protection: free-text inquiry rate limiting plus a private Interaction Flood Guard for command/button/message floods**, with `/limits` Owner/Sudo controls, direct test-user lookup, temporary exemptions/restrictions, throttled warnings, and Owner-only permanent ban/unban. Do not call this latest slice production-green until the single production workflow is verified.
 
 ## Current product surfaces
 - multilingual deterministic/dynamic FAQ
@@ -28,11 +28,15 @@ The project is main-only and production-live. Owner private-chat `/cases` has al
 - confirmed permanent case deletion for typo/test/junk cases
 - Staff Inbox per-user topics, Take Over/Resolve/Return-to-AI, notifications/presence/reply relay
 - `/limits` Owner/Sudo user-limit management
+- private command/callback/message flood protection
 - Owner-only permanent ban/unban
 - editable Owner/Admin manuals covering current operations
 
 ## Spam protection contract
-Applies only to **normal-user private free-text inquiries** before FAQ/AI/handoff processing.
+Two independent gates are active for normal private users.
+
+### Inquiry rate gate
+Applies to private free-text inquiries before FAQ/AI/handoff processing.
 
 Default window:
 - 10 free-text inquiries / 10 minutes
@@ -40,16 +44,31 @@ Default window:
 - repeat limit hits within 24h: 30 minutes → 2 hours → 12 hours
 - never auto-permanently-ban
 
-When blocked:
-- do not run deterministic/AI/handoff processing for the rejected text
+When inquiry-blocked:
+- do not run deterministic/AI/handoff processing for rejected text
 - do not call AI
 - do not create a new escalation case
 - keep previously accepted/logged questions
 - return neutral localized system copy with approximate wait time and `/faq`
-- throttle repeated blocked warnings to **at most one per 5 minutes**
-- keep `/faq`, `/language`, `/start`, and other safe commands available
+- throttle repeated blocked warnings to at most one per 5 minutes
+- keep `/faq`, `/language`, `/start`, `/whoami`, and other safe commands available
 
-Owner/Sudo accounts bypass the normal-user rate window.
+Owner/Sudo accounts bypass the normal-user inquiry window.
+
+### Interaction Flood Guard
+Runs before lower private command/callback/free-text handling.
+
+Policy:
+- count private commands + inline-button callbacks + messages
+- normal users: 20 interactions / 60 seconds
+- active cooldown/restriction/permanent-ban users: 6 interactions / 60 seconds
+- threshold breach → 5-minute UI flood block
+- first blocked interaction may show one localized warning
+- additional blocked interactions are silently dropped; warning repeats at most once per 5 minutes
+- Owner/Sudo bypass this flood guard
+- `Exempt 1h` does not bypass flood protection
+
+This keeps safe commands available without leaving `/faq` or callback navigation open to unlimited command/button spam.
 
 ## `/limits` contract
 Owner/Sudo only; allowed in private bot chat or configured active Staff Inbox group.
@@ -59,16 +78,16 @@ Entry points:
 - `/limits <telegram_user_id>` — direct lookup, including a normal test account that has not hit a limit yet
 
 Owner + Sudo controls:
-- `🔓 Unlock Now`
-- `🧪 Exempt 1h` — intended for temporary QA/testing bypass
-- `⏳ Restrict 2h`
-- `Reset Strikes`
+- `🔓 Unlock Now` — clears cooldown/temporary restriction and resets the immediate inquiry window; it does not grant Exempt
+- `🧪 Exempt 1h` — temporary QA/trusted bypass of the free-text inquiry limiter only; Interaction Flood Guard remains active
+- `⏳ Restrict 2h` — blocks free-text inquiries for 2 hours and removes any active Exempt; safe commands remain under the tighter flood threshold
+- `Reset Strikes` — clears progressive strike/window history; it is not an exemption
 
 Owner-only controls:
 - `🚫 Permanently Ban` — requires confirmation
 - `✅ Unban User`
 
-Permanent ban blocks normal free-text inquiries before FAQ/AI/escalation but keeps `/faq` and safe commands available. Unban clears ban plus immediate cooldown/window state. All overrides and ban/unban operations write to `admin_audit`.
+Permanent ban blocks normal free-text inquiries before FAQ/AI/escalation but keeps `/faq` and safe commands available under the tighter flood threshold. Unban clears ban plus immediate cooldown/window state. Admin overrides and ban/unban operations write to `admin_audit`.
 
 ## Escalation Inbox contract
 `/cases` is Owner/Sudo only in private bot chat or active Staff Inbox. Lists are newest-first, 6/page.
@@ -94,24 +113,28 @@ Sudo total: **12**.
 Production exact Owner target: **19 commands**.
 
 ## Migrations / manuals
-Current migration range: `0001` through `0022`.
+Current migration range: `0001` through `0025`.
 
 Latest relevant migrations:
 - `0019_user_rate_limits.sql`
 - `0020_manual_spam_protection.sql`
 - `0021_rate_limit_notice_throttle.sql`
 - `0022_manual_limits_refinement.sql`
+- `0023_interaction_flood_guard.sql`
+- `0024_interaction_flood_guard_no_fk.sql`
+- `0025_manual_interaction_flood_guard.sql`
 
-Owner/Admin manuals now cover the rate window, progressive cooldowns, `/limits`, direct lookup, testing exemption, temporary restriction, unlock/reset, Owner-only permanent ban/unban, and 5-minute blocked-warning throttle.
+Owner/Admin manuals explicitly distinguish Exempt vs Restrict and document interaction-flood thresholds, silent-drop behavior, Owner/Sudo bypass, and the fact that Exempt bypasses inquiry limits only.
 
 ## Canonical Worker stack
-Wrangler entrypoint: `src/rate_limit_entry.ts`.
+Wrangler entrypoint: `src/interaction_guard_entry.ts`.
 
 Top layers:
-1. `rate_limit_entry.ts` — `/limits` + normal-user free-text rate gate
-2. `faq_ai_entry.ts` — FAQ authoring + AI translation
-3. `cases_entry.ts` — `/cases`
-4. existing Staff/manual/deploy/monitoring/UX/security/runtime/index stack
+1. `interaction_guard_entry.ts` — private commands/callbacks/messages flood gate
+2. `rate_limit_entry.ts` — `/limits` + normal-user free-text inquiry rate gate
+3. `faq_ai_entry.ts` — FAQ authoring + AI translation
+4. `cases_entry.ts` — `/cases`
+5. existing Staff/manual/deploy/monitoring/UX/security/runtime/index stack
 
 ## Production workflow contract
 `.github/workflows/deploy-production.yml` remains the sole production workflow and must validate credentials, typecheck, migrations, Worker dry-run, remote migrations, deploy, binding preservation, `/health`, nonce-gated command sync, and exact **19-command** Owner Telegram read-back including `/limits`.
@@ -120,13 +143,16 @@ Top layers:
 After workflow green:
 1. send 10 normal-user free-text inquiries inside 10 min
 2. verify next inquiry is blocked before AI/case creation
-3. verify repeated blocked spam produces no more than one warning per 5 min
-4. verify `/faq` still works
-5. `/limits <test_user_id>` → `Exempt 1h` and continue normal-user QA
-6. test Unlock / Restrict 2h / Reset Strikes
-7. Owner permanent-ban confirmation → free text blocked, `/faq` still available
-8. Owner Unban → free text restored
-9. verify blocked spam created no extra `/cases`
+3. verify repeated blocked free-text spam produces no more than one warning per 5 min
+4. verify `/faq` remains usable while limited
+5. normal user exceeds 20 private interactions/60s → 5-minute flood block
+6. restricted/banned user exceeds 6 private interactions/60s → 5-minute flood block
+7. verify only first blocked flood interaction warns and subsequent blocked commands/callbacks/messages are silent-dropped
+8. `/limits <test_user_id>` → `Exempt 1h`; verify inquiry QA continues but flood guard still applies
+9. apply `Restrict 2h`; verify Exempt disappears and free-text is blocked
+10. Owner permanent-ban confirmation → free text blocked, `/faq` remains available under tight flood guard
+11. Owner Unban → free text restored
+12. verify blocked inquiry/flood traffic created no extra `/cases` or AI calls
 
 ## Documentation rule
 After every behavior/schema/deployment slice, keep `ROADMAP.md`, this file, manuals, and `docs/TELEGRAM_DESIGN_RULES.md` synchronized with live repository reality.
