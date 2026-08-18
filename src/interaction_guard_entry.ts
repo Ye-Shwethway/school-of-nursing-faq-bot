@@ -2,6 +2,7 @@ import app from "./rate_limit_entry";
 import type { Language } from "./faq";
 import { checkInteractionFlood, interactionFloodMessage } from "./interaction_flood";
 import { sweepExpiredHumanControls } from "./human_control_lease";
+import { sweepStaffAvailability } from "./staff_presence";
 
 interface Env {
   APP_ENV: string;
@@ -120,6 +121,9 @@ export default {
   },
 
   async scheduled(_controller: ScheduledController, env: Env, _ctx: ExecutionContext): Promise<void> {
-    await sweepExpiredHumanControls(env);
+    await Promise.allSettled([
+      sweepExpiredHumanControls(env),
+      sweepStaffAvailability(env.DB),
+    ]);
   },
 };
