@@ -235,6 +235,7 @@ async function humanHandoff(
     sourceQuestionId: questionId,
     language,
     question: message.text,
+    reason,
     staffChatId: destination?.chatId ?? null,
   });
   if (!caseId || !destination) return;
