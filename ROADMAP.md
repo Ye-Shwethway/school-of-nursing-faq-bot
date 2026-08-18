@@ -12,7 +12,7 @@ Production Telegram FAQ assistant for a university School of Nursing in Burmese,
 - normal production deployment remains explicit and guarded
 
 ## Current foundation
-Status: PRODUCTION LIVE; OWNER COMMAND-MENU HOTFIX DEPLOYED; TEST CI RACE FIXED
+Status: PRODUCTION LIVE; OWNER COMMAND-MENU HOTFIX DEPLOYED; TEST CI CANCELLATION NOISE FIXED
 
 Implemented:
 - multilingual FAQ + dynamic CRUD/revisions
@@ -56,22 +56,27 @@ Hotfix:
 Expected Owner menu after resync:
 `/start`, `/whoami`, `/admin`, `/admins`, `/faq`, `/adminmanual`, `/sudo`, `/ai`, `/staff`, `/ownermanual`, `/cancel`, `/reset`.
 
-## TEST CI race fix
-Observed Test Build run `32123681126` / job `95669489898`:
+## TEST CI cleanup
+Observed run `32123681126` / job `95669489898`:
 - typecheck passed
 - local D1 migration validation passed
 - Wrangler dry-run passed
-- failure occurred only in `Refresh deployment artifact`
-- the workflow committed generated `deploy/worker.mjs` and attempted to push back to `test`
-- the push lost a race with a newer `test` commit and was rejected as non-fast-forward
-- concurrency then cancelled the obsolete run in favor of the newer waiting run
+- failure occurred only in generated artifact self-push
+- push lost a race with a newer `test` commit and was rejected as non-fast-forward
 
-Fix in `.github/workflows/test-typecheck.yml`:
-- Test Build is now read-only (`contents: read`)
-- no generated artifact is committed or pushed back to `test`
-- validated Worker bundle/checksum are prepared only in the run workspace
-- artifact upload includes all current `migrations/*.sql` instead of the stale list ending at 0006
-- `cancel-in-progress: true` remains intentional so only the newest test checkpoint needs to finish
+Observed run `32124026795` / job `95670512070`:
+- typecheck passed
+- D1 validation was cancelled only because a newer `test` push arrived while `cancel-in-progress: true` was enabled
+- this was cancellation collateral, not a test assertion or migration failure
+
+Current `.github/workflows/test-typecheck.yml`:
+- read-only repository permission
+- no CI write-back to `test`
+- generated Worker/checksum only in runner artifact
+- all `migrations/*.sql` included in handoff bundle
+- push trigger path-scoped to source/config/migrations/workflow files
+- docs-only continuity commits no longer trigger Test Build
+- `cancel-in-progress: false`, so relevant runs queue instead of being cancelled
 
 ## Production operational-data bootstrap
 Workflow: `.github/workflows/bootstrap-production-data.yml`
@@ -112,7 +117,7 @@ Wrangler enters `src/manual_entry.ts`.
 9. compatibility fallback + `/health`
 
 ## Next exact work
-1. verify the latest Test Build finishes clean with the read-only artifact flow
+1. verify the latest path-scoped Test Build finishes green without cancellation noise
 2. verify Owner Telegram menu shows the full Owner command set
 3. configure production AI provider/API key through `/ai`
 4. verify grounded AI, fallback and human handoff
