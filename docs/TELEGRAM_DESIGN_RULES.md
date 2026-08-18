@@ -55,6 +55,9 @@ Order: `မြန်မာ` · `English` · `简体中文`.
 - Live Take Over/Resolve remains on the original Staff Inbox escalation message.
 - `🗑 Delete Case` is for typo/test/junk cases and requires explicit permanent-delete confirmation.
 - Case deletion removes only the escalation case and its escalation-message history; preserve user, original question log, and linked FAQ.
+- When a meaningful unresolved question is escalated, the user must always receive a localized acknowledgement in private chat; Staff Inbox delivery must never substitute for the user-facing response.
+- Prefer replying to the original user question. If Telegram rejects the reply-target form, retry immediately as a plain private message so the user is not left silent.
+- Staff Inbox forwarding, topic mirroring, or notification failure must not suppress the user-facing handoff acknowledgement once the escalation path has been accepted.
 
 ## Input quality and false escalation
 - Before normal FAQ/AI/handoff processing, obvious low-information private text must pass an Input Quality Gate.
