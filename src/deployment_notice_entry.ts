@@ -6,6 +6,7 @@ interface Env {
   DEPLOY_REVISION?: string;
   DB?: D1Database;
   TELEGRAM_BOT_TOKEN?: string;
+  TELEGRAM_WEBHOOK_SECRET?: string;
   BOT_OWNER_TELEGRAM_ID?: string;
 }
 
@@ -14,6 +15,13 @@ function ownerId(env: Env): number | null {
   if (!raw || !/^\d+$/.test(raw)) return null;
   const id = Number(raw);
   return Number.isSafeInteger(id) ? id : null;
+}
+
+function json(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "content-type": "application/json; charset=utf-8" },
+  });
 }
 
 async function telegramApi(env: Env, method: string, body: unknown): Promise<any | null> {
@@ -109,9 +117,64 @@ async function notifyDeploymentOnline(env: Env): Promise<void> {
   }
 }
 
+async function handleProductionTelegramCutover(request: Request, env: Env): Promise<Response> {
+  if (env.APP_ENV !== "production") return json({ ok: false, error: "production_only" }, 404);
+  if (!env.DB || !env.TELEGRAM_BOT_TOKEN || !env.TELEGRAM_WEBHOOK_SECRET) {
+    return json({ ok: false, error: "production_runtime_not_ready" }, 503);
+  }
+
+  const suppliedNonce = request.headers.get("x-cutover-nonce")?.trim();
+  if (!suppliedNonce) return json({ ok: false, error: "missing_nonce" }, 401);
+
+  const row = await env.DB.prepare(
+    `SELECT setting_value FROM bot_settings WHERE setting_key='telegram_cutover_nonce'`,
+  ).first<{ setting_value: string }>();
+  if (!row?.setting_value || row.setting_value !== suppliedNonce) {
+    return json({ ok: false, error: "invalid_nonce" }, 403);
+  }
+
+  const consumed = await env.DB.prepare(
+    `DELETE FROM bot_settings
+     WHERE setting_key='telegram_cutover_nonce' AND setting_value=?1`,
+  ).bind(suppliedNonce).run();
+  if ((consumed.meta.changes ?? 0) !== 1) {
+    return json({ ok: false, error: "nonce_already_consumed" }, 409);
+  }
+
+  const origin = new URL(request.url).origin;
+  const webhookUrl = `${origin}/telegram/webhook`;
+  const setResult = await telegramApi(env, "setWebhook", {
+    url: webhookUrl,
+    secret_token: env.TELEGRAM_WEBHOOK_SECRET,
+    allowed_updates: ["message", "callback_query"],
+    drop_pending_updates: false,
+  });
+  if (setResult !== true) {
+    return json({ ok: false, error: "telegram_set_webhook_failed" }, 502);
+  }
+
+  const info = await telegramApi(env, "getWebhookInfo", {});
+  if (!info || info.url !== webhookUrl) {
+    return json({ ok: false, error: "telegram_webhook_readback_failed" }, 502);
+  }
+
+  await syncDeploymentCommandMenus(env);
+  return json({
+    ok: true,
+    environment: "production",
+    webhook_url: webhookUrl,
+    pending_update_count: Number(info.pending_update_count ?? 0),
+    last_error_message: info.last_error_message ?? null,
+  });
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
+    if (request.method === "POST" && url.pathname === "/ops/telegram/cutover") {
+      return handleProductionTelegramCutover(request, env);
+    }
+
     const response = await app.fetch(request, env);
     if (request.method === "GET" && url.pathname === "/health" && response.ok) {
       await syncDeploymentCommandMenus(env);
