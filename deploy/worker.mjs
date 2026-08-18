@@ -5170,34 +5170,40 @@ function manualTitle(key) {
   return key === "owner" ? "Bot Owner Manual" : "Sudo Admin Manual";
 }
 __name(manualTitle, "manualTitle");
-function manualControls(key, canEdit) {
-  const rows = [];
-  if (canEdit) rows.push([{ text: "\u270E Edit a section", callback_data: `manual:edit:${key}` }]);
+function canReadManual(role, key) {
+  if (key === "owner") return role === "owner";
+  return role === "owner" || role === "sudo_admin";
+}
+__name(canReadManual, "canReadManual");
+function pagerKeyboard(key, index, total, canEdit) {
+  const nav = [];
+  if (index > 0) nav.push({ text: "\u25C0 Previous", callback_data: `manual:page:${key}:${index - 1}` });
+  nav.push({ text: `${index + 1}/${total}`, callback_data: "manual:noop" });
+  if (index < total - 1) nav.push({ text: "Next \u25B6", callback_data: `manual:page:${key}:${index + 1}` });
+  const rows = [nav];
+  if (canEdit) rows.push([{ text: "\u270E Edit this section", callback_data: `manual:editpage:${key}:${index}` }]);
   rows.push([{ text: "\u2715 Close", callback_data: "ui:close" }]);
   return { inline_keyboard: rows };
 }
-__name(manualControls, "manualControls");
-async function sendFullManual(env, chatId, key, canEdit) {
+__name(pagerKeyboard, "pagerKeyboard");
+async function renderManualPage(env, key, index, canEdit) {
   const sections = await listManualSections(env.DB, key);
-  if (!sections.length) {
-    await sendMessage6(env, chatId, `${manualTitle(key)} is not available yet.`);
-    return;
-  }
-  await sendMessage6(
-    env,
-    chatId,
-    `${manualTitle(key)}
-
-\u1012\u102E manual \u1000 bot \u1000\u102D\u102F \u1014\u1031\u1037\u1005\u1009\u103A\u1021\u101E\u102F\u1036\u1038\u1015\u103C\u102F\u101B\u102C\u1019\u103E\u102C \u1014\u102C\u1038\u101C\u100A\u103A\u101C\u103D\u101A\u103A\u1021\u1031\u102C\u1004\u103A \u101B\u1031\u1038\u1011\u102C\u1038\u1010\u102C\u1015\u102B\u104B Technical setup guide \u1019\u101F\u102F\u1010\u103A\u1015\u102B\u104B`
-  );
-  for (const section of sections) {
-    await sendMessage6(env, chatId, `${section.title}
-
-${section.body}`);
-  }
-  await sendMessage6(env, chatId, "Manual controls", manualControls(key, canEdit));
+  if (!sections.length) return null;
+  const safeIndex = Math.min(Math.max(index, 0), sections.length - 1);
+  const section = sections[safeIndex];
+  return {
+    text: [
+      manualTitle(key),
+      `${safeIndex + 1}/${sections.length}`,
+      "",
+      section.title,
+      "",
+      section.body
+    ].join("\n"),
+    keyboard: pagerKeyboard(key, safeIndex, sections.length, canEdit)
+  };
 }
-__name(sendFullManual, "sendFullManual");
+__name(renderManualPage, "renderManualPage");
 async function saveSession2(db, userId, state, provider, payload) {
   await db.prepare(
     `INSERT INTO admin_sessions (telegram_user_id, state, provider, payload, updated_at)
@@ -5217,70 +5223,74 @@ async function handleManualCommand(env, message) {
   if (command !== "/ownermanual" && command !== "/adminmanual") return false;
   const role = await roleFor(env, message.from.id);
   const key = command === "/ownermanual" ? "owner" : "admin";
-  if (key === "owner" && role !== "owner") {
-    await sendMessage6(env, message.chat.id, "Owner Manual is available to the Bot Owner only.");
+  if (!canReadManual(role, key)) {
+    await sendMessage6(
+      env,
+      message.chat.id,
+      key === "owner" ? "Owner Manual is available to the Bot Owner only." : "Admin Manual is available to the Bot Owner and Sudo Admins only."
+    );
     return true;
   }
-  if (key === "admin" && role !== "owner" && role !== "sudo_admin") {
-    await sendMessage6(env, message.chat.id, "Admin Manual is available to the Bot Owner and Sudo Admins only.");
+  const page = await renderManualPage(env, key, 0, role === "owner");
+  if (!page) {
+    await sendMessage6(env, message.chat.id, `${manualTitle(key)} is not available yet.`);
     return true;
   }
-  await sendFullManual(env, message.chat.id, key, role === "owner");
+  await sendMessage6(env, message.chat.id, page.text, page.keyboard);
   return true;
 }
 __name(handleManualCommand, "handleManualCommand");
 async function handleManualCallback(env, callback) {
   const data = callback.data ?? "";
   if (!data.startsWith("manual:")) return false;
-  const role = await roleFor(env, callback.from.id);
-  if (role !== "owner") {
-    await answerCallback3(env, callback.id, "Owner only");
-    return true;
-  }
   if (!env.DB || !callback.message) {
     await answerCallback3(env, callback.id);
     return true;
   }
-  const editMatch = data.match(/^manual:edit:(owner|admin)$/);
-  if (editMatch) {
-    const key = editMatch[1];
-    const sections = await listManualSections(env.DB, key);
+  if (data === "manual:noop") {
     await answerCallback3(env, callback.id);
-    await editOrSend3(
-      env,
-      callback.message,
-      `${manualTitle(key)}
-Choose the section you want to edit.`,
-      {
-        inline_keyboard: [
-          ...sections.map((section) => [{
-            text: section.title.slice(0, 58),
-            callback_data: `manual:section:${key}:${section.sectionKey}`
-          }]),
-          [{ text: "\u2190 Back", callback_data: `manual:back:${key}` }],
-          [{ text: "\u2715 Close", callback_data: "ui:close" }]
-        ]
-      }
-    );
     return true;
   }
-  const sectionMatch = data.match(/^manual:section:(owner|admin):([a-z0-9-]+)$/);
-  if (sectionMatch) {
-    const key = sectionMatch[1];
-    const sectionKey = sectionMatch[2];
-    const section = await getManualSection(env.DB, key, sectionKey);
-    await answerCallback3(env, callback.id);
-    if (!section) {
-      await editOrSend3(env, callback.message, "Manual section not found.", manualControls(key, true));
+  const role = await roleFor(env, callback.from.id);
+  const pageMatch = data.match(/^manual:page:(owner|admin):(\d+)$/);
+  if (pageMatch) {
+    const key = pageMatch[1];
+    if (!canReadManual(role, key)) {
+      await answerCallback3(env, callback.id, "Not authorized");
       return true;
     }
-    await saveSession2(env.DB, callback.from.id, "awaiting_manual_edit_body", `${key}:${sectionKey}`, null);
+    const page = await renderManualPage(env, key, Number(pageMatch[2]), role === "owner");
+    await answerCallback3(env, callback.id);
+    if (page) await editOrSend3(env, callback.message, page.text, page.keyboard);
+    return true;
+  }
+  const editMatch = data.match(/^manual:editpage:(owner|admin):(\d+)$/);
+  if (editMatch) {
+    if (role !== "owner") {
+      await answerCallback3(env, callback.id, "Owner only");
+      return true;
+    }
+    const key = editMatch[1];
+    const index = Number(editMatch[2]);
+    const sections = await listManualSections(env.DB, key);
+    const section = sections[index];
+    await answerCallback3(env, callback.id);
+    if (!section) return true;
+    await saveSession2(
+      env.DB,
+      callback.from.id,
+      "awaiting_manual_edit_body",
+      `${key}:${section.sectionKey}`,
+      { index }
+    );
     await editOrSend3(
       env,
       callback.message,
       [
-        `Editing: ${section.title}`,
-        `Current version: ${section.version}`,
+        `Editing ${manualTitle(key)}`,
+        "",
+        section.title,
+        `Version ${section.version}`,
         "",
         "Send the complete replacement text for this section in one message.",
         "Nothing is saved until you review the preview and press Save.",
@@ -5289,20 +5299,17 @@ Choose the section you want to edit.`,
     );
     return true;
   }
-  const backMatch = data.match(/^manual:back:(owner|admin)$/);
-  if (backMatch) {
-    const key = backMatch[1];
-    await answerCallback3(env, callback.id);
-    await editOrSend3(env, callback.message, `${manualTitle(key)} controls`, manualControls(key, true));
-    return true;
-  }
   if (data === "manual:discard") {
     await clearSession2(env.DB, callback.from.id);
     await answerCallback3(env, callback.id, "Edit discarded");
-    await editOrSend3(env, callback.message, "Manual edit discarded.");
+    await editOrSend3(env, callback.message, "Manual edit discarded. Open the manual again when needed.");
     return true;
   }
   if (data === "manual:save") {
+    if (role !== "owner") {
+      await answerCallback3(env, callback.id, "Owner only");
+      return true;
+    }
     const session = await env.DB.prepare(
       `SELECT state, provider, payload FROM admin_sessions WHERE telegram_user_id=?1`
     ).bind(callback.from.id).first();
@@ -5321,17 +5328,8 @@ Choose the section you want to edit.`,
     const updated = await updateManualSection(env.DB, key, target[2], payload.body, callback.from.id);
     await clearSession2(env.DB, callback.from.id);
     await answerCallback3(env, callback.id, updated ? "Saved" : "Section not found");
-    await editOrSend3(
-      env,
-      callback.message,
-      updated ? `Saved successfully.
-
-${updated.title}
-Version: ${updated.version}
-
-${updated.body}` : "Manual section was not found.",
-      manualControls(key, true)
-    );
+    const page = await renderManualPage(env, key, payload.index ?? 0, true);
+    if (page) await editOrSend3(env, callback.message, page.text, page.keyboard);
     return true;
   }
   return false;
@@ -5341,29 +5339,26 @@ async function consumeManualEditText(env, message) {
   if (!env.DB || !message.from || !message.text) return false;
   const text = message.text.trim();
   if (!text || text.startsWith("/")) return false;
-  const role = await roleFor(env, message.from.id);
-  if (role !== "owner") return false;
+  if (await roleFor(env, message.from.id) !== "owner") return false;
   const session = await env.DB.prepare(
-    `SELECT state, provider FROM admin_sessions WHERE telegram_user_id=?1`
+    `SELECT state, provider, payload FROM admin_sessions WHERE telegram_user_id=?1`
   ).bind(message.from.id).first();
   if (!session || session.state !== "awaiting_manual_edit_body" || !session.provider) return false;
   if (text.length > 3500) {
     await sendMessage6(env, message.chat.id, "This section is too long for a clean Telegram manual view. Keep it under 3,500 characters or use /cancel.");
     return true;
   }
-  const target = session.provider.match(/^(owner|admin):([a-z0-9-]+)$/);
-  if (!target) {
-    await clearSession2(env.DB, message.from.id);
-    await sendMessage6(env, message.chat.id, "Manual edit session expired. Open the manual and try again.");
-    return true;
-  }
-  await saveSession2(env.DB, message.from.id, "manual_edit_preview", session.provider, { body: text });
+  const oldPayload = session.payload ? JSON.parse(session.payload) : {};
+  await saveSession2(env.DB, message.from.id, "manual_edit_preview", session.provider, {
+    body: text.replace(/\\n/g, "\n"),
+    index: oldPayload.index ?? 0
+  });
   await sendMessage6(
     env,
     message.chat.id,
     `Preview \u2014 not saved yet
 
-${text}`,
+${text.replace(/\\n/g, "\n")}`,
     {
       inline_keyboard: [[
         { text: "\u2713 Save", callback_data: "manual:save" },
