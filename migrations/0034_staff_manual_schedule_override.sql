@@ -1,0 +1,10 @@
+ALTER TABLE staff_presence ADD COLUMN manual_override_until TEXT;
+
+CREATE INDEX IF NOT EXISTS idx_staff_presence_manual_override_until
+ON staff_presence(manual_override_until);
+
+INSERT OR REPLACE INTO manual_sections
+  (manual_key, section_key, title, body, sort_order, version, updated_by, updated_at)
+VALUES
+  ('owner','staff-availability-schedule','Staff Availability Timer & Schedule','Staff availability timezone သည် Asia/Yangon (UTC+06:30) ဖြစ်ပါတယ်။\n\nDaily schedule သတ်မှတ်ပြီးနောက် plain /available သို့ /unavailable သုံးခြင်းသည် recurring schedule ကို မဖျက်တော့ပါ။ အဲဒီ command က current schedule interval အတွက် temporary manual override အဖြစ်သာ သက်ရောက်ပြီး next schedule boundary (start/end) ရောက်သောအခါ schedule state ပြန်လည်အသက်ဝင်မည်။\n\nဥပမာ /available 9am 5pm သတ်မှတ်ထားပြီး ညအချိန် plain /available သုံးလျှင် ယခုချက်ချင်း AVAILABLE ဖြစ်သော်လည်း နောက် schedule boundary တွင် daily schedule အတိုင်း state ပြန်ပြောင်းမည်။ Schedule ကို တကယ်ဖျက်ချင်မှ /available cancel သို့ /available clear သုံးပါ။\n\n/unavailable 3 သည် 3-hour temporary timer ဖြစ်ပြီး recurring schedule ရှိပါက timer ပြည့်ပြီးနောက် schedule ပြန်လိုက်မည်။ /unavailable cancel သို့ clear ဖြင့် timer ကိုအချိန်မပြည့်မီပယ်ဖျက်နိုင်သည်။ Automatic effective-state transitions ကို staff private chat နှင့် Staff Inbox နှစ်ဖက်လုံးတွင် bot ကကြေညာပေးသည်။',97,4,0,CURRENT_TIMESTAMP),
+  ('admin','staff-availability-schedule','Staff Availability Timer & Schedule','Timezone: Asia/Yangon (UTC+06:30).\n\n/available <start> <end> ဖြင့် daily recurring schedule သတ်မှတ်ပါ။ Schedule ရှိပြီးသားအချိန် plain /available သို့ /unavailable သုံးခြင်းသည် schedule ကို မဖျက်ဘဲ next schedule boundary အထိသာ temporary manual override လုပ်သည်။ Next start/end boundary ရောက်လျှင် schedule-derived state ပြန်ဝင်မည်။\n\nSchedule ကို တကယ်ဖျက်ရန် /available cancel သို့ /available clear သုံးပါ။ /unavailable <hours> သည် temporary unavailable timer ဖြစ်ပြီး /unavailable cancel သို့ clear ဖြင့်ပယ်ဖျက်နိုင်သည်။ Auto state changes ကို private chat နှင့် Staff Inbox နှစ်ဖက်လုံးတွင်ကြေညာပေးသည်။',97,4,0,CURRENT_TIMESTAMP);
