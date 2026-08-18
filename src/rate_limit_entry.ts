@@ -1,4 +1,4 @@
-import app from "./faq_ai_entry";
+import app from "./ai_setup_entry";
 import { getStaffInboxChatId } from "./handoff";
 import type { Language } from "./faq";
 import {
