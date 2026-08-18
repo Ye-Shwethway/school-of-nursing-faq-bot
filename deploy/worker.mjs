@@ -1326,22 +1326,30 @@ async function monitoringStatus(db) {
 }
 __name(monitoringStatus, "monitoringStatus");
 async function getConversationControl(db, telegramUserId) {
-  if (!db) return { mode: "ai", claimedBy: null };
+  if (!db) return { mode: "ai", claimedBy: null, version: 0 };
   const row = await db.prepare(
-    `SELECT mode, claimed_by FROM conversation_control WHERE telegram_user_id=?1`
+    `SELECT mode, claimed_by, control_version FROM conversation_control WHERE telegram_user_id=?1`
   ).bind(telegramUserId).first();
-  return row ? { mode: row.mode, claimedBy: row.claimed_by } : { mode: "ai", claimedBy: null };
+  return row ? { mode: row.mode, claimedBy: row.claimed_by, version: row.control_version ?? 0 } : { mode: "ai", claimedBy: null, version: 0 };
 }
 __name(getConversationControl, "getConversationControl");
+async function ensureConversationControl(db, telegramUserId) {
+  if (!db) return { mode: "ai", claimedBy: null, version: 0 };
+  await db.prepare(
+    `INSERT OR IGNORE INTO conversation_control
+      (telegram_user_id, mode, control_version, updated_at)
+     VALUES (?1, 'ai', 0, CURRENT_TIMESTAMP)`
+  ).bind(telegramUserId).run();
+  return getConversationControl(db, telegramUserId);
+}
+__name(ensureConversationControl, "ensureConversationControl");
 async function takeOverConversation(db, telegramUserId, staffId) {
   if (!db) return { ok: false, message: "D1 is not bound." };
-  await db.prepare(
-    `INSERT OR IGNORE INTO conversation_control (telegram_user_id, mode, updated_at)
-     VALUES (?1, 'ai', CURRENT_TIMESTAMP)`
-  ).bind(telegramUserId).run();
+  await ensureConversationControl(db, telegramUserId);
   const result = await db.prepare(
     `UPDATE conversation_control
-     SET mode='human', claimed_by=?2, claimed_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP
+     SET mode='human', claimed_by=?2, claimed_at=CURRENT_TIMESTAMP,
+         control_version=control_version+1, updated_at=CURRENT_TIMESTAMP
      WHERE telegram_user_id=?1 AND mode='ai'`
   ).bind(telegramUserId, staffId).run();
   if ((result.meta.changes ?? 0) === 1) {
@@ -1351,7 +1359,7 @@ async function takeOverConversation(db, telegramUserId, staffId) {
   if (current.claimedBy === staffId && current.mode === "human") {
     return { ok: true, message: `You already control user ${telegramUserId}.` };
   }
-  return { ok: false, message: `Conversation is already controlled by another staff member.` };
+  return { ok: false, message: "Conversation is already controlled by another staff member." };
 }
 __name(takeOverConversation, "takeOverConversation");
 async function returnConversationToAi(db, telegramUserId, actorId, ownerId2) {
@@ -1363,7 +1371,8 @@ async function returnConversationToAi(db, telegramUserId, actorId, ownerId2) {
   }
   await db.prepare(
     `UPDATE conversation_control
-     SET mode='ai', claimed_by=NULL, claimed_at=NULL, updated_at=CURRENT_TIMESTAMP
+     SET mode='ai', claimed_by=NULL, claimed_at=NULL,
+         control_version=control_version+1, updated_at=CURRENT_TIMESTAMP
      WHERE telegram_user_id=?1`
   ).bind(telegramUserId).run();
   return { ok: true, message: `Conversation with user ${telegramUserId} returned to AI.` };
