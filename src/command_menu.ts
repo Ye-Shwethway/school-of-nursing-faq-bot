@@ -28,7 +28,10 @@ const OWNER_COMMANDS: BotCommand[] = [
   { command: "reset", description: "Reset transient conversation state" },
 ];
 
+const COMMAND_SYNC_REVISION = 2;
+
 export const COMMAND_SCHEMA_VERSION = JSON.stringify({
+  revision: COMMAND_SYNC_REVISION,
   public: PUBLIC_COMMANDS,
   admin: ADMIN_COMMANDS,
   owner: OWNER_COMMANDS,
