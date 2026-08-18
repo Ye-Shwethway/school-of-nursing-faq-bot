@@ -16,65 +16,60 @@ Live repository plus verified Cloudflare/Telegram evidence outranks remembered c
 ## Current checkpoint
 The project is main-only and production-live. FAQ-first onboarding, false-escalation filtering, rotated Telegram bot token + automatic webhook cutover, and rotated AI master-key credential save are live-accepted.
 
-Newest observed issue: normal-user questions that correctly escalated to Staff Inbox could leave the user's private chat silent. Live evidence showed case/group delivery succeeded, including escalation reason and `BOT · Human handoff`, while no localized handoff acknowledgement appeared in the user chat.
+Latest diagnosed issue was not an AI/handoff failure: a Sudo/Admin had previously pressed `Take Over` for a normal user and never returned the conversation to AI. While `conversation_control.mode='human'`, later user text is intentionally relayed to Staff Inbox and does not enter FAQ/AI. The missing operational control was a reliable Bot Owner override of another Admin's stale takeover plus claimant notification.
 
 Newest implementation on `main`:
-- `src/monitoring_message_entry.ts` now sends the user-facing handoff acknowledgement with reply-first + plain-message fallback
-- preferred path remains a reply to the original question
-- if Telegram rejects/fails the reply-target form, the same localized acknowledgement is retried as a plain private message
-- Staff Inbox delivery remains independent; group success no longer counts as sufficient user-facing UX
-- `docs/TELEGRAM_DESIGN_RULES.md` now explicitly requires reliable handoff acknowledgement
+- `src/latest_return_entry.ts` explicitly intercepts Owner `conv:return:<user_id>` when another Admin is the active claimant
+- uses canonical `returnConversationToAi()` to force AI mode
+- cleans latest Return-to-AI button state
+- sends localized AI-return notice to the user
+- notifies the displaced claimant Admin privately
+- if claimant DM fails, sends a fallback note in the Staff Inbox topic
+- also records a concise Owner-override note in the Staff Inbox topic
+- case/question/user history is preserved
+- migration `0027_manual_owner_takeover_override.sql` documents the rule in Owner/Admin manuals
 
-Do not call this newest handoff slice production-green until workflow + live normal-user handoff acceptance are verified.
+Do not call this newest override slice production-green until workflow + live Owner-override acceptance are verified.
+
+## Human-control authority contract
+- Sudo/Admin may Take Over a conversation.
+- Human mode suppresses normal FAQ/AI handling for that user and relays their text to Staff Inbox.
+- The active claimant may Return to AI.
+- Bot Owner is higher authority than any claimant and may force Return to AI regardless of who claimed the conversation.
+- Owner override must clear the active human claim and notify the previous claimant.
+- Owner override must tell the user the automated assistant is active again.
+- Owner override must be visible to staff even if the claimant cannot receive a private bot DM.
+- Historical case/question/user records are not deleted by returning control to AI.
 
 ## Handoff acknowledgement contract
-For a meaningful unresolved School question that enters human handoff:
-1. question is logged pending
-2. escalation case is created and routed to Staff Inbox
-3. normal user must receive localized handoff acknowledgement in private chat
-4. first attempt should reply to the original question
-5. if reply-target delivery fails, retry immediately as a plain private message
-6. Staff Inbox/topic/mirroring success must never substitute for this user-facing acknowledgement
-7. do not create a duplicate case solely to retry the user message
+For a real AI→human escalation, user acknowledgement remains reply-first with plain-private-message fallback if Telegram rejects reply targeting. Staff Inbox success does not substitute for user-facing acknowledgement.
 
 ## AI credential setup contract
-`AI_CONFIG_MASTER_KEY` must be Base64 for exactly 32 random bytes. Credentials encrypted under an old master key cannot be decrypted after rotation; provider API keys must be entered again through `/ai`.
-
-Active setup flow:
-1. Owner runs `/ai` privately
-2. selects provider
-3. `awaiting_ai_*` session is created
-4. `ai_setup_entry.ts` intercepts the next non-command Owner-private text
-5. canonical `consumeAiSetupText()` encrypts/stores it
-6. secret input message is deleted
-7. explicit success/error is returned
-8. Fetch models → Test Ping → bind
-
-This flow is now live-accepted for Gemini after the master-key rotation.
+`AI_CONFIG_MASTER_KEY` is Base64 for exactly 32 random bytes. After rotation, provider keys encrypted under the old key must be entered again through `/ai`. `ai_setup_entry.ts` intercepts Owner-private credential text early, deletes secret messages and requires explicit success/error feedback. Gemini save + AI use are live-accepted.
 
 ## Canonical Worker stack
 Wrangler entrypoint: `src/interaction_guard_entry.ts`.
 
 Top flow:
-1. `interaction_guard_entry.ts` — private interaction flood guard
-2. `rate_limit_entry.ts` — `/limits` + normal-user inquiry rate gate
-3. `ai_setup_entry.ts` — Owner-private AI credential setup interception
-4. `faq_ai_entry.ts` — FAQ-authoring interception
+1. `interaction_guard_entry.ts` — private Interaction Flood Guard
+2. `rate_limit_entry.ts` — `/limits` + inquiry rate gate
+3. `ai_setup_entry.ts` — Owner-private AI setup text
+4. `faq_ai_entry.ts` — FAQ authoring
 5. `input_quality_entry.ts` — deterministic false-escalation filter
 6. `cases_entry.ts` — `/cases`
-7. lower Staff/manual/deploy/monitoring/UX/security/runtime stack
+7. lower Staff/manual/deploy/latest-return/monitoring/UX/security/runtime stack
+
+`latest_return_entry.ts` owns latest Return-to-AI button movement/cleanup and explicit Owner override handling.
 
 ## Telegram deployment / token rotation contract
 Every production deploy:
 1. deploy Worker
-2. verify bindings and `/health`
-3. arm one-time `telegram_cutover_nonce`
+2. verify production bindings + `/health`
+3. arm one-time Telegram cutover nonce
 4. call `/ops/telegram/cutover`
-5. runtime calls Telegram `setWebhook` with current bot token + webhook secret
-6. `getWebhookInfo` must read back production `/telegram/webhook`
-7. exact Owner command registry verification must pass 19/19
-
-The current new bot is already responding to commands, proving inbound webhook delivery is working after token rotation.
+5. run Telegram `setWebhook` with current bot token + webhook secret
+6. verify `getWebhookInfo` points to production `/telegram/webhook`
+7. verify exact Owner command registry 19/19
 
 ## Deployment online notice contract
 Owner is the authoritative recipient. Owner send failure releases the revision claim for later `/health` retry. Sudo success cannot suppress an Owner retry. Notice failure never fails health.
@@ -82,19 +77,15 @@ Owner is the authoritative recipient. Owner send failure releases the revision c
 ## Existing product surfaces
 - multilingual deterministic/dynamic FAQ
 - public role-aware `/faq`
-- FAQ-first `/start`/`/language` onboarding
-- Owner/Sudo FAQ management + multilingual AI-assisted drafts
+- FAQ-first `/start`/`/language`
+- Owner/Sudo FAQ management + multilingual AI-assisted drafting
 - `/cases` escalation archive
-- Staff Inbox human takeover/resolve/return-to-AI
-- `/limits`, progressive inquiry limits, interaction flood protection
+- Staff Inbox Take Over / Resolve / Return-to-AI
+- Owner override of stale Admin Take Over
+- `/limits`, progressive inquiry limits, Interaction Flood Guard
 - Owner-only permanent ban/unban
-- deterministic Input Quality Gate
-- AI clarify-vs-handoff policy
-- reliable handoff acknowledgement fallback
+- Input Quality Gate + AI clarify-vs-handoff policy
 - editable manuals
-
-## False escalation contract
-Obvious junk/low-information private input is clarified without AI or case creation. Do not length-block short meaningful school topics. Human-controlled conversations and active admin/setup sessions bypass the quality gate.
 
 ## Command registry
 Public (4): `/start`, `/language`, `/faq`, `/whoami`.
@@ -103,19 +94,21 @@ Owner adds: `/sudo`, `/ai`, `/staff`, `/clearmessage`, `/ownermanual`, `/cancel`
 Command schema revision: **9**. Sudo total: **12**. Owner total: **19**.
 
 ## Migrations / manuals
-Current migration range: `0001` through `0026`. No migration is required for the handoff acknowledgement fallback.
+Current migration range: `0001` through `0027`.
+Newest migration: `0027_manual_owner_takeover_override.sql`.
 
 ## Next exact validation
-After the triggered production workflow is green:
-1. normal user asks a meaningful School question not covered by approved context
-2. Staff Inbox/group receives one escalation case with the correct reason
-3. user private chat receives the localized handoff acknowledgement
-4. preferred: acknowledgement replies to the original question
-5. acceptable fallback: same acknowledgement arrives as a plain private message if reply targeting fails
-6. `/cases` contains one case only; no duplicate due to acknowledgement retry
-7. FAQ answers and grounded AI answers still reply normally
-8. AI setup remains usable
-9. false-escalation, inquiry-limit/flood guard, staff takeover, and manuals remain intact
+After production workflow green:
+1. Sudo/Admin Take Over a normal user
+2. confirm user text relays under human mode
+3. leave claimant active
+4. Bot Owner presses `Return to AI`
+5. Owner override must succeed despite different claimant
+6. user receives localized automated-assistant-return notice
+7. displaced Admin receives private notification; if bot cannot DM them, Staff Inbox fallback note appears
+8. Staff Inbox topic shows concise Owner override transition
+9. next user question enters normal FAQ/AI again
+10. case/question history remains unchanged
 
 ## Documentation rule
-After every behavior/schema/deployment slice, keep `ROADMAP.md`, this file, manuals, and `docs/TELEGRAM_DESIGN_RULES.md` synchronized with repository/live reality.
+After every behavior/schema/deployment slice, keep `ROADMAP.md`, this file, manuals, and `docs/TELEGRAM_DESIGN_RULES.md` synchronized with live repository reality.
