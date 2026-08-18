@@ -37,8 +37,8 @@ function parseOwnerId(value) {
 }
 __name(parseOwnerId, "parseOwnerId");
 function isOwner(telegramUserId, ownerIdValue) {
-  const ownerId = parseOwnerId(ownerIdValue);
-  return ownerId !== null && telegramUserId === ownerId;
+  const ownerId2 = parseOwnerId(ownerIdValue);
+  return ownerId2 !== null && telegramUserId === ownerId2;
 }
 __name(isOwner, "isOwner");
 async function isSudoAdmin(db, telegramUserId) {
@@ -65,7 +65,7 @@ async function writeAudit(db, actorId, action, targetId, details = null) {
 }
 __name(writeAudit, "writeAudit");
 async function listAdmins(db, ownerIdValue) {
-  const ownerId = parseOwnerId(ownerIdValue);
+  const ownerId2 = parseOwnerId(ownerIdValue);
   const rows = await db.prepare(
     `SELECT telegram_user_id, granted_by, granted_at
      FROM admin_roles
@@ -73,8 +73,8 @@ async function listAdmins(db, ownerIdValue) {
      ORDER BY granted_at ASC`
   ).all();
   const lines = ["Authorized administrators:"];
-  if (ownerId !== null) {
-    lines.push(`Owner: ${await describeTelegramUser(db, ownerId)}`);
+  if (ownerId2 !== null) {
+    lines.push(`Owner: ${await describeTelegramUser(db, ownerId2)}`);
   }
   if (rows.results.length === 0) {
     lines.push("Sudo Admins: none");
@@ -334,7 +334,7 @@ async function aiStatus(db) {
   ].join("\n");
 }
 __name(aiStatus, "aiStatus");
-async function startProviderSetup(db, ownerId, providerId) {
+async function startProviderSetup(db, ownerId2, providerId) {
   if (!db) return { text: "D1 is not bound." };
   const provider = providerSpec(providerId);
   if (!provider) return { text: "Unknown provider." };
@@ -343,7 +343,7 @@ async function startProviderSetup(db, ownerId, providerId) {
       `INSERT INTO admin_sessions (telegram_user_id, state, provider, updated_at)
        VALUES (?1, 'awaiting_ai_base_url', ?2, CURRENT_TIMESTAMP)
        ON CONFLICT(telegram_user_id) DO UPDATE SET state='awaiting_ai_base_url', provider=excluded.provider, payload=NULL, updated_at=CURRENT_TIMESTAMP`
-    ).bind(ownerId, provider.id).run();
+    ).bind(ownerId2, provider.id).run();
     return { text: "Send the Custom OpenAI-compatible base URL (for example https://example.com/v1)." };
   }
   if (provider.id === "nanogpt_subscription" || provider.id === "nanogpt_all") {
@@ -365,15 +365,15 @@ NanoGPT key is already saved. Reuse it or replace it by sending a new key after 
     `INSERT INTO admin_sessions (telegram_user_id, state, provider, updated_at)
      VALUES (?1, 'awaiting_ai_key', ?2, CURRENT_TIMESTAMP)
      ON CONFLICT(telegram_user_id) DO UPDATE SET state='awaiting_ai_key', provider=excluded.provider, payload=NULL, updated_at=CURRENT_TIMESTAMP`
-  ).bind(ownerId, provider.id).run();
+  ).bind(ownerId2, provider.id).run();
   return { text: `Send the ${provider.label} API key. It will be encrypted before storage.` };
 }
 __name(startProviderSetup, "startProviderSetup");
-async function consumeAiSetupText(env, ownerId, text) {
+async function consumeAiSetupText(env, ownerId2, text) {
   if (!env.DB) return { handled: false };
   const session = await env.DB.prepare(
     `SELECT state, provider, payload FROM admin_sessions WHERE telegram_user_id = ?1`
-  ).bind(ownerId).first();
+  ).bind(ownerId2).first();
   if (!session || !session.state.startsWith("awaiting_ai_")) return { handled: false };
   const provider = providerSpec(session.provider ?? "");
   if (!provider) return { handled: true, text: "Provider setup state is invalid. Start again with /ai." };
@@ -382,7 +382,7 @@ async function consumeAiSetupText(env, ownerId, text) {
     if (!/^https:\/\//i.test(baseUrl)) return { handled: true, text: "Base URL must start with https://" };
     await env.DB.prepare(
       `UPDATE admin_sessions SET state='awaiting_ai_key', payload=?2, updated_at=CURRENT_TIMESTAMP WHERE telegram_user_id=?1`
-    ).bind(ownerId, baseUrl).run();
+    ).bind(ownerId2, baseUrl).run();
     return { handled: true, text: "Base URL saved for this setup. Now send the API key; it will be encrypted before storage." };
   }
   if (session.state === "awaiting_ai_key") {
@@ -406,8 +406,8 @@ async function consumeAiSetupText(env, ownerId, text) {
          updated_at=CURRENT_TIMESTAMP,
          last_tested_at=NULL,
          last_test_ok=NULL`
-    ).bind(credentialId, encrypted.encrypted, encrypted.iv, baseUrl, ownerId).run();
-    await env.DB.prepare(`DELETE FROM admin_sessions WHERE telegram_user_id=?1`).bind(ownerId).run();
+    ).bind(credentialId, encrypted.encrypted, encrypted.iv, baseUrl, ownerId2).run();
+    await env.DB.prepare(`DELETE FROM admin_sessions WHERE telegram_user_id=?1`).bind(ownerId2).run();
     return {
       handled: true,
       secretInput: true,
@@ -423,7 +423,7 @@ async function consumeAiSetupText(env, ownerId, text) {
   return { handled: false };
 }
 __name(consumeAiSetupText, "consumeAiSetupText");
-async function fetchProviderModels(env, ownerId, providerId) {
+async function fetchProviderModels(env, ownerId2, providerId) {
   if (!env.DB) return { text: "D1 is not bound." };
   if (!env.AI_CONFIG_MASTER_KEY) return { text: "AI_CONFIG_MASTER_KEY is not configured." };
   const provider = providerSpec(providerId);
@@ -461,26 +461,26 @@ async function fetchProviderModels(env, ownerId, providerId) {
   }
 }
 __name(fetchProviderModels, "fetchProviderModels");
-async function bindSelectedModel(db, ownerId, role) {
+async function bindSelectedModel(db, ownerId2, role) {
   if (!db) return "D1 is not bound.";
   const session = await db.prepare(
     `SELECT provider, payload FROM admin_sessions WHERE telegram_user_id=?1 AND state='awaiting_ai_binding_choice'`
-  ).bind(ownerId).first();
+  ).bind(ownerId2).first();
   if (!session?.provider || !session.payload) return "No model is awaiting binding.";
   if (role === "primary") {
     await db.prepare(
       `INSERT INTO ai_model_bindings (binding_key, primary_provider, primary_model, updated_by, updated_at)
        VALUES ('faq_agent', ?1, ?2, ?3, CURRENT_TIMESTAMP)
        ON CONFLICT(binding_key) DO UPDATE SET primary_provider=excluded.primary_provider, primary_model=excluded.primary_model, updated_by=excluded.updated_by, updated_at=CURRENT_TIMESTAMP`
-    ).bind(session.provider, session.payload, ownerId).run();
+    ).bind(session.provider, session.payload, ownerId2).run();
   } else {
     await db.prepare(
       `INSERT INTO ai_model_bindings (binding_key, fallback_provider, fallback_model, updated_by, updated_at)
        VALUES ('faq_agent', ?1, ?2, ?3, CURRENT_TIMESTAMP)
        ON CONFLICT(binding_key) DO UPDATE SET fallback_provider=excluded.fallback_provider, fallback_model=excluded.fallback_model, updated_by=excluded.updated_by, updated_at=CURRENT_TIMESTAMP`
-    ).bind(session.provider, session.payload, ownerId).run();
+    ).bind(session.provider, session.payload, ownerId2).run();
   }
-  await db.prepare(`DELETE FROM admin_sessions WHERE telegram_user_id=?1`).bind(ownerId).run();
+  await db.prepare(`DELETE FROM admin_sessions WHERE telegram_user_id=?1`).bind(ownerId2).run();
   return `${role === "primary" ? "Primary" : "Fallback"} model bound: ${session.provider} / ${session.payload}`;
 }
 __name(bindSelectedModel, "bindSelectedModel");
@@ -578,7 +578,7 @@ async function modelPing(provider, modelId, apiKey, customBaseUrl) {
   }
 }
 __name(modelPing, "modelPing");
-async function chooseModelForPing(db, ownerId, providerId, token) {
+async function chooseModelForPing(db, ownerId2, providerId, token) {
   if (!db) return { text: "D1 is not bound." };
   const row = await db.prepare(
     `SELECT model_id, display_name FROM ai_model_cache WHERE provider=?1 AND token=?2`
@@ -589,7 +589,7 @@ async function chooseModelForPing(db, ownerId, providerId, token) {
      VALUES (?1, 'awaiting_ai_binding_choice', ?2, ?3, CURRENT_TIMESTAMP)
      ON CONFLICT(telegram_user_id) DO UPDATE SET
        state='awaiting_ai_binding_choice', provider=excluded.provider, payload=excluded.payload, updated_at=CURRENT_TIMESTAMP`
-  ).bind(ownerId, providerId, row.model_id).run();
+  ).bind(ownerId2, providerId, row.model_id).run();
   return {
     text: `Selected: ${row.display_name ?? row.model_id}
 Run Test Ping before binding this model.`,
@@ -602,13 +602,13 @@ Run Test Ping before binding this model.`,
   };
 }
 __name(chooseModelForPing, "chooseModelForPing");
-async function testSelectedModel(env, ownerId) {
+async function testSelectedModel(env, ownerId2) {
   if (!env.DB) return { text: "D1 is not bound." };
   if (!env.AI_CONFIG_MASTER_KEY) return { text: "AI_CONFIG_MASTER_KEY is not configured." };
   const session = await env.DB.prepare(
     `SELECT provider, payload FROM admin_sessions
      WHERE telegram_user_id=?1 AND state='awaiting_ai_binding_choice'`
-  ).bind(ownerId).first();
+  ).bind(ownerId2).first();
   if (!session?.provider || !session.payload) return { text: "No model is selected for ping." };
   const credential = await env.DB.prepare(
     `SELECT encrypted_key, key_iv, base_url FROM ai_provider_credentials WHERE provider=?1`
@@ -621,7 +621,7 @@ async function testSelectedModel(env, ownerId) {
       `INSERT INTO ai_model_tests (provider, model_id, tested_by, tested_at, ok)
        VALUES (?1, ?2, ?3, CURRENT_TIMESTAMP, 1)
        ON CONFLICT(provider, model_id) DO UPDATE SET tested_by=excluded.tested_by, tested_at=CURRENT_TIMESTAMP, ok=1`
-    ).bind(session.provider, session.payload, ownerId).run();
+    ).bind(session.provider, session.payload, ownerId2).run();
     return {
       text: `Test Ping PASS
 ${session.provider} / ${session.payload}
@@ -638,7 +638,7 @@ Choose where to bind it.`,
       `INSERT INTO ai_model_tests (provider, model_id, tested_by, tested_at, ok)
        VALUES (?1, ?2, ?3, CURRENT_TIMESTAMP, 0)
        ON CONFLICT(provider, model_id) DO UPDATE SET tested_by=excluded.tested_by, tested_at=CURRENT_TIMESTAMP, ok=0`
-    ).bind(session.provider, session.payload, ownerId).run();
+    ).bind(session.provider, session.payload, ownerId2).run();
     return {
       text: `Test Ping FAILED
 ${session.provider} / ${session.payload}
@@ -648,12 +648,12 @@ ${error instanceof Error ? error.message : "Unknown error"}`,
   }
 }
 __name(testSelectedModel, "testSelectedModel");
-async function selectedModelPassedPing(db, ownerId) {
+async function selectedModelPassedPing(db, ownerId2) {
   if (!db) return false;
   const session = await db.prepare(
     `SELECT provider, payload FROM admin_sessions
      WHERE telegram_user_id=?1 AND state='awaiting_ai_binding_choice'`
-  ).bind(ownerId).first();
+  ).bind(ownerId2).first();
   if (!session?.provider || !session.payload) return false;
   const test = await db.prepare(
     `SELECT ok FROM ai_model_tests WHERE provider=?1 AND model_id=?2`
@@ -1086,7 +1086,7 @@ function findFaq(input, language) {
 __name(findFaq, "findFaq");
 
 // src/handoff.ts
-async function setBotSetting(db, key, value, ownerId) {
+async function setBotSetting(db, key, value, ownerId2) {
   await db.prepare(
     `INSERT INTO bot_settings (setting_key, setting_value, updated_by, updated_at)
      VALUES (?1, ?2, ?3, CURRENT_TIMESTAMP)
@@ -1094,7 +1094,7 @@ async function setBotSetting(db, key, value, ownerId) {
        setting_value=excluded.setting_value,
        updated_by=excluded.updated_by,
        updated_at=CURRENT_TIMESTAMP`
-  ).bind(key, value, ownerId).run();
+  ).bind(key, value, ownerId2).run();
 }
 __name(setBotSetting, "setBotSetting");
 async function getBotSetting(db, key) {
@@ -1105,11 +1105,11 @@ async function getBotSetting(db, key) {
   return row?.setting_value ?? null;
 }
 __name(getBotSetting, "getBotSetting");
-async function setStaffInbox(db, ownerId, chatId) {
+async function setStaffInbox(db, ownerId2, chatId) {
   if (!db) return "D1 is not bound.";
-  await setBotSetting(db, "staff_inbox_chat_id", String(chatId), ownerId);
-  await addStaffMember(db, ownerId, ownerId);
-  return `Staff Inbox bound to chat ${chatId}. Owner enabled as staff: ${await describeTelegramUser(db, ownerId)}`;
+  await setBotSetting(db, "staff_inbox_chat_id", String(chatId), ownerId2);
+  await addStaffMember(db, ownerId2, ownerId2);
+  return `Staff Inbox bound to chat ${chatId}. Owner enabled as staff: ${await describeTelegramUser(db, ownerId2)}`;
 }
 __name(setStaffInbox, "setStaffInbox");
 async function getStaffInboxChatId(db) {
@@ -1119,9 +1119,9 @@ async function getStaffInboxChatId(db) {
   return Number.isSafeInteger(value) ? value : null;
 }
 __name(getStaffInboxChatId, "getStaffInboxChatId");
-async function setHandoffRoute(db, ownerId, route) {
+async function setHandoffRoute(db, ownerId2, route) {
   if (!db) return "D1 is not bound.";
-  await setBotSetting(db, "handoff_route", route, ownerId);
+  await setBotSetting(db, "handoff_route", route, ownerId2);
   return `Human handoff route set to: ${route}`;
 }
 __name(setHandoffRoute, "setHandoffRoute");
@@ -1130,10 +1130,10 @@ async function getHandoffRoute(db) {
   return raw === "group" || raw === "dedicated" ? raw : "auto";
 }
 __name(getHandoffRoute, "getHandoffRoute");
-async function setDedicatedStaff(db, ownerId, staffId) {
+async function setDedicatedStaff(db, ownerId2, staffId) {
   if (!db) return "D1 is not bound.";
-  await addStaffMember(db, ownerId, staffId);
-  await setBotSetting(db, "dedicated_staff_id", String(staffId), ownerId);
+  await addStaffMember(db, ownerId2, staffId);
+  await setBotSetting(db, "dedicated_staff_id", String(staffId), ownerId2);
   return `Dedicated staff assigned: ${await describeTelegramUser(db, staffId)}`;
 }
 __name(setDedicatedStaff, "setDedicatedStaff");
@@ -1307,9 +1307,9 @@ async function getMonitoringMode(db) {
   return value === "silent_all" || value === "alerts_only" || value === "off" || value === "all_alerts" ? value : "all_alerts";
 }
 __name(getMonitoringMode, "getMonitoringMode");
-async function setMonitoringMode(db, ownerId, mode) {
+async function setMonitoringMode(db, ownerId2, mode) {
   if (!db) return "D1 is not bound.";
-  await upsertSetting(db, "monitoring_mode", mode, ownerId);
+  await upsertSetting(db, "monitoring_mode", mode, ownerId2);
   return `Monitoring mode saved: ${mode}`;
 }
 __name(setMonitoringMode, "setMonitoringMode");
@@ -1354,11 +1354,11 @@ async function takeOverConversation(db, telegramUserId, staffId) {
   return { ok: false, message: `Conversation is already controlled by another staff member.` };
 }
 __name(takeOverConversation, "takeOverConversation");
-async function returnConversationToAi(db, telegramUserId, actorId, ownerId) {
+async function returnConversationToAi(db, telegramUserId, actorId, ownerId2) {
   if (!db) return { ok: false, message: "D1 is not bound." };
   const current = await getConversationControl(db, telegramUserId);
   if (current.mode !== "human") return { ok: true, message: `User ${telegramUserId} is already in AI mode.` };
-  if (current.claimedBy !== actorId && ownerId !== actorId) {
+  if (current.claimedBy !== actorId && ownerId2 !== actorId) {
     return { ok: false, message: "Only the current claimant or Bot Owner can return this conversation to AI." };
   }
   await db.prepare(
@@ -1413,7 +1413,7 @@ async function getAgentPersona(db) {
   return row?.setting_value === "male" ? "male" : "female";
 }
 __name(getAgentPersona, "getAgentPersona");
-async function setAgentPersona(db, ownerId, persona) {
+async function setAgentPersona(db, ownerId2, persona) {
   if (!db) return "D1 is not bound.";
   await db.prepare(
     `INSERT INTO bot_settings (setting_key, setting_value, updated_by, updated_at)
@@ -1422,7 +1422,7 @@ async function setAgentPersona(db, ownerId, persona) {
        setting_value=excluded.setting_value,
        updated_by=excluded.updated_by,
        updated_at=CURRENT_TIMESTAMP`
-  ).bind(persona, ownerId).run();
+  ).bind(persona, ownerId2).run();
   return `AI persona saved: ${persona === "male" ? "Male" : "Female"}`;
 }
 __name(setAgentPersona, "setAgentPersona");
@@ -1868,11 +1868,11 @@ function staffCaseText(caseId, message, language, route) {
 }
 __name(staffCaseText, "staffCaseText");
 async function notifyOwnerOfUndeliveredCase(env, caseId) {
-  const ownerId = configuredOwnerId(env.BOT_OWNER_TELEGRAM_ID);
-  if (!ownerId) return;
+  const ownerId2 = configuredOwnerId(env.BOT_OWNER_TELEGRAM_ID);
+  if (!ownerId2) return;
   await sendTelegramMessage(
     env,
-    ownerId,
+    ownerId2,
     `Human handoff warning
 Case #${caseId} is queued in D1 but no configured staff destination accepted the notification.`
   );
@@ -2195,20 +2195,20 @@ function defaultPrivateScope() {
 __name(defaultPrivateScope, "defaultPrivateScope");
 
 // src/command_sync.ts
-async function setCommands(telegramApi3, commands, scope) {
+async function setCommands(telegramApi4, commands, scope) {
   try {
-    const result = await telegramApi3("setMyCommands", { commands, scope });
+    const result = await telegramApi4("setMyCommands", { commands, scope });
     return result === true;
   } catch {
     return false;
   }
 }
 __name(setCommands, "setCommands");
-async function syncUserCommandScope(db, telegramApi3, telegramUserId, ownerIdValue) {
+async function syncUserCommandScope(db, telegramApi4, telegramUserId, ownerIdValue) {
   try {
     const role = await getAdminRole(db, telegramUserId, ownerIdValue);
     await setCommands(
-      telegramApi3,
+      telegramApi4,
       commandsForRole(role),
       commandScopeForPrivateChat(telegramUserId)
     );
@@ -2216,7 +2216,7 @@ async function syncUserCommandScope(db, telegramApi3, telegramUserId, ownerIdVal
   }
 }
 __name(syncUserCommandScope, "syncUserCommandScope");
-async function syncCommandRegistryIfNeeded(db, telegramApi3, ownerIdValue) {
+async function syncCommandRegistryIfNeeded(db, telegramApi4, ownerIdValue) {
   if (!db) return;
   try {
     const current = await db.prepare(
@@ -2224,21 +2224,21 @@ async function syncCommandRegistryIfNeeded(db, telegramApi3, ownerIdValue) {
     ).first();
     if (current?.setting_value === COMMAND_SCHEMA_VERSION) return;
     const defaultOk = await setCommands(
-      telegramApi3,
+      telegramApi4,
       publicCommands(),
       defaultPrivateScope()
     );
     if (!defaultOk) return;
-    const ownerId = ownerIdValue && /^\d+$/.test(ownerIdValue.trim()) ? Number(ownerIdValue.trim()) : null;
-    if (ownerId && Number.isSafeInteger(ownerId)) {
-      await syncUserCommandScope(db, telegramApi3, ownerId, ownerIdValue);
+    const ownerId2 = ownerIdValue && /^\d+$/.test(ownerIdValue.trim()) ? Number(ownerIdValue.trim()) : null;
+    if (ownerId2 && Number.isSafeInteger(ownerId2)) {
+      await syncUserCommandScope(db, telegramApi4, ownerId2, ownerIdValue);
     }
     const admins = await db.prepare(
       `SELECT telegram_user_id FROM admin_roles
        WHERE role='sudo_admin' ORDER BY telegram_user_id`
     ).all();
     for (const row of admins.results ?? []) {
-      await syncUserCommandScope(db, telegramApi3, row.telegram_user_id, ownerIdValue);
+      await syncUserCommandScope(db, telegramApi4, row.telegram_user_id, ownerIdValue);
     }
     await db.prepare(
       `INSERT INTO bot_settings (setting_key, setting_value, updated_by, updated_at)
@@ -2247,7 +2247,7 @@ async function syncCommandRegistryIfNeeded(db, telegramApi3, ownerIdValue) {
          setting_value=excluded.setting_value,
          updated_by=excluded.updated_by,
          updated_at=CURRENT_TIMESTAMP`
-    ).bind(COMMAND_SCHEMA_VERSION, ownerId ?? 0).run();
+    ).bind(COMMAND_SCHEMA_VERSION, ownerId2 ?? 0).run();
   } catch {
   }
 }
@@ -2772,8 +2772,8 @@ __name(faqChangeSummary, "faqChangeSummary");
 async function notifyFaqChange(db, ownerIdValue, actorId, result, send) {
   if (!db) return;
   const targets = /* @__PURE__ */ new Set();
-  const ownerId = parseOwnerId2(ownerIdValue);
-  if (ownerId !== null) targets.add(ownerId);
+  const ownerId2 = parseOwnerId2(ownerIdValue);
+  if (ownerId2 !== null) targets.add(ownerId2);
   for (const id of await adminIds(db)) targets.add(id);
   const text = await faqChangeSummary(db, result, actorId);
   for (const target of targets) {
@@ -3272,9 +3272,9 @@ async function humanHandoff(env, message, language, questionId, reason) {
   });
   if (!caseId) return;
   if (!destination) {
-    const ownerId = Number(env.BOT_OWNER_TELEGRAM_ID ?? "");
-    if (Number.isSafeInteger(ownerId)) {
-      await sendMessage(env, ownerId, `Human handoff warning
+    const ownerId2 = Number(env.BOT_OWNER_TELEGRAM_ID ?? "");
+    if (Number.isSafeInteger(ownerId2)) {
+      await sendMessage(env, ownerId2, `Human handoff warning
 Case #${caseId} remains queued in D1 because no staff destination is configured.`);
     }
     return;
@@ -3462,7 +3462,169 @@ var runtime_entry_default = {
     return index_default.fetch(request, env);
   }
 };
-export {
-  runtime_entry_default as default
+
+// src/secure_entry.ts
+function json3(body, status = 200) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "content-type": "application/json; charset=utf-8" }
+  });
+}
+__name(json3, "json");
+function ownerId(env) {
+  const raw = env.BOT_OWNER_TELEGRAM_ID?.trim();
+  if (!raw || !/^\d+$/.test(raw)) return null;
+  const parsed = Number(raw);
+  return Number.isSafeInteger(parsed) ? parsed : null;
+}
+__name(ownerId, "ownerId");
+function commandName2(text) {
+  return text.trim().split(/\s+/, 1)[0].toLowerCase().replace(/@[^\s]+$/, "");
+}
+__name(commandName2, "commandName");
+function privateChat2(message) {
+  return Boolean(message.from && (message.chat.type === "private" || message.chat.id === message.from.id));
+}
+__name(privateChat2, "privateChat");
+async function telegramApi3(env, method, body) {
+  if (!env.TELEGRAM_BOT_TOKEN) return null;
+  try {
+    const response = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/${method}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body)
+    });
+    if (!response.ok) return null;
+    const payload = await response.json();
+    return payload?.result ?? null;
+  } catch {
+    return null;
+  }
+}
+__name(telegramApi3, "telegramApi");
+async function sendMessage2(env, chatId, text, keyboard) {
+  await telegramApi3(env, "sendMessage", {
+    chat_id: chatId,
+    text,
+    reply_markup: keyboard
+  });
+}
+__name(sendMessage2, "sendMessage");
+async function deleteMessage(env, chatId, messageId) {
+  await telegramApi3(env, "deleteMessage", { chat_id: chatId, message_id: messageId });
+}
+__name(deleteMessage, "deleteMessage");
+async function activeAiSetupState(db, telegramUserId) {
+  if (!db) return null;
+  try {
+    const row = await db.prepare(
+      `SELECT state FROM admin_sessions
+       WHERE telegram_user_id=?1 AND state LIKE 'awaiting_ai_%'`
+    ).bind(telegramUserId).first();
+    return row?.state ?? null;
+  } catch {
+    return null;
+  }
+}
+__name(activeAiSetupState, "activeAiSetupState");
+async function clearAiSetup(db, telegramUserId) {
+  if (!db) return false;
+  try {
+    const result = await db.prepare(
+      `DELETE FROM admin_sessions
+       WHERE telegram_user_id=?1 AND state LIKE 'awaiting_ai_%'`
+    ).bind(telegramUserId).run();
+    return (result.meta.changes ?? 0) > 0;
+  } catch {
+    return false;
+  }
+}
+__name(clearAiSetup, "clearAiSetup");
+async function forward(request, raw, env) {
+  const forwarded = new Request(request.url, {
+    method: request.method,
+    headers: request.headers,
+    body: raw
+  });
+  return runtime_entry_default.fetch(forwarded, env);
+}
+__name(forward, "forward");
+async function handleWebhook2(request, env) {
+  if (env.TELEGRAM_WEBHOOK_SECRET) {
+    const supplied = request.headers.get("X-Telegram-Bot-Api-Secret-Token");
+    if (supplied !== env.TELEGRAM_WEBHOOK_SECRET) return json3({ ok: false }, 401);
+  }
+  const raw = await request.text();
+  let update;
+  try {
+    update = JSON.parse(raw);
+  } catch {
+    return forward(request, raw, env);
+  }
+  const message = update.message;
+  if (!message?.from || !message.text) return forward(request, raw, env);
+  const configuredOwner = ownerId(env);
+  if (configuredOwner === null || message.from.id !== configuredOwner) {
+    return forward(request, raw, env);
+  }
+  const text = message.text.trim();
+  const command = commandName2(text);
+  const state = await activeAiSetupState(env.DB, configuredOwner);
+  if (command === "/start") {
+    if (state) await clearAiSetup(env.DB, configuredOwner);
+    return forward(request, raw, env);
+  }
+  if (command === "/cancel" || command === "/reset") {
+    const cleared = await clearAiSetup(env.DB, configuredOwner);
+    await sendMessage2(
+      env,
+      message.chat.id,
+      cleared ? "AI setup cancelled and reset. Use /ai to start again." : "No AI setup session is active. Use /ai to open AI settings."
+    );
+    return json3({ ok: true });
+  }
+  if (!state) return forward(request, raw, env);
+  if (!privateChat2(message)) {
+    await sendMessage2(
+      env,
+      message.chat.id,
+      "AI provider setup is active, but API keys can only be entered in a private chat with this bot. Open the bot privately and continue there, or use /cancel to reset the setup."
+    );
+    return json3({ ok: true });
+  }
+  if (text.startsWith("/")) {
+    if (command === "/ai") {
+      await clearAiSetup(env.DB, configuredOwner);
+      return forward(request, raw, env);
+    }
+    await sendMessage2(
+      env,
+      message.chat.id,
+      "AI setup is waiting for input. Send the requested value, or use /cancel, /reset, /start, or /ai to leave this setup."
+    );
+    return json3({ ok: true });
+  }
+  const setup = await consumeAiSetupText(env, configuredOwner, text);
+  if (!setup.handled) return forward(request, raw, env);
+  if (setup.secretInput) {
+    await deleteMessage(env, message.chat.id, message.message_id);
+  }
+  if (setup.text) {
+    await sendMessage2(env, message.chat.id, setup.text, setup.keyboard);
+  }
+  return json3({ ok: true });
+}
+__name(handleWebhook2, "handleWebhook");
+var secure_entry_default = {
+  async fetch(request, env) {
+    const url = new URL(request.url);
+    if (request.method === "POST" && url.pathname === "/telegram/webhook") {
+      return handleWebhook2(request, env);
+    }
+    return runtime_entry_default.fetch(request, env);
+  }
 };
-//# sourceMappingURL=runtime_entry.js.map
+export {
+  secure_entry_default as default
+};
+//# sourceMappingURL=secure_entry.js.map
