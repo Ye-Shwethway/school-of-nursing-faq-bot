@@ -164,8 +164,6 @@ async function moveReturnButtonToLatest(env: Env, message: TelegramMessage): Pro
   if (!target) return false;
 
   const previous = await getLatestControlMessage(env.DB, message.from.id, target.chatId);
-  await removeReturnButton(env, target.chatId, previous);
-
   const sent = await telegramApi(env, "sendMessage", {
     chat_id: target.chatId,
     text: `${monitoringUserHeader(message.from)} · Human control\n${message.text}`,
@@ -179,6 +177,7 @@ async function moveReturnButtonToLatest(env: Env, message: TelegramMessage): Pro
 
   const sentId = Number(sent?.message_id);
   if (Number.isSafeInteger(sentId)) {
+    await removeReturnButton(env, target.chatId, previous);
     await setLatestControlMessage(env.DB, message.from.id, target.chatId, sentId);
   }
   return true;
