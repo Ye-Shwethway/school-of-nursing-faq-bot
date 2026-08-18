@@ -15,7 +15,7 @@ Read in order:
 Treat live repository plus verified Cloudflare/Telegram evidence as authoritative over remembered chat context.
 
 ## Current checkpoint
-Production infrastructure, operational data, Telegram webhook, Owner identity binding and Owner command registry are working under the simplified main-only production model. The current active issue is production AI-provider setup: submitting a Gemini API key previously appeared to stall because malformed `AI_CONFIG_MASTER_KEY` input can throw during encryption.
+Production infrastructure, operational data, Telegram webhook, Owner identity binding, AI provider setup and main-only deployment pipeline are working. The latest behavior slice makes `/language` visible in the Telegram command menu for every user role instead of supporting it as a hidden command only.
 
 ## Main-only operating model
 - `main` is the only active development/canonical/production branch.
@@ -26,12 +26,12 @@ Production infrastructure, operational data, Telegram webhook, Owner identity bi
 
 Relevant `main` pushes automatically validate and deploy production.
 
-## AI master-key contract and recovery
+## AI master-key contract
 `AI_CONFIG_MASTER_KEY` must be a Cloudflare `secret_text` containing Base64 for exactly 32 random bytes. It is imported directly as the AES-GCM key used to encrypt/decrypt provider API credentials stored in D1.
 
 A fresh master key is valid, but credentials encrypted with an older key cannot be decrypted with the new one and must be entered again through `/ai`.
 
-`src/secure_entry.ts` now catches exceptions from AI credential setup. If encryption/configuration fails, the submitted API-key message is best-effort deleted and the Owner receives an explicit configuration error instead of the webhook path silently stopping.
+`src/secure_entry.ts` catches exceptions from AI credential setup. If encryption/configuration fails, the submitted API-key message is best-effort deleted and the Owner receives an explicit configuration error instead of the webhook path silently stopping.
 
 ## Single production pipeline
 The production workflow performs:
@@ -46,7 +46,7 @@ The production workflow performs:
 - runtime-binding postflight
 - production health verification
 - one-time Owner command resync
-- exact Telegram read-back of all 12 Owner commands
+- exact Telegram read-back of all 13 Owner commands
 
 Required production runtime bindings include:
 - `DB` (`d1`)
@@ -62,17 +62,25 @@ Required production runtime bindings include:
 - approved FAQ/manual/admin/staff/settings data was bootstrapped
 - Telegram webhook cutover completed green
 - `/start` works through production
-- Owner commands are visible after exact read-back verification
-- `BOT_OWNER_TELEGRAM_ID` was restored as a Cloudflare secret
+- Owner identity is recognized after restoring `BOT_OWNER_TELEGRAM_ID` as a Cloudflare secret
+- production Gemini provider setup is working after correcting `AI_CONFIG_MASTER_KEY`
 
-## Owner commands
+## Command registry
+Public menu for all users:
+`/start`, `/language`, `/whoami`.
+
+Sudo Admin inherits public commands and adds:
+`/admin`, `/admins`, `/faq`, `/adminmanual`.
+
 Expected Owner menu:
-`/start`, `/whoami`, `/admin`, `/admins`, `/faq`, `/adminmanual`, `/sudo`, `/ai`, `/staff`, `/ownermanual`, `/cancel`, `/reset`.
+`/start`, `/language`, `/whoami`, `/admin`, `/admins`, `/faq`, `/adminmanual`, `/sudo`, `/ai`, `/staff`, `/ownermanual`, `/cancel`, `/reset`.
+
+`src/command_menu.ts` command schema revision is `3` for this visible-language change. Production deployment verification expects exact Owner read-back of 13 commands.
 
 ## Environment isolation
 Historical TEST and production used the same Telegram bot token, which previously allowed TEST health checks to send misleading deployment notices to the live Owner chat.
 
-Canonical runtime now suppresses deployment-online notices unless `APP_ENV === "production"`.
+Canonical runtime suppresses deployment-online notices unless `APP_ENV === "production"`.
 
 ## Runtime contract
 `Dynamic FAQ -> Primary AI -> Fallback AI -> Human Handoff`
@@ -91,11 +99,10 @@ Wrangler entrypoint: `src/manual_entry.ts`
 9. `index.ts` — fallback + `/health`
 
 ## Next exact sequence
-1. set production `AI_CONFIG_MASTER_KEY` to a valid Base64-encoded 32-byte random secret
-2. verify the production pipeline carrying the hardened `secure_entry.ts` is green
-3. `/ai` -> Google Gemini -> submit the Gemini API key in Owner private chat
-4. verify key-message deletion and encrypted `ai_provider_credentials` save
-5. Fetch models, choose/bind model, then verify grounded AI + fallback/handoff
+1. verify the production pipeline carrying command schema revision 3 is green
+2. confirm `/language` is visible in both Owner and normal-user Telegram command menus
+3. run any remaining grounded AI + fallback/handoff smoke checks
+4. continue directly on `main`
 
 ## Current migrations
 0001 through 0010; canonical 0010 is `migrations/0010_manual_newline_cleanup.sql`.
