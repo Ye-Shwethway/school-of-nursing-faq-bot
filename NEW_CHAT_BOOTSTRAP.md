@@ -18,7 +18,7 @@ Treat live repository plus verified Cloudflare/Telegram evidence as authoritativ
 
 ## Current checkpoint
 
-The project is main-only and production-live, with the **Escalation Inbox + AI-assisted multilingual FAQ authoring slice implemented on `main` but not yet declared production-green until the final workflow/read-back is verified**.
+The project is main-only and production-live. Owner private-chat `/cases` list/detail has been live-accepted. The latest refinement adds **confirmed permanent deletion for typo/test/junk escalation cases** on `main`; final production workflow verification for this refinement is still required.
 
 Current implemented surfaces include:
 
@@ -33,6 +33,7 @@ Current implemented surfaces include:
 - `/cases` Owner/Sudo Escalation Inbox
 - Open / Claimed / Resolved / All case pager, 6 per page
 - privileged case details with user identity, question, status, timestamps, reason for new cases, claimant, and linked FAQ
+- confirmed `🗑 Delete Case` flow with explicit permanent-delete confirmation
 - escalation → Add as FAQ / Find Related FAQ workflows
 - persisted escalation reason and case-to-FAQ linkage
 - Staff Inbox Take Over / Resolve / Return-to-AI operational controls on original escalation messages
@@ -40,7 +41,7 @@ Current implemented surfaces include:
 - Owner identity and Sudo Admin roles
 - one-shot `/language`: save → delete picker → send localized confirmation
 - Staff Inbox per-user topics, presence, notifications, reply relay, and returning-staff reminder
-- editable Owner/Admin manuals including the new escalation/FAQ workflow
+- editable Owner/Admin manuals including escalation, deletion, and multilingual FAQ workflows
 - Owner `/clearmessage` best-effort only
 
 ## Main-only operating model
@@ -74,6 +75,20 @@ Views:
 Lists are newest-first and paginated at 6 cases per page. Case details are privileged and may show Telegram identity, language, original question, status, created/resolved timestamps, claimant, stored reason, and linked FAQ.
 
 The `/cases` UI is for archive/review/knowledge management. Live Take Over / Resolve controls remain on the original Staff Inbox escalation message so staff reply context remains correct.
+
+### Case deletion
+
+Case detail includes `🗑 Delete Case` for Owner/Sudo. It must never delete immediately.
+
+Flow:
+
+1. press `🗑 Delete Case`
+2. bot shows the case question plus a destructive-action warning
+3. `← Cancel` returns to the case unchanged
+4. `🗑 Yes, Delete Permanently` removes the `escalation_cases` row and its related `escalation_messages`
+5. return to the same filtered pager with refreshed counts/list
+
+Deletion intentionally does **not** remove the Telegram user record, the original `questions` log, or an FAQ already created/linked from that case. No schema migration is required for deletion itself.
 
 Migration `0016_escalation_knowledge_pipeline.sql` adds `reason`, `linked_faq_key`, and a linked-FAQ index. Older cases may not have a stored reason.
 
@@ -169,7 +184,7 @@ Authorized staff operations remain:
 - topic reply relay to original user
 - returning-unavailable pending-case reminder
 
-`/cases` does not replace the operational Staff Inbox message. It adds a durable searchable/reviewable knowledge-management view over stored escalation records.
+`/cases` does not replace the operational Staff Inbox message. It adds a durable reviewable knowledge-management view over stored escalation records.
 
 ## Manuals
 
@@ -181,15 +196,16 @@ Manual-related migrations:
 - `0014_manual_returning_staff_prompt.sql`
 - `0015_owner_manual_main_only_cleanup.sql`
 - `0017_manual_escalation_knowledge_pipeline.sql`
+- `0018_manual_case_delete.sql`
 
-`0017` adds Owner/Admin instructions for `/cases`, Add as FAQ, Find Related FAQ, one-language authoring, Primary/Fallback AI translation, review/approval, manual fallback, and permissions.
+`0017` adds Owner/Admin instructions for `/cases`, Add as FAQ, Find Related FAQ, one-language authoring, Primary/Fallback AI translation, review/approval, manual fallback, and permissions. `0018` extends the same manual section with confirmed case deletion and explicitly documents what deletion preserves.
 
 ## Canonical Worker stack
 
 Wrangler entrypoint: `src/faq_ai_entry.ts`.
 
 1. `faq_ai_entry.ts` — intercept FAQ-authoring text safely before staff relay + execute AI multilingual generation with production master key
-2. `cases_entry.ts` — `/cases`, cases callback navigation, private/active-Staff-Inbox context enforcement
+2. `cases_entry.ts` — `/cases`, cases callback navigation/context enforcement
 3. `staff_presence_entry.ts` — availability, `/noti`, returning-staff reminder, topic reply relay
 4. `clear_message_entry.ts` — best-effort Staff Inbox cleanup
 5. `manual_entry.ts` — manuals + command sync
@@ -221,23 +237,22 @@ Current exact read-back expects 18 commands including `/cases`.
 
 ## Current migrations
 
-`0001` through `0017`.
-Latest: `migrations/0017_manual_escalation_knowledge_pipeline.sql`.
+`0001` through `0018`.
+Latest: `migrations/0018_manual_case_delete.sql`.
 
 ## Validation boundary / next exact sequence
 
-Do not state this feature is production-green until the latest production workflow is verified successful. The final validation must cover typecheck, migrations, deploy, health, and 18-command Owner read-back.
+Do not state the delete refinement is production-green until the latest production workflow is verified successful.
 
-After that, live Telegram acceptance should verify:
+Live Telegram acceptance after deploy:
 
-1. `/cases` from Owner private chat
-2. `/cases` from Sudo in active Staff Inbox
-3. historical case reason fallback and a newly-created case with persisted reason
-4. case → `＋ Add as FAQ`
-5. AI multilingual generation and preview
-6. manual fallback path
-7. `✅ Approve & Save`
-8. approved result visible to normal users in `/faq`
+1. open a disposable/typo case from `/cases`
+2. press `🗑 Delete Case`
+3. confirm the warning screen appears
+4. press `← Cancel` and verify the case remains
+5. reopen delete and press `🗑 Yes, Delete Permanently`
+6. verify the case disappears and pager/counts refresh
+7. verify unrelated user records, source question logs, and FAQs are untouched
 
 ## Documentation rule
 
