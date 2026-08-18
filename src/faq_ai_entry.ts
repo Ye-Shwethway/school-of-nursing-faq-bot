@@ -1,4 +1,4 @@
-import app from "./cases_entry";
+import app from "./input_quality_entry";
 import { consumeFaqAdminText, handleFaqCallback, type FaqUiResponse } from "./faq_admin";
 import { notifyFaqChange } from "./faq_notify";
 
