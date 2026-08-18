@@ -20,9 +20,14 @@ Treat live repository plus verified Cloudflare/Telegram evidence as authoritativ
 
 The project is production-live and main-only.
 
-Current working surfaces include:
+Current working/currently implemented surfaces include:
 
 - multilingual deterministic FAQ
+- public `/faq` command for normal users
+- role-aware FAQ library: read-only localized browsing for normal users; management controls for Owner/Sudo
+- paginated FAQ list with human-readable localized question labels instead of internal slugs
+- compact two-column FAQ rows only for short labels; long labels use full rows
+- localized public FAQ detail view
 - grounded configurable Primary/Fallback AI
 - production Telegram webhook
 - Owner identity and Sudo Admin roles
@@ -41,7 +46,7 @@ Current working surfaces include:
 - Owner manual cleaned of stale TEST deployment guidance
 - Owner `/clearmessage` retained as best-effort only
 
-There is no active required implementation slice at this checkpoint.
+There is no additional active required implementation slice after the public FAQ library UX change.
 
 ## Main-only operating model
 
@@ -53,23 +58,42 @@ There is no active required implementation slice at this checkpoint.
 
 Do not revive a TEST→main promotion model unless the Owner explicitly redesigns the architecture.
 
+## Public FAQ library contract
+
+`/faq` is public.
+
+Normal users:
+
+- can browse active FAQs only
+- see labels in their saved Burmese, English, or Simplified Chinese language
+- see approved questions/topics rather than internal keys
+- receive 8-item pagination with compact two-column packing when labels are short
+- see only the selected-language question and answer in detail view
+- never receive Add/Edit/Disable/Restore, inactive FAQ, key, version, or revision controls
+
+Owner/Sudo retain the `/faq` management surface with Browse, Add, Inactive, Help, Edit, Disable, and Restore.
+
+The Telegram UX layer already handles FAQ callback navigation edit-in-place first and appends the shared `✕ Close` control.
+
+No D1 migration was required for this slice.
+
 ## Command registry
 
 Public:
 
-`/start`, `/language`, `/whoami`
+`/start`, `/language`, `/faq`, `/whoami`
 
 Sudo Admin adds:
 
-`/admin`, `/admins`, `/faq`, `/adminmanual`, `/noti`, `/available`, `/unavailable`
+`/admin`, `/admins`, `/adminmanual`, `/noti`, `/available`, `/unavailable`
 
 Owner additionally has:
 
 `/sudo`, `/ai`, `/staff`, `/clearmessage`, `/ownermanual`, `/cancel`, `/reset`
 
-Command schema revision: `5`.
+Command schema revision: `6`.
 
-Production exact Owner read-back target: **17 commands**.
+Production exact Owner read-back target remains **17 commands**. Privileged command ordering remains compatible with the existing workflow read-back contract.
 
 ## Staff presence / notification behavior
 
@@ -169,7 +193,7 @@ Wrangler entrypoint: `src/staff_presence_entry.ts`.
 5. `latest_return_entry.ts` — latest Return-to-AI control
 6. `monitoring_message_entry.ts` — FAQ/AI/handoff + availability-aware copy
 7. `staff_ux_entry.ts` — Staff Inbox UX + Sudo invite lifecycle
-8. `ux_entry.ts`
+8. `ux_entry.ts` — edit-in-place FAQ/AI/monitoring navigation + shared close control
 9. `secure_entry.ts`
 10. `runtime_entry.ts`
 11. `index.ts`
@@ -197,11 +221,11 @@ Latest: `migrations/0015_owner_manual_main_only_cleanup.sql`.
 
 ## Documentation checkpoint
 
-On 2026-08-18, root/docs documentation was reconciled against the live main-only production architecture. In particular, retired TEST deployment/promotion instructions were removed or rewritten.
+On 2026-08-18, root/docs documentation was reconciled against the live main-only production architecture and updated with the public role-aware FAQ library contract.
 
 ## Next exact sequence
 
-No implementation is currently required.
+No implementation is currently required after this slice.
 
 When a new requirement or verified production defect arrives:
 
