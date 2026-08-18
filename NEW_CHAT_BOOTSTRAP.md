@@ -14,41 +14,43 @@ Historical branch: `test` (dormant/reference-only)
 Live repository plus verified Cloudflare/Telegram evidence outranks remembered chat context.
 
 ## Current checkpoint
-The project is main-only and production-live. FAQ-first onboarding, false-escalation filtering, the rotated Telegram bot token, and automatic webhook cutover are live-accepted.
+The project is main-only and production-live. FAQ-first onboarding, false-escalation filtering, rotated Telegram bot token + automatic webhook cutover, and rotated AI master-key credential save are live-accepted.
 
-Newest issue: after rotating `AI_CONFIG_MASTER_KEY`, Owner could open `/ai` and select Gemini but submitting a Gemini API key produced no visible response. The replacement master-key string was independently validated as Base64 decoding to exactly 32 bytes, so the newest source slice hardens AI credential-message routing rather than replacing the key again.
+Newest observed issue: normal-user questions that correctly escalated to Staff Inbox could leave the user's private chat silent. Live evidence showed case/group delivery succeeded, including escalation reason and `BOT · Human handoff`, while no localized handoff acknowledgement appeared in the user chat.
 
 Newest implementation on `main`:
-- new `src/ai_setup_entry.ts` consumes active Owner-private `awaiting_ai_*` text before FAQ/cases/monitoring/UX lower routing
-- canonical `consumeAiSetupText()` remains the encryption/storage authority
-- secret input is deleted after processing
-- success/error feedback is explicit
-- failure to send the setup result is no longer silently acknowledged
-- `rate_limit_entry.ts` now forwards to `ai_setup_entry.ts`
-- `secure_entry.ts` retains its old lower AI-setup path only as a fallback
-- production deploy notice now treats Owner delivery as authoritative; Sudo delivery cannot suppress an Owner retry
+- `src/monitoring_message_entry.ts` now sends the user-facing handoff acknowledgement with reply-first + plain-message fallback
+- preferred path remains a reply to the original question
+- if Telegram rejects/fails the reply-target form, the same localized acknowledgement is retried as a plain private message
+- Staff Inbox delivery remains independent; group success no longer counts as sufficient user-facing UX
+- `docs/TELEGRAM_DESIGN_RULES.md` now explicitly requires reliable handoff acknowledgement
 
-Do not call this newest slice production-green until workflow + live `/ai` credential acceptance are verified.
+Do not call this newest handoff slice production-green until workflow + live normal-user handoff acceptance are verified.
+
+## Handoff acknowledgement contract
+For a meaningful unresolved School question that enters human handoff:
+1. question is logged pending
+2. escalation case is created and routed to Staff Inbox
+3. normal user must receive localized handoff acknowledgement in private chat
+4. first attempt should reply to the original question
+5. if reply-target delivery fails, retry immediately as a plain private message
+6. Staff Inbox/topic/mirroring success must never substitute for this user-facing acknowledgement
+7. do not create a duplicate case solely to retry the user message
 
 ## AI credential setup contract
-`AI_CONFIG_MASTER_KEY` must be Base64 for exactly 32 random bytes.
-
-Rotation semantics:
-- credentials encrypted under the previous master key cannot be decrypted with the new master key
-- after rotating the secret, re-enter each provider API key through `/ai`
-- the newly submitted provider key is encrypted under the current master key and upserted into `ai_provider_credentials`
+`AI_CONFIG_MASTER_KEY` must be Base64 for exactly 32 random bytes. Credentials encrypted under an old master key cannot be decrypted after rotation; provider API keys must be entered again through `/ai`.
 
 Active setup flow:
 1. Owner runs `/ai` privately
 2. selects provider
-3. provider setup creates `awaiting_ai_*` session
-4. next non-command private Owner text is intercepted by `ai_setup_entry.ts`
-5. `consumeAiSetupText()` validates/encrypts/stores it
-6. submitted secret message is deleted
-7. bot must send an explicit success/error message
-8. success offers `Fetch models`
-9. model fetch decrypts with the current master key and validates provider access
-10. test ping must pass before binding Primary/Fallback
+3. `awaiting_ai_*` session is created
+4. `ai_setup_entry.ts` intercepts the next non-command Owner-private text
+5. canonical `consumeAiSetupText()` encrypts/stores it
+6. secret input message is deleted
+7. explicit success/error is returned
+8. Fetch models → Test Ping → bind
+
+This flow is now live-accepted for Gemini after the master-key rotation.
 
 ## Canonical Worker stack
 Wrangler entrypoint: `src/interaction_guard_entry.ts`.
@@ -69,18 +71,13 @@ Every production deploy:
 3. arm one-time `telegram_cutover_nonce`
 4. call `/ops/telegram/cutover`
 5. runtime calls Telegram `setWebhook` with current bot token + webhook secret
-6. `getWebhookInfo` must read back the production `/telegram/webhook`
+6. `getWebhookInfo` must read back production `/telegram/webhook`
 7. exact Owner command registry verification must pass 19/19
 
 The current new bot is already responding to commands, proving inbound webhook delivery is working after token rotation.
 
 ## Deployment online notice contract
-A revision is claimed atomically. Owner is the authoritative recipient:
-- Owner send success keeps the claim
-- Owner send failure releases the claim for a later `/health` retry
-- Sudo notifications are best-effort only after Owner success
-- Sudo success cannot suppress an Owner retry
-- notice failure never fails health
+Owner is the authoritative recipient. Owner send failure releases the revision claim for later `/health` retry. Sudo success cannot suppress an Owner retry. Notice failure never fails health.
 
 ## Existing product surfaces
 - multilingual deterministic/dynamic FAQ
@@ -93,6 +90,7 @@ A revision is claimed atomically. Owner is the authoritative recipient:
 - Owner-only permanent ban/unban
 - deterministic Input Quality Gate
 - AI clarify-vs-handoff policy
+- reliable handoff acknowledgement fallback
 - editable manuals
 
 ## False escalation contract
@@ -105,19 +103,19 @@ Owner adds: `/sudo`, `/ai`, `/staff`, `/clearmessage`, `/ownermanual`, `/cancel`
 Command schema revision: **9**. Sudo total: **12**. Owner total: **19**.
 
 ## Migrations / manuals
-Current migration range: `0001` through `0026`. No new migration is required for the AI routing hardening slice.
+Current migration range: `0001` through `0026`. No migration is required for the handoff acknowledgement fallback.
 
 ## Next exact validation
 After the triggered production workflow is green:
-1. confirm new `🟢 Bot is Online!` reaches Owner for the new revision
-2. `/start`, `/language`, `/faq` still respond
-3. Owner `/ai` → Gemini → send API key
-4. submitted API-key message must disappear
-5. bot must immediately return either explicit success or explicit configuration error; silence is a failure
-6. on success, press `Fetch models`
-7. confirm Gemini model list loads
-8. select model → Test Ping → bind only after ping passes
-9. verify FAQ, false-escalation, limits/flood guard, `/cases`, and Staff Inbox remain intact
+1. normal user asks a meaningful School question not covered by approved context
+2. Staff Inbox/group receives one escalation case with the correct reason
+3. user private chat receives the localized handoff acknowledgement
+4. preferred: acknowledgement replies to the original question
+5. acceptable fallback: same acknowledgement arrives as a plain private message if reply targeting fails
+6. `/cases` contains one case only; no duplicate due to acknowledgement retry
+7. FAQ answers and grounded AI answers still reply normally
+8. AI setup remains usable
+9. false-escalation, inquiry-limit/flood guard, staff takeover, and manuals remain intact
 
 ## Documentation rule
 After every behavior/schema/deployment slice, keep `ROADMAP.md`, this file, manuals, and `docs/TELEGRAM_DESIGN_RULES.md` synchronized with repository/live reality.
