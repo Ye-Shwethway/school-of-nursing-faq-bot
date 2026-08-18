@@ -119,10 +119,18 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
   const callback = update.callback_query;
   if (callback?.data?.startsWith("limits:")) {
     if (callback.message && !await activeStaffGroup(env, callback.message)) {
-      await telegramApi(env, "answerCallbackQuery", { callback_query_id: callback.id, text: "Use /limits privately or in the active Staff Inbox." });
+      await telegramApi(env, "answerCallbackQuery", {
+        callback_query_id: callback.id,
+        text: "Use /limits privately or in the active Staff Inbox.",
+      });
       return json({ ok: true });
     }
-    const result = await handleLimitsCallback(env.DB, callback.from.id, env.BOT_OWNER_TELEGRAM_ID, callback.data);
+    const result = await handleLimitsCallback(
+      env.DB,
+      callback.from.id,
+      env.BOT_OWNER_TELEGRAM_ID,
+      callback.data,
+    );
     await telegramApi(env, "answerCallbackQuery", { callback_query_id: callback.id });
     if (callback.message) await editOrSend(env, callback.message, result);
     return json({ ok: true });
@@ -132,7 +140,11 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
   const text = message?.text?.trim() ?? "";
   if (message?.from && commandName(text) === "/limits") {
     if (!await activeStaffGroup(env, message)) {
-      await sendMessage(env, message, "Use /limits in a private chat with the bot or inside the active Staff Inbox group.");
+      await sendMessage(
+        env,
+        message,
+        "Use /limits in a private chat with the bot or inside the active Staff Inbox group.",
+      );
       return json({ ok: true });
     }
     const result = await handleLimitsCommand(env.DB, message.from.id, env.BOT_OWNER_TELEGRAM_ID, text);
@@ -145,8 +157,10 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
   if (message?.from && text && !text.startsWith("/") && isPrivate(message)) {
     const decision = await checkAndConsumeInquiry(env.DB, message.from.id, env.BOT_OWNER_TELEGRAM_ID);
     if (!decision.allowed) {
-      const language = await languageFor(env.DB, message.from.id);
-      await sendMessage(env, message, rateLimitMessage(language, decision));
+      if (decision.notify) {
+        const language = await languageFor(env.DB, message.from.id);
+        await sendMessage(env, message, rateLimitMessage(language, decision));
+      }
       return json({ ok: true });
     }
   }
