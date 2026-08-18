@@ -111,8 +111,15 @@ jobs:
       - name: Apply production D1 migrations
         run: npx wrangler d1 migrations apply DB --remote --config .wrangler.production.generated.json
 
+      - name: Prepare deployment change metadata
+        shell: bash
+        run: |
+          DEPLOY_CHANGE="$(git log -1 --pretty=%s "$GITHUB_SHA" | tr '\r\n' ' ' | cut -c1-180)"
+          echo "DEPLOY_CHANGE=$DEPLOY_CHANGE" >> "$GITHUB_ENV"
+          echo "Deployment change: $DEPLOY_CHANGE"
+
       - name: Deploy production Worker
-        run: npx wrangler deploy --config .wrangler.production.generated.json --var "APP_ENV:production" --var "DEPLOY_REVISION:${GITHUB_SHA}"
+        run: npx wrangler deploy --config .wrangler.production.generated.json --var "APP_ENV:production" --var "DEPLOY_REVISION:${GITHUB_SHA}" --var "DEPLOY_CHANGE:${DEPLOY_CHANGE}"
 
       - name: Verify production bindings after deploy
         shell: bash
@@ -207,6 +214,7 @@ jobs:
             echo "## PRODUCTION deployment"
             echo ""
             echo "- Commit: \`${GITHUB_SHA}\`"
+            echo "- Change: ${DEPLOY_CHANGE}"
             echo "- Source: \`main\`"
             echo "- Validation: PASS"
             echo "- Production D1 migrations: PASS"
