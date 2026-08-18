@@ -29,8 +29,9 @@ Implemented:
 - production runtime-binding preflight/postflight checks
 - AI API-key setup catches encryption/configuration failures and returns an explicit Owner-visible error instead of silently stopping
 - `/language` is a visible public command for all users and therefore inherited by Sudo/Admin and Owner command sets
-- Sudo Admin grant now also enables staff authorization and provisions private Staff Inbox access
+- Sudo Admin grant also enables staff authorization and provisions private Staff Inbox access
 - Staff Inbox can be explicitly switched to a new Telegram group from `/staff`
+- Owner-only `/clearmessage` cleanup for the active Staff Inbox with confirmation and bulk deletion
 
 ## Verified production checkpoint
 - production D1 and Worker are healthy
@@ -75,6 +76,21 @@ When switching from an old group to a new group:
 - historical mappings/messages in the old group are retained as history but are no longer the active destination
 - deleting/leaving the old Telegram group is an Owner-side Telegram action, not required for the bot-side switch
 
+## Staff Inbox cleanup
+Migration `0011_group_message_cleanup.sql` adds `group_message_ledger` for observed group message IDs.
+
+`/clearmessage` is Owner-only and works only inside the currently active Staff Inbox. It shows a destructive-action confirmation before deleting anything.
+
+After confirmation:
+- the bot calculates the recent observed message-ID range for the group
+- Telegram `deleteMessages` is used in batches of at most 100 IDs
+- failed batches are recursively narrowed so undeletable IDs do not block deletion of the rest
+- the confirmation/control messages are included in the cleanup range
+- the command leaves no normal success message in the Staff Inbox; limitations are reported privately to the Owner
+- one cleanup attempts at most the newest 5,000 message IDs
+
+Telegram Bot API only permits bot deletion of messages younger than 48 hours and the bot needs the appropriate group administrator deletion permission. The Bot API does not expose general chat-history retrieval, so messages that existed before this ledger started cannot be guaranteed to be discovered retroactively.
+
 ## Single production workflow
 Canonical workflow: `.github/workflows/deploy-production.yml`
 
@@ -90,7 +106,7 @@ Relevant `main` pushes perform:
 9. runtime-binding postflight
 10. production `/health` verification requiring `environment=production`
 11. one-time nonce-gated Owner command resync
-12. exact Telegram `getMyCommands` read-back of all 13 Owner commands
+12. exact Telegram `getMyCommands` read-back of all 14 Owner commands
 
 Only this workflow remains active in `.github/workflows`.
 
@@ -102,7 +118,7 @@ Sudo Admin inherits the public set and adds:
 `/admin`, `/admins`, `/faq`, `/adminmanual`.
 
 Expected Owner commands:
-`/start`, `/language`, `/whoami`, `/admin`, `/admins`, `/faq`, `/adminmanual`, `/sudo`, `/ai`, `/staff`, `/ownermanual`, `/cancel`, `/reset`.
+`/start`, `/language`, `/whoami`, `/admin`, `/admins`, `/faq`, `/adminmanual`, `/sudo`, `/ai`, `/staff`, `/clearmessage`, `/ownermanual`, `/cancel`, `/reset`.
 
 Command schema revision is bumped whenever a visible command set changes so Telegram registration is refreshed.
 
@@ -110,27 +126,28 @@ Command schema revision is bumped whenever a visible command set changes so Tele
 `notifyDeploymentOnline()` is production-only. Historical TEST runtime must not inject deployment messages into the live Owner chat.
 
 ## Canonical Worker stack
-Wrangler enters `src/manual_entry.ts`.
+Wrangler enters `src/clear_message_entry.ts`.
 
-1. manual pager/edit/add + command sync
-2. deployment notice + production ops endpoints
-3. latest Return-to-AI control
-4. monitoring presentation / isolated handoff
-5. Staff Inbox UX + Sudo-to-staff access lifecycle
-6. Telegram UX polish
-7. secure AI setup interception
-8. dynamic FAQ/AI runtime
-9. compatibility fallback + `/health`
+1. Staff Inbox message ledger + Owner `/clearmessage`
+2. manual pager/edit/add + command sync
+3. deployment notice + production ops endpoints
+4. latest Return-to-AI control
+5. monitoring presentation / isolated handoff
+6. Staff Inbox UX + Sudo-to-staff access lifecycle
+7. Telegram UX polish
+8. secure AI setup interception
+9. dynamic FAQ/AI runtime
+10. compatibility fallback + `/health`
 
 ## Next exact work
-1. verify the Sudo invite / Staff Inbox switch production deployment completes green
-2. live-smoke one Sudo grant to a user who has already started the bot
-3. verify one-use Staff Inbox invite delivery and successful join
-4. live-smoke Staff Inbox switch only when a replacement group is actually needed
+1. verify migration 0011 + `/clearmessage` production deployment completes green
+2. live-smoke `/clearmessage` in the active Staff Inbox after a few test messages
+3. verify the bot has Telegram `can_delete_messages` permission if any IDs remain undeleted
+4. live-smoke Sudo invite delivery when needed
 5. continue feature work directly on `main` in small validated slices
 
 ## Current migrations
-0001 through 0010. Canonical 0010: `migrations/0010_manual_newline_cleanup.sql`.
+0001 through 0011. Canonical 0011: `migrations/0011_group_message_cleanup.sql`.
 
 ## Deferred validation debt
 - multiuser simultaneous live stress test
