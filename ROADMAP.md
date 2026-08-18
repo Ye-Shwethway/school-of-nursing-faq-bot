@@ -15,7 +15,7 @@ Production Telegram FAQ assistant for a university School of Nursing in Burmese,
 
 ## Current checkpoint
 
-Status: **ESCALATION INBOX + AI-ASSISTED MULTILINGUAL FAQ AUTHORING IMPLEMENTED ON MAIN; FINAL PRODUCTION WORKFLOW VERIFICATION REQUIRED**
+Status: **ESCALATION INBOX + CONFIRMED CASE DELETION + AI-ASSISTED MULTILINGUAL FAQ AUTHORING IMPLEMENTED ON MAIN; FINAL PRODUCTION WORKFLOW VERIFICATION REQUIRED**
 
 Current implemented surfaces include:
 
@@ -30,13 +30,14 @@ Current implemented surfaces include:
 - `/cases` Escalation Inbox for Owner/Sudo in private chat and the configured active Staff Inbox group
 - Open / Claimed / Resolved / All case filters with 6-item pager
 - case detail with user identity, language, status, question, persisted reason for new cases, claimant, timestamps, and linked FAQ
+- confirmed permanent deletion for typo/test/junk escalation cases
 - escalation-to-FAQ drafting through `＋ Add as FAQ`
 - related-FAQ review through `Find Related FAQ`
 - persisted escalation reason and durable case-to-FAQ link
 - existing Staff Inbox Take Over / Resolve / Return-to-AI operational flow
 - configurable grounded Primary/Fallback AI
 - Staff Inbox per-user topics, presence, notifications, reply relay, and returning-staff reminder
-- editable Owner/Admin manuals, now including escalation and multilingual FAQ workflows
+- editable Owner/Admin manuals, now including escalation, case deletion, and multilingual FAQ workflows
 - clean one-shot `/language`: save → remove picker → send one localized confirmation message
 
 ## Escalation Inbox
@@ -51,6 +52,8 @@ Allowed contexts:
 It is rejected in unrelated groups. The inbox displays Open, Claimed, Resolved, and All views, newest first, with 6 cases per page.
 
 Case details expose privileged operational information only: Telegram identity, language, question, status, timestamps, claimant, escalation reason when stored, and linked FAQ when present.
+
+Typo, accidental, test, or otherwise unwanted escalation cases can be removed from the case detail using `🗑 Delete Case`. Deletion always opens a confirmation screen first. `🗑 Yes, Delete Permanently` deletes the case and its `escalation_messages` history; `← Cancel` returns to the case. The user record, original `questions` log, and any already-created FAQ are intentionally preserved.
 
 Live Take Over / Resolve remains on the original Staff Inbox escalation message where staff reply context is correct. `/cases` is the archive/knowledge-management view.
 
@@ -145,8 +148,9 @@ Manual migrations now include:
 - `0014_manual_returning_staff_prompt.sql`
 - `0015_owner_manual_main_only_cleanup.sql`
 - `0017_manual_escalation_knowledge_pipeline.sql`
+- `0018_manual_case_delete.sql`
 
-Migration `0017` adds Owner and Admin sections covering `/cases`, escalation-to-FAQ drafting, one-language authoring, AI Primary/Fallback translation, explicit approval, manual fallback, and permissions.
+Migration `0017` adds Owner and Admin sections covering `/cases`, escalation-to-FAQ drafting, one-language authoring, AI Primary/Fallback translation, explicit approval, manual fallback, and permissions. Migration `0018` extends those sections with the confirmed permanent case-deletion workflow and its preservation boundaries.
 
 ## AI configuration contract
 
@@ -158,7 +162,7 @@ Canonical workflow: `.github/workflows/deploy-production.yml`.
 
 Relevant `main` pushes perform production binding preflight, dependency install/typecheck, local migration validation, Worker dry-run, remote migrations, production deploy, binding postflight, `/health`, nonce-gated Owner command resync, and exact Telegram Owner command read-back.
 
-The workflow now expects the 18-command Owner registry including `/cases`.
+The workflow expects the 18-command Owner registry including `/cases`.
 
 ## Canonical Worker stack
 
@@ -180,23 +184,22 @@ Wrangler entrypoint: `src/faq_ai_entry.ts`.
 
 ## Current migrations
 
-`0001` through `0017`.
+`0001` through `0018`.
 
-Latest canonical migration: `migrations/0017_manual_escalation_knowledge_pipeline.sql`.
+Latest canonical migration: `migrations/0018_manual_case_delete.sql`.
 
 ## Validation / next exact step
 
-Source, schema, command-registry contract, design rules, and manuals are implemented on `main`. Do not declare this slice production-green until the latest single production workflow is verified successful, including typecheck, migrations, deploy, health, and exact 18-command Owner read-back.
+Owner private-chat `/cases` has already been live-accepted for the inbox/list/detail surface. The confirmed case-deletion refinement is now implemented on `main` but must still pass the single production workflow before being called production-green.
 
 After deployment verification, perform a short Telegram acceptance check:
 
-- `/cases` in Owner private chat
-- `/cases` in active Staff Inbox as Sudo
-- open a historical and a new escalation case
-- `＋ Add as FAQ` from a case
-- AI translation success path
-- manual fallback path (or simulated AI-unavailable path)
-- `✅ Approve & Save`, then confirm the FAQ appears in the public `/faq` library
+- open a disposable/typo case in `/cases`
+- press `🗑 Delete Case`
+- verify confirmation screen appears and `← Cancel` returns without deletion
+- repeat and press `🗑 Yes, Delete Permanently`
+- verify the case disappears from pager/counts
+- verify unrelated user/FAQ data remains intact
 
 ## Deferred optional work
 
