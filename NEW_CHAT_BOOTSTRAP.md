@@ -32,6 +32,7 @@ Current implemented surfaces include:
 - production Telegram webhook
 - Owner identity and Sudo Admin roles
 - visible `/language`
+- one-shot language selector: a successful choice is saved, acknowledged by callback toast, and the selector message is deleted without a second persistent confirmation
 - Staff Inbox per-user topics
 - Take Over / Return to AI
 - Sudo-to-staff invite provisioning
@@ -55,6 +56,19 @@ Current implemented surfaces include:
 - relevant `main` pushes automatically validate and deploy production.
 
 Do not revive a TEST→main promotion model unless the Owner explicitly redesigns the architecture.
+
+## Language selector contract
+
+`/language` is a one-shot selector in the order `မြန်မာ` · `English` · `简体中文`.
+
+On a valid choice:
+
+- persist the user's language
+- acknowledge the choice with a short callback toast
+- delete the selector message
+- do not send a second persistent confirmation message
+
+Users can reopen the selector at any time with `/language`.
 
 ## Public FAQ library contract
 
@@ -168,7 +182,7 @@ Wrangler entrypoint: `src/staff_presence_entry.ts`.
 6. `monitoring_message_entry.ts` — FAQ/AI/handoff + availability-aware copy
 7. `staff_ux_entry.ts` — Staff Inbox UX + Sudo invite lifecycle
 8. `ux_entry.ts` — edit-in-place FAQ/AI/monitoring navigation + shared close control
-9. `secure_entry.ts`
+9. `secure_entry.ts` — secure AI setup interception + canonical one-shot language callback cleanup
 10. `runtime_entry.ts`
 11. `index.ts`
 
@@ -182,23 +196,13 @@ Wrangler entrypoint: `src/staff_presence_entry.ts`.
 
 Latest: `migrations/0015_owner_manual_main_only_cleanup.sql`.
 
-## Latest defect correction
+## Latest UX cleanup
 
-Verified defect: after `/faq` became public, an existing normal user's Telegram command menu could still omit it because an older chat-specific command scope shadowed the updated global public scope.
-
-Correction on `main`:
-
-- command schema bumped to revision 7
-- normal-user per-chat scopes are deleted instead of explicitly set
-- already-known normal users have stale overrides removed during registry synchronization
-- Owner/Sudo explicit private scopes remain intact
-- privileged command order stays aligned with the existing production read-back contract
-
-After production deployment, verify `/faq` appears for an already-existing normal user. If the Telegram client itself still shows a stale menu, reopen the bot chat/menu before treating it as a runtime failure.
+The language selector previously saved the selected language but left the old picker in chat and sent a separate confirmation message. The canonical behavior now treats language selection as a terminal one-shot action: save, callback-toast confirmation, delete picker, no extra persistent confirmation.
 
 ## Next exact sequence
 
-No further implementation is required unless this live verification fails or a new requirement arrives.
+No further implementation is required unless live verification fails or a new requirement arrives.
 
 For new work:
 
