@@ -1,4 +1,5 @@
 # Main-only production pipeline. Touching this file intentionally triggers a production validation/deploy run.
+# Fresh-run checkpoint after /clearmessage command-registry expansion to 14 commands.
 name: Deploy PRODUCTION to Cloudflare
 
 on:
