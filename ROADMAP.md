@@ -5,14 +5,14 @@ Last updated: 2026-08-18
 ## Goal
 Production Telegram FAQ assistant for a university School of Nursing in Burmese, English, and Simplified Chinese. Approved FAQ knowledge first, grounded configurable AI second, anonymous human staff handoff whenever automation cannot answer safely.
 
-## Branch policy
-- `test` = active development / live TEST validation
-- `main` = canonical production source
-- no direct feature implementation on `main`
-- production deployment remains guarded
+## Branch and deployment policy
+- `main` is the single active development, canonical, and production source branch.
+- historical `test` is dormant/reference-only.
+- no TEST workflows or TEST deployments remain active.
+- relevant `main` pushes run the single production pipeline automatically.
 
 ## Current foundation
-Status: PRODUCTION LIVE; OWNER COMMANDS VERIFIED; TEST TELEGRAM DEPLOYMENT NOTICES SUPPRESSED
+Status: PRODUCTION LIVE; MAIN-ONLY PIPELINE ACTIVE
 
 Implemented:
 - multilingual dynamic FAQ
@@ -20,55 +20,55 @@ Implemented:
 - encrypted configurable AI Primary/Fallback
 - grounded AI + human handoff
 - Staff Inbox monitoring and Take Over / Return to AI
-- TEST + guarded PRODUCTION deployment automation
 - editable/addable Owner/Admin manuals
-- production D1 bootstrap and Telegram webhook cutover
-- verified Owner command resync with Telegram read-back
+- production D1 bootstrap completed
+- production Telegram webhook cutover completed
+- Owner command registry verified through Telegram read-back
+- TEST deployment notices suppressed at runtime
+- TEST/one-time workflow clutter retired
 
 ## Verified production checkpoint
 - production D1 and Worker are healthy
 - production operational-data bootstrap completed green
 - production Telegram webhook cutover completed green
 - `/start` works through production
-- Owner command resync completed green and the Owner menu now shows the expected commands
-- production uses a fresh `AI_CONFIG_MASTER_KEY`; production AI provider credentials still need `/ai` setup
+- Owner menu shows the expected 12 commands after exact Telegram read-back verification
+- production uses a fresh `AI_CONFIG_MASTER_KEY`
+- production AI provider credential still needs `/ai` setup
+
+## Single production workflow
+Canonical workflow: `.github/workflows/deploy-production.yml`
+
+Relevant `main` pushes perform:
+1. dependency install
+2. typecheck
+3. isolated production Wrangler config generation
+4. local D1 migration validation
+5. production Worker dry-run bundle validation
+6. remote production D1 migrations
+7. production Worker deploy
+8. production `/health` verification requiring `environment=production`
+9. one-time nonce-gated Owner command resync
+10. exact Telegram `getMyCommands` read-back of all 12 Owner commands
+
+Only this workflow remains active in `.github/workflows`.
+
+## Retired workflows
+Removed from the live tree after successful completion/consolidation:
+- TEST deployment
+- TEST build/typecheck handoff workflow
+- production operational-data bootstrap
+- one-time Telegram production cutover
+- separate Owner command-resync workflow
+
+Their history remains available in Git.
 
 ## Owner command registry
 Expected Owner commands:
 `/start`, `/whoami`, `/admin`, `/admins`, `/faq`, `/adminmanual`, `/sudo`, `/ai`, `/staff`, `/ownermanual`, `/cancel`, `/reset`.
 
-Verified resync contract:
-- `POST /ops/telegram/owner-command-resync`
-- production-only, one-time D1 nonce gated
-- calls Telegram `setMyCommands`
-- immediately calls `getMyCommands`
-- requires exact ordered read-back of all 12 commands
-- `.github/workflows/production-owner-command-resync.yml` fails unless read-back is exact
-
-## TEST deployment-notice pollution fix
-Observed live symptom after production was already working:
-- Telegram showed `Environment: test` / revision `69f1434d`
-- that revision is a TEST-side command-resync commit, not the production revision
-
-Root cause:
-- TEST and PRODUCTION Workers use the same Telegram bot token
-- TEST `/health` invoked `notifyDeploymentOnline()` and could call Telegram `sendMessage` directly even though the bot webhook already pointed to PRODUCTION
-- therefore TEST deployment status messages polluted the live Owner chat and looked like production state
-
-Fix:
-- `notifyDeploymentOnline()` now returns immediately unless `APP_ENV === "production"`
-- TEST deployment still performs typecheck, migrations, deploy and `/health` verification
-- TEST no longer sends Owner/Admin online notices
-- `.github/workflows/deploy-test.yml` explicitly documents that Telegram online notices are suppressed in TEST
-- the next production deployment should emit a fresh `Environment: production` notice for its own revision
-
-## TEST CI cleanup
-`.github/workflows/test-typecheck.yml` is read-only, path-scoped, does not push generated artifacts back to `test`, includes all migrations in the handoff artifact, and uses `cancel-in-progress: false`.
-
-## Production operational-data bootstrap
-Copied allow-list: current FAQ entries, manuals, Sudo roles, staff membership, operator identity metadata, persona/monitoring/Staff Inbox/handoff settings.
-
-Not copied: ordinary user history, escalation history, conversation-control state, monitoring-topic mappings, setup sessions, encrypted AI credentials, AI cache/tests/model bindings.
+## Environment isolation rule
+`notifyDeploymentOnline()` is production-only. Historical TEST runtime must not inject deployment messages into the live Owner chat.
 
 ## Canonical Worker stack
 Wrangler enters `src/manual_entry.ts`.
@@ -84,11 +84,11 @@ Wrangler enters `src/manual_entry.ts`.
 9. compatibility fallback + `/health`
 
 ## Next exact work
-1. promote the production-only notice fix to `main`
-2. production resync workflow redeploys current main and verifies all 12 Owner commands again
-3. confirm the new online notice is `Environment: production`
-4. configure production AI provider/API key through `/ai`
-5. verify grounded AI, fallback and human handoff
+1. verify the consolidated main-only production pipeline completes green
+2. fix the remaining `/ai` Owner authorization inconsistency if still reproducible
+3. configure production AI provider/API key through `/ai`
+4. verify grounded AI, fallback and human handoff
+5. continue feature work directly on `main` in small validated slices
 
 ## Current migrations
 0001 through 0010. Canonical 0010: `migrations/0010_manual_newline_cleanup.sql`.
