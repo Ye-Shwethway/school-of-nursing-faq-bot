@@ -23,6 +23,7 @@ Production Telegram FAQ assistant for a university School of Nursing in Burmese,
 - Staff Inbox group with per-user forum topics or dedicated private responder
 - anonymous staff relay
 - atomic Take Over / Return to AI
+- editable Owner/Admin operating manuals stored separately from FAQ knowledge
 - public repo; no plaintext runtime credentials
 
 ## Foundation through live TEST
@@ -44,19 +45,50 @@ Verified live capabilities include:
 ## Current canonical Worker stack
 Wrangler enters:
 
-`src/deployment_notice_entry.ts`
+`src/manual_entry.ts`
 
 Layer order:
-1. `deployment_notice_entry.ts` — revision-aware online notification after successful health check
-2. `latest_return_entry.ts` — latest-message Return to AI control during human takeover
-3. `monitoring_message_entry.ts` — user/model-aware staff mirror headers and isolated inquiry/handoff presentation
-4. `staff_ux_entry.ts` — group-native `/staff` inline control panel and topic identity polish
-5. `ux_entry.ts` — typing indicator, reply-to, Close/Back, `/cancel`, `/reset`, stale-AI guard
-6. `secure_entry.ts` — secret/setup routing guard
-7. `runtime_entry.ts` — dynamic FAQ / AI / command integration
-8. `index.ts` — retained fallback / compatibility runtime
+1. `manual_entry.ts` — editable Owner/Admin manuals
+2. `deployment_notice_entry.ts` — revision-aware online notification after successful health check
+3. `latest_return_entry.ts` — latest-message Return to AI control during human takeover
+4. `monitoring_message_entry.ts` — user/model-aware staff mirror headers and isolated inquiry/handoff presentation
+5. `staff_ux_entry.ts` — group-native `/staff` inline control panel and topic identity polish
+6. `ux_entry.ts` — typing indicator, reply-to, Close/Back, `/cancel`, `/reset`, stale-AI guard
+7. `secure_entry.ts` — secret/setup routing guard
+8. `runtime_entry.ts` — dynamic FAQ / AI / command integration
+9. `index.ts` — retained fallback / compatibility runtime
 
 Do not bypass or independently reconstruct this stack.
+
+## Editable operating manuals
+Status: IMPLEMENTED ON `test`; LIVE TEST PENDING
+
+Commands:
+- `/ownermanual` — Owner read/edit
+- `/adminmanual` — Owner read/edit; Sudo Admin read-only
+
+Manual content is written for ordinary operators, not developers. It explains:
+- Bot / AI / Human Staff layers
+- normal question path
+- role-specific commands
+- FAQ maintenance
+- AI setup/primary/fallback behavior
+- Staff Inbox, monitoring, Take Over, Return to AI
+- deployment-online notices
+- authority and safety boundaries
+
+Migration 0009 adds:
+- `manual_sections`
+- `manual_revisions`
+
+Owner edit workflow:
+`Open manual -> Edit a section -> choose section -> send replacement text -> Preview -> Save/Discard`
+
+`/cancel` aborts a pending manual edit. Each saved change increments section version and archives the previous text.
+
+Manual storage is isolated from FAQ storage and must never affect deterministic FAQ matching or AI grounding.
+
+See `docs/OPERATOR_MANUALS.md`.
 
 ## Telegram UX polish
 Implemented on `test`:
@@ -68,6 +100,7 @@ Implemented on `test`:
 - Owner command menu includes `/cancel` and `/reset`
 - `/staff` inside the group opens an inline control panel
 - Staff Inbox can be bound from the current group without copying a group ID
+- role-scoped command menu includes `/adminmanual` for Sudo Admins and both manuals for Owner
 
 ## Staff monitoring presentation
 Each user has a separate Staff Inbox forum topic.
@@ -133,9 +166,13 @@ A new deployed revision sends `🟢 Bot is Online!` once to the configured Owner
 - 0006 conversation control version
 - 0007 latest control message
 - 0008 monitoring topic provision lock
+- 0009 editable operating manuals
 
 ## Current validation focus
 Before `main` promotion, keep testing bounded to live behavior:
+- Owner `/ownermanual` renders and edit Preview/Save/Discard works
+- Sudo Admin `/adminmanual` renders read-only
+- manual edits do not alter FAQ/AI knowledge behavior
 - multiple simultaneous users create/use distinct topics
 - same user sends two near-simultaneous first messages without duplicate topics
 - group handoff card remains inside the correct user topic
@@ -145,7 +182,7 @@ Before `main` promotion, keep testing bounded to live behavior:
 - no secrets/config regression after automated deployment
 
 ## Later slice
-After live-green multiuser/handoff validation:
+After live-green operational validation:
 - latency / route telemetry without secrets
 - provider/model performance comparison
 - answer presentation polish only where live UX shows a real need
