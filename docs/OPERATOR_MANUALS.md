@@ -29,34 +29,46 @@ The manuals explain:
 
 `/adminmanual`:
 - Owner can read and edit
-- Sudo Admins can read only
+- Sudo Admins can read and navigate pages only
 - normal users cannot open it
 
 Authorization is checked server-side using Telegram numeric identity and the existing role system.
+
+## Pager UX
+Manual browsing uses one Telegram message instead of emitting one message for every section.
+
+Opening a manual shows one section and inline controls:
+- `◀ Previous`
+- current page indicator such as `2/8`
+- `Next ▶`
+- Owner-only `✎ Edit this section`
+- `✕ Close`
+
+Previous/Next uses `editMessageText`, so the same message is reused and the chat stays clean.
 
 ## Editing workflow
 Manuals are section-based so the Owner can update only the part that changed.
 
 Owner flow:
 1. open `/ownermanual` or `/adminmanual`
-2. read the full manual, delivered section by section
-3. choose `Edit a section`
-4. choose the section
-5. send the complete replacement text in one message
-6. review the preview
-7. press `Save` or `Discard`
+2. navigate to the section
+3. tap `Edit this section`
+4. send the complete replacement text in one message
+5. review the preview
+6. press `Save` or `Discard`
 
 `/cancel` abandons an active manual edit before save.
 
 Section text is limited to 3,500 characters to keep Telegram rendering clean.
 
 ## Storage
-Migration:
-`migrations/0009_manuals.sql`
-
-Tables:
+Migration `migrations/0009_manuals.sql` creates:
 - `manual_sections`
 - `manual_revisions`
+
+Migration `migrations/0010_manual_newline_cleanup.sql` converts legacy literal `\\n` seed sequences into real line breaks in D1.
+
+`src/manual_store.ts` also normalizes legacy `\\n` sequences on read/save for compatibility.
 
 Every saved section increments its version and stores the prior version in `manual_revisions`.
 
@@ -69,7 +81,7 @@ Manual data is intentionally separate from:
 Editing a manual must never change what the bot treats as approved School knowledge.
 
 ## Runtime files
-- `src/manual_store.ts` — manual persistence and revisions
-- `src/manual_entry.ts` — Telegram commands, authorization, full-manual display, edit preview/save/discard
+- `src/manual_store.ts` — manual persistence, newline normalization and revisions
+- `src/manual_entry.ts` — Telegram commands, authorization, single-message pager, edit preview/save/discard
 
-The manual layer sits outside the existing runtime stack and passes all unrelated traffic through unchanged.
+The manual layer sits outside the existing runtime stack and passes unrelated traffic through unchanged.
