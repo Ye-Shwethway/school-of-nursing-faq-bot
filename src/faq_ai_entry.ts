@@ -90,6 +90,18 @@ async function notifyMutation(env: Env, actorId: number, result: FaqUiResponse):
   );
 }
 
+async function activeFaqDraftState(db: D1Database | undefined, userId: number): Promise<string | null> {
+  if (!db) return null;
+  try {
+    const row = await db.prepare(
+      `SELECT state FROM admin_sessions WHERE telegram_user_id=?1 AND state LIKE 'faq_draft_%'`,
+    ).bind(userId).first<{ state: string }>();
+    return row?.state ?? null;
+  } catch {
+    return null;
+  }
+}
+
 async function handleWebhook(request: Request, env: Env): Promise<Response> {
   if (env.TELEGRAM_WEBHOOK_SECRET) {
     const supplied = request.headers.get("X-Telegram-Bot-Api-Secret-Token");
@@ -141,6 +153,17 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
           );
         }
         await notifyMutation(env, message.from.id, result);
+        return json({ ok: true });
+      }
+
+      if (await activeFaqDraftState(env.DB, message.from.id)) {
+        await sendMessage(
+          env,
+          message.chat.id,
+          "An FAQ draft is waiting for a button action. Use Generate, Manual Fill, Approve/Save, or Discard on the draft message. Use /cancel to leave the workflow.",
+          undefined,
+          { messageThreadId: message.message_thread_id },
+        );
         return json({ ok: true });
       }
     } catch {
