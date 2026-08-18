@@ -9,6 +9,28 @@ export type ManualSection = {
   version: number;
 };
 
+function normalizeManualText(value: string): string {
+  return value.replace(/\\n/g, "\n");
+}
+
+function mapSection(row: {
+  manual_key: ManualKey;
+  section_key: string;
+  title: string;
+  body: string;
+  sort_order: number;
+  version: number;
+}): ManualSection {
+  return {
+    manualKey: row.manual_key,
+    sectionKey: row.section_key,
+    title: row.title,
+    body: normalizeManualText(row.body),
+    sortOrder: row.sort_order,
+    version: row.version,
+  };
+}
+
 export async function listManualSections(
   db: D1Database | undefined,
   manualKey: ManualKey,
@@ -27,14 +49,7 @@ export async function listManualSections(
     sort_order: number;
     version: number;
   }>();
-  return (rows.results ?? []).map((row) => ({
-    manualKey: row.manual_key,
-    sectionKey: row.section_key,
-    title: row.title,
-    body: row.body,
-    sortOrder: row.sort_order,
-    version: row.version,
-  }));
+  return (rows.results ?? []).map(mapSection);
 }
 
 export async function getManualSection(
@@ -55,14 +70,7 @@ export async function getManualSection(
     sort_order: number;
     version: number;
   }>();
-  return row ? {
-    manualKey: row.manual_key,
-    sectionKey: row.section_key,
-    title: row.title,
-    body: row.body,
-    sortOrder: row.sort_order,
-    version: row.version,
-  } : null;
+  return row ? mapSection(row) : null;
 }
 
 export async function updateManualSection(
@@ -75,6 +83,8 @@ export async function updateManualSection(
   const current = await getManualSection(db, manualKey, sectionKey);
   if (!current) return null;
 
+  const normalizedBody = normalizeManualText(body);
+
   await db.prepare(
     `INSERT INTO manual_revisions
       (manual_key, section_key, version, title, body, changed_by, changed_at)
@@ -85,7 +95,7 @@ export async function updateManualSection(
     `UPDATE manual_sections
      SET body=?3, version=version+1, updated_by=?4, updated_at=CURRENT_TIMESTAMP
      WHERE manual_key=?1 AND section_key=?2`,
-  ).bind(manualKey, sectionKey, body, actorId).run();
+  ).bind(manualKey, sectionKey, normalizedBody, actorId).run();
 
   return getManualSection(db, manualKey, sectionKey);
 }
