@@ -12,6 +12,12 @@ type PresenceRow = {
   schedule_enabled: number;
 };
 
+export type StaffAvailabilityTransition = {
+  telegramUserId: number;
+  available: boolean;
+  reason: "timer_expired" | "schedule_started" | "schedule_ended";
+};
+
 function sqliteUtc(value: Date): string {
   return value.toISOString().replace("T", " ").slice(0, 19);
 }
@@ -41,8 +47,6 @@ function effectiveFromRow(row: PresenceRow | null, now = new Date()): boolean {
   if (row.schedule_enabled === 1 && row.schedule_start_minute !== null && row.schedule_end_minute !== null) {
     return insideDailyWindow(yangonMinute(now), row.schedule_start_minute, row.schedule_end_minute);
   }
-  // A non-null temporary-unavailable timestamp that has already expired means
-  // an unscheduled staff member has automatically returned to available.
   if (unavailableUntil !== null) return true;
   return row.available === 1;
 }
@@ -105,6 +109,23 @@ export async function setTemporaryUnavailable(
   return expiresAt;
 }
 
+export async function cancelTemporaryUnavailable(
+  db: D1Database | undefined,
+  userId: number,
+): Promise<{ cancelled: boolean; available: boolean }> {
+  if (!db) return { cancelled: false, available: false };
+  const row = await presenceRow(db, userId);
+  if (!row?.unavailable_until) return { cancelled: false, available: effectiveFromRow(row) };
+  const resumed: PresenceRow = { ...row, unavailable_until: null };
+  const available = effectiveFromRow(resumed);
+  await db.prepare(
+    `UPDATE staff_presence
+     SET available=?2, unavailable_until=NULL, updated_at=CURRENT_TIMESTAMP
+     WHERE telegram_user_id=?1`,
+  ).bind(userId, available ? 1 : 0).run();
+  return { cancelled: true, available };
+}
+
 export async function setDailyAvailabilitySchedule(
   db: D1Database | undefined,
   userId: number,
@@ -127,6 +148,26 @@ export async function setDailyAvailabilitySchedule(
        updated_at=CURRENT_TIMESTAMP`,
   ).bind(userId, available ? 1 : 0, startMinute, endMinute).run();
   return available;
+}
+
+export async function cancelDailyAvailabilitySchedule(
+  db: D1Database | undefined,
+  userId: number,
+): Promise<{ cancelled: boolean; available: boolean }> {
+  if (!db) return { cancelled: false, available: false };
+  const row = await presenceRow(db, userId);
+  if (!row || row.schedule_enabled !== 1) return { cancelled: false, available: effectiveFromRow(row) };
+  const available = effectiveFromRow(row);
+  await db.prepare(
+    `UPDATE staff_presence
+     SET available=?2,
+         schedule_start_minute=NULL,
+         schedule_end_minute=NULL,
+         schedule_enabled=0,
+         updated_at=CURRENT_TIMESTAMP
+     WHERE telegram_user_id=?1`,
+  ).bind(userId, available ? 1 : 0).run();
+  return { cancelled: true, available };
 }
 
 export async function hasDailyAvailabilitySchedule(
@@ -185,19 +226,25 @@ export async function countAvailableStaff(db: D1Database | undefined): Promise<n
   return (rows.results ?? []).reduce((count, row) => count + (effectiveFromRow(row, now) ? 1 : 0), 0);
 }
 
-export async function sweepStaffAvailability(db: D1Database | undefined): Promise<void> {
-  if (!db) return;
+export async function sweepStaffAvailability(
+  db: D1Database | undefined,
+): Promise<StaffAvailabilityTransition[]> {
+  if (!db) return [];
   const rows = await db.prepare(
     `SELECT telegram_user_id, available, unavailable_until,
             schedule_start_minute, schedule_end_minute, schedule_enabled
      FROM staff_presence`,
   ).all<PresenceRow>();
   const now = new Date();
+  const transitions: StaffAvailabilityTransition[] = [];
+
   for (const row of rows.results ?? []) {
     const expiresAt = parseSqliteUtc(row.unavailable_until);
     const expired = expiresAt !== null && expiresAt <= now.getTime();
     const effective = effectiveFromRow(row, now);
-    if (expired || row.available !== (effective ? 1 : 0)) {
+    const changed = row.available !== (effective ? 1 : 0);
+
+    if (expired || changed) {
       await db.prepare(
         `UPDATE staff_presence
          SET available=?2,
@@ -206,7 +253,15 @@ export async function sweepStaffAvailability(db: D1Database | undefined): Promis
          WHERE telegram_user_id=?1`,
       ).bind(row.telegram_user_id, effective ? 1 : 0).run();
     }
+
+    if (!changed) continue;
+    let reason: StaffAvailabilityTransition["reason"];
+    if (expired) reason = "timer_expired";
+    else reason = effective ? "schedule_started" : "schedule_ended";
+    transitions.push({ telegramUserId: row.telegram_user_id, available: effective, reason });
   }
+
+  return transitions;
 }
 
 export async function setStaffNotificationsEnabled(
