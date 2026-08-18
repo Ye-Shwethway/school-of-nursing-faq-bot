@@ -56,6 +56,17 @@ Order: `မြန်မာ` · `English` · `简体中文`.
 - `🗑 Delete Case` is for typo/test/junk cases and requires explicit permanent-delete confirmation.
 - Case deletion removes only the escalation case and its escalation-message history; preserve user, original question log, and linked FAQ.
 
+## Input quality and false escalation
+- Before normal FAQ/AI/handoff processing, obvious low-information private text must pass an Input Quality Gate.
+- Obvious low-information examples include numbers-only input, punctuation/symbol-only input, single-character noise, URL-only input, username-only input, phone-number-only input, repeated-character garbage, and acknowledgement-only text such as `ok`/`yes` when no usable question is present.
+- These inputs must **not call AI and must not create a new escalation case**. Return one short localized clarification asking for a more complete question and point to `/faq`.
+- Do not use a crude length-only rule. Short-but-meaningful school topics such as `fees?`, `tuition`, `admission`, `CDM`, or `accreditation` must remain eligible for normal FAQ/AI handling.
+- Human-controlled conversations and active admin/setup sessions bypass the Input Quality Gate so short operational replies are not swallowed.
+- AI may return a clarification decision for meaningful but incomplete/ambiguous input. Clarification is terminal for that turn and must not create a case.
+- Human handoff is reserved for a sufficiently specific, meaningful School of Nursing question that staff could reasonably review or act on and that approved knowledge cannot safely answer.
+- Do not hand off typos, accidental fragments, acknowledgements, standalone numbers, or messages that first need clarification.
+- The false-escalation filter exists to keep Staff Inbox and `/cases` focused on real knowledge gaps and actionable staff work.
+
 ## Spam protection and user limits
 Two independent protection layers are required.
 
@@ -99,6 +110,12 @@ Two independent protection layers are required.
 - `✅ Unban User` clears the ban plus immediate cooldown/window state.
 - Admin overrides and ban/unban operations must be written to `admin_audit`.
 
+## Deployment online notice
+- Production health may emit one `🟢 Bot is Online!` notice per deployed revision to Owner/Sudo recipients.
+- A revision must not be considered permanently notified when Telegram delivery fails to every target.
+- If all Telegram deliveries fail, release the revision notice claim so a later successful `/health` request can retry.
+- Delivery-notice failure must never make production health fail.
+
 ## Reset / cancel semantics
 - `/cancel` cancels the current interactive setup only.
 - `/reset` clears transient session/conversation state.
@@ -125,4 +142,4 @@ Policy-sensitive answers must come from canonical data. Never creatively alter d
 - `/faq`: public read-only library for normal users; management/authoring for Owner/Sudo.
 - `/cases`: Owner/Sudo escalation knowledge inbox.
 - `/limits`: Owner/Sudo rate-limit management; permanent ban/unban Owner-only.
-- Private interaction order: **webhook verification → Interaction Flood Guard → command/callback handling or inquiry rate gate → deterministic FAQ → grounded AI → escalation**.
+- Private interaction order: **webhook verification → Interaction Flood Guard → inquiry rate gate → FAQ/admin text routing → Input Quality Gate → deterministic FAQ → grounded AI answer/clarify → actionable human escalation**.
