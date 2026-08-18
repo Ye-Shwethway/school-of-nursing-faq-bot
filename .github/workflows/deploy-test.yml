@@ -61,7 +61,7 @@ jobs:
       - name: Deploy TEST Worker
         run: npx wrangler deploy --env test --var "APP_ENV:test" --var "DEPLOY_REVISION:${GITHUB_SHA}"
 
-      - name: Verify TEST health and trigger online notice
+      - name: Verify TEST health
         shell: bash
         run: |
           HEALTH_URL="https://school-of-nursing-faq-bot-test.ye-shwethway13.workers.dev/health"
@@ -88,6 +88,6 @@ jobs:
             echo "- Local validation: PASS"
             echo "- D1 migrations: applied before deploy"
             echo "- Health: PASS"
-            echo "- Owner/Admin online notice: triggered once for this revision"
+            echo "- Owner/Admin Telegram online notice: intentionally suppressed in TEST"
             echo "- Production Worker: untouched by this workflow"
           } >> "$GITHUB_STEP_SUMMARY"
