@@ -24,11 +24,12 @@ The manuals explain:
 ## Permissions
 `/ownermanual`:
 - Owner can read
-- Owner can edit
+- Owner can edit existing sections
+- Owner can add new sections
 - Sudo Admins and normal users cannot open it
 
 `/adminmanual`:
-- Owner can read and edit
+- Owner can read, edit, and add sections
 - Sudo Admins can read and navigate pages only
 - normal users cannot open it
 
@@ -42,13 +43,12 @@ Opening a manual shows one section and inline controls:
 - current page indicator such as `2/8`
 - `Next ▶`
 - Owner-only `✎ Edit this section`
+- Owner-only `＋ Add new section`
 - `✕ Close`
 
 Previous/Next uses `editMessageText`, so the same message is reused and the chat stays clean.
 
-## Editing workflow
-Manuals are section-based so the Owner can update only the part that changed.
-
+## Editing an existing section
 Owner flow:
 1. open `/ownermanual` or `/adminmanual`
 2. navigate to the section
@@ -57,9 +57,22 @@ Owner flow:
 5. review the preview
 6. press `Save` or `Discard`
 
-`/cancel` abandons an active manual edit before save.
+Each saved edit increments the section version and stores the prior version in `manual_revisions`.
 
-Section text is limited to 3,500 characters to keep Telegram rendering clean.
+## Adding a new section
+Owner flow:
+1. open `/ownermanual` or `/adminmanual`
+2. tap `＋ Add new section`
+3. send the new section title
+4. send the complete section body
+5. review the preview
+6. press `✓ Add section` or `Discard`
+
+The bot generates the internal section key automatically and appends the new section to the end of that manual. The Owner does not need to manage keys or ordering values.
+
+`/cancel` abandons an active edit or add-section flow before save.
+
+Section body text is limited to 3,500 characters and section titles to 120 characters for clean Telegram rendering.
 
 ## Storage
 Migration `migrations/0009_manuals.sql` creates:
@@ -68,9 +81,9 @@ Migration `migrations/0009_manuals.sql` creates:
 
 Migration `migrations/0010_manual_newline_cleanup.sql` converts legacy literal `\\n` seed sequences into real line breaks in D1.
 
-`src/manual_store.ts` also normalizes legacy `\\n` sequences on read/save for compatibility.
+No additional schema migration is required for Add Section; new sections use the existing `manual_sections` table.
 
-Every saved section increments its version and stores the prior version in `manual_revisions`.
+`src/manual_store.ts` normalizes legacy `\\n` sequences on read/save and provides both create and update operations.
 
 Manual data is intentionally separate from:
 - `faq_entries`
@@ -78,10 +91,10 @@ Manual data is intentionally separate from:
 - deterministic FAQ matching
 - AI grounding context
 
-Editing a manual must never change what the bot treats as approved School knowledge.
+Editing or adding manual sections must never change what the bot treats as approved School knowledge.
 
 ## Runtime files
-- `src/manual_store.ts` — manual persistence, newline normalization and revisions
-- `src/manual_entry.ts` — Telegram commands, authorization, single-message pager, edit preview/save/discard
+- `src/manual_store.ts` — manual persistence, section creation, newline normalization and revisions
+- `src/manual_entry.ts` — Telegram commands, authorization, single-message pager, edit/add preview/save/discard
 
 The manual layer sits outside the existing runtime stack and passes unrelated traffic through unchanged.
