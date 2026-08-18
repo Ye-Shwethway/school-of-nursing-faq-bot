@@ -110,19 +110,22 @@ Order: `မြန်မာ` · `English` · `简体中文`.
 - Every successful private availability/timer/schedule change must be mirrored to the active Staff Inbox group root with the staff identity (including immutable Telegram ID) and resulting state summary so staff can coordinate coverage.
 - Direct Staff Inbox invocation remains supported and does not require an extra duplicate mirror because the command/result is already team-visible.
 - `/noti` remains Staff-Inbox-only.
-- Plain `/available` means immediately available and clears any recurring availability schedule.
-- Plain `/unavailable` means unavailable indefinitely until the staff member explicitly changes state.
-- `/unavailable <hours>` creates a temporary unavailable override. Example: `/unavailable 3` means unavailable for three hours.
-- Temporary-unavailable durations may be fractional and are capped at 168 hours.
-- When a temporary override expires and no recurring schedule exists, the staff member returns to available automatically.
-- If a recurring daily schedule exists, temporary unavailable overrides it only until expiry; after expiry, effective state returns to the recurring schedule.
-- `/available <start> <end>` creates a recurring daily availability window using **Asia/Yangon (UTC+06:30)**.
+- `/available <start> <end>` creates a durable recurring daily availability window using **Asia/Yangon (UTC+06:30)**.
 - Accept 24-hour forms such as `/available 09:00 17:00` and 12-hour aliases such as `/available 9am 5pm` or `/available 9:30am 5:30pm`.
-- Overnight windows such as `/available 20:00 08:00` are valid.
-- Start and end times must differ.
-- Effective staff counts must respect temporary-unavailable overrides and recurring schedules, not only the stored legacy boolean.
-- Existing 5-minute Cloudflare Cron applies expiry/schedule transitions, so persisted state may update within 0–5 minutes of the boundary; availability queries should calculate the effective state immediately.
-- A staff reply may clear a temporary-unavailable override because it proves the staff member is actively responding, but it must not silently destroy a recurring daily schedule.
+- Overnight windows such as `/available 20:00 08:00` are valid; start and end must differ.
+- When a recurring schedule exists, plain `/available` means **temporarily AVAILABLE until the next schedule boundary**. It must not delete the recurring schedule.
+- When a recurring schedule exists, plain `/unavailable` means **temporarily UNAVAILABLE until the next schedule boundary**. It must not delete the recurring schedule.
+- The next schedule boundary means the next configured start or end time in Asia/Yangon. At that boundary the manual override ends and schedule-derived state becomes authoritative again.
+- If no recurring schedule exists, plain `/available` and `/unavailable` remain indefinite manual state changes.
+- Only explicit `/available cancel` or `/available clear` removes the recurring daily schedule; cancellation preserves the current effective state as the new manual state.
+- `/unavailable <hours>` creates a temporary unavailable timer without deleting a recurring schedule. Example: `/unavailable 3` means unavailable for three hours, then the stored schedule resumes.
+- `/unavailable cancel` or `/unavailable clear` cancels that temporary timer early and resumes the stored schedule when one exists.
+- Temporary-unavailable durations may be fractional and are capped at 168 hours.
+- Effective staff counts must respect temporary timers, temporary manual schedule overrides, and recurring schedules, not only the stored legacy boolean.
+- Persist `manual_override_until` for schedule-aware plain-command overrides so Worker restart/deploy cannot lose the boundary.
+- Existing 5-minute Cloudflare Cron applies timer, manual-override, and schedule transitions, so persisted state may update within 0–5 minutes of the boundary; availability queries should calculate effective state immediately.
+- When manual override expiry causes a real AVAILABLE↔UNAVAILABLE change, send the existing automatic state declaration to both the staff member's private bot chat and Staff Inbox. If schedule state equals the override state at the boundary, do not emit a misleading duplicate state-change notice.
+- A staff reply may demonstrate an active return but must not silently destroy the recurring daily schedule.
 - Scheduled off-hours must not trigger the old “become available now?” return prompt, because that would undermine the recurring schedule.
 
 ## Input quality and false escalation
