@@ -133,17 +133,38 @@ Current gates:
 - local D1 migrations 0001 → 0006
 - Wrangler test-environment dry-run
 - generated `deploy/worker.mjs` + SHA-256 refresh
-- `cloudflare-test-handoff` artifact now includes migration 0006
+- `cloudflare-test-handoff` artifact includes migration 0006
 
-A regenerated Worker artifact was produced after the UX entrypoint/migration changes, proving the source passed the build pipeline before the final documentation checkpoint.
+## Direct GitHub → Cloudflare TEST deployment
+Workflow:
+`.github/workflows/deploy-test.yml`
+
+Purpose: eliminate manual `worker.mjs` / migration handoffs between GitHub-side and Cloudflare-side chats.
+
+Trigger: manual `workflow_dispatch` only for the first production-safe version.
+
+Pipeline:
+1. checkout current `test`
+2. Node 22 + dependencies
+3. verify `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` GitHub Actions secrets exist
+4. strict TypeScript typecheck
+5. `wrangler d1 migrations apply school-of-nursing-faq-bot-db --remote --env test`
+6. `wrangler deploy --env test`
+7. verify `https://school-of-nursing-faq-bot-test.ye-shwethway13.workers.dev/health` reports `ok=true` and `environment=test`
+
+This workflow targets only the TEST Worker configured by the `test` Wrangler environment. It does not deploy the production Worker.
+
+Required GitHub Actions repository secrets, configured once by the Creator:
+- `CLOUDFLARE_API_TOKEN`
+- `CLOUDFLARE_ACCOUNT_ID`
+
+The Cloudflare API token must be restricted to the project account and have the permissions needed to edit Workers plus D1. Telegram runtime secrets remain Cloudflare Worker secrets and are not copied into GitHub.
 
 ## Exact next live work
-Cloudflare TEST only:
-1. apply `migrations/0006_conversation_control_version.sql`
-2. use the latest exact generated `deploy/worker.mjs` and `deploy/worker.sha256`
-3. preserve existing TEST Worker secrets, D1 binding and `APP_ENV=test`
-4. redeploy `school-of-nursing-faq-bot-test` only
-5. validate:
+1. Creator adds the two GitHub Actions repository secrets above.
+2. Run `Deploy TEST to Cloudflare` manually from GitHub Actions.
+3. Confirm remote migration 0006, TEST deploy, and health step are green.
+4. Validate Telegram UX v1:
    - AI typing indicator during a deliberately slower AI response
    - deterministic FAQ stays fast
    - AI answer replies to original question
