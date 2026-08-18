@@ -25,7 +25,7 @@ Treat live repository plus verified Cloudflare/Telegram evidence as authoritativ
 Wrangler entrypoint: `src/manual_entry.ts`
 
 Layer order:
-1. `manual_entry.ts` — Owner/Admin manuals, single-message pager/edit UX, command sync before interception
+1. `manual_entry.ts` — Owner/Admin manuals, single-message pager, edit/add UX, command sync before interception
 2. `deployment_notice_entry.ts` — deploy-health command sync + revision-aware `🟢 Bot is Online!`
 3. `latest_return_entry.ts` — latest-message Return to AI control
 4. `monitoring_message_entry.ts` — identity/model-aware mirrors + isolated group handoff
@@ -64,8 +64,8 @@ Role-scoped command menus use Telegram `setMyCommands`. Deploy health runs comma
 Manual storage is completely separate from FAQ knowledge and AI grounding.
 
 Commands:
-- `/ownermanual` — Owner read/edit only
-- `/adminmanual` — Owner read/edit, Sudo Admin read-only
+- `/ownermanual` — Owner read/edit/add only
+- `/adminmanual` — Owner read/edit/add, Sudo Admin read-only
 
 Schema:
 - `migrations/0009_manuals.sql`
@@ -80,11 +80,13 @@ Controls:
 - page indicator such as `2/8`
 - `Next ▶`
 - Owner-only `✎ Edit this section`
+- Owner-only `＋ Add new section`
 - `✕ Close`
 
-Page navigation uses `editMessageText`, so browsing reuses the same Telegram message instead of flooding chat. Sudo Admins can navigate `/adminmanual` pages but cannot edit.
+Page navigation uses `editMessageText`, so browsing reuses the same Telegram message instead of flooding chat. Sudo Admins can navigate `/adminmanual` pages but cannot edit or add.
 
-Owner edit flow:
+### Edit existing section
+Owner flow:
 1. open manual
 2. navigate to section
 3. tap `Edit this section`
@@ -92,12 +94,27 @@ Owner edit flow:
 5. review Preview
 6. choose `Save` or `Discard`
 
-`/cancel` abandons a pending edit. Each save increments section version and archives the previous text.
+Each save increments the section version and archives the previous text.
+
+### Add new section
+Owner flow:
+1. open `/ownermanual` or `/adminmanual`
+2. tap `＋ Add new section`
+3. send the section title
+4. send the section body
+5. review Preview
+6. choose `✓ Add section` or `Discard`
+
+The bot creates the internal section key automatically and appends the new section to the end of that manual. No schema migration is required because this uses the existing `manual_sections` table.
+
+`/cancel` abandons a pending edit or add flow. Section title limit: 120 characters. Section body limit: 3,500 characters.
 
 ### Manual line-break cleanup — migration 0010
 `migrations/0010_manual_newline_cleanup.sql` converts legacy literal `\\n` sequences from the initial manual seed into real line breaks in D1.
 
-`src/manual_store.ts` also normalizes `\\n` at read/save time, and manual edit preview normalizes pasted legacy sequences as an extra compatibility guard.
+`src/manual_store.ts` also normalizes `\\n` at read/save time, and manual preview normalizes pasted legacy sequences as an extra compatibility guard.
+
+See `docs/OPERATOR_MANUALS.md`.
 
 ## Staff group / multiuser contract
 Preferred Staff Inbox: private Telegram supergroup with Topics enabled. Bot should have Manage Topics; Delete Messages is recommended.
@@ -167,11 +184,13 @@ Before promoting `main`, validate when practical:
 4. manual pages display real blank lines, not literal `\\n`
 5. Previous/Next edits the same Telegram message
 6. Owner edit Preview/Save/Discard and `/cancel` work
-7. manual edits do not alter FAQ/AI knowledge
-8. multiuser topics remain isolated
-9. same-user near-simultaneous first messages do not create duplicate topics
-10. Take Over only affects that user and latest Return-to-AI control moves correctly
-11. online notice reaches Owner/Sudo Admins once per revision
+7. Owner `＋ Add new section` title/body/Preview/Add/Discard and `/cancel` work
+8. newly added section appears as the final pager page
+9. manual edits/additions do not alter FAQ/AI knowledge
+10. multiuser topics remain isolated
+11. same-user near-simultaneous first messages do not create duplicate topics
+12. Take Over only affects that user and latest Return-to-AI control moves correctly
+13. online notice reaches Owner/Sudo Admins once per revision
 
 Do not merge `main` until selected TEST checks are green.
 
