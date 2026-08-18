@@ -5133,6 +5133,15 @@ async function telegramApi9(env, method, body) {
   }
 }
 __name(telegramApi9, "telegramApi");
+async function syncCommandsBeforeIntercept(env) {
+  if (!env.DB || !env.TELEGRAM_BOT_TOKEN) return;
+  const api = /* @__PURE__ */ __name((method, body) => telegramApi9(env, method, body), "api");
+  try {
+    await syncCommandRegistryIfNeeded(env.DB, api, env.BOT_OWNER_TELEGRAM_ID);
+  } catch {
+  }
+}
+__name(syncCommandsBeforeIntercept, "syncCommandsBeforeIntercept");
 async function sendMessage6(env, chatId, text, keyboard) {
   await telegramApi9(env, "sendMessage", { chat_id: chatId, text, reply_markup: keyboard });
 }
@@ -5379,6 +5388,7 @@ var manual_entry_default = {
     } catch {
       return deployment_notice_entry_default.fetch(request, env);
     }
+    await syncCommandsBeforeIntercept(env);
     if (update.callback_query && await handleManualCallback(env, update.callback_query)) {
       return json8({ ok: true });
     }
