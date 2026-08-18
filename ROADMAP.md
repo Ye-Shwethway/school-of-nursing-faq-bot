@@ -12,37 +12,60 @@ Production Telegram FAQ assistant for a university School of Nursing in Burmese,
 - production deployment is a separate explicit action after repository promotion
 
 ## Current foundation
-Status: FIRST MAIN PROMOTION COMPLETE; PRODUCTION PROVISIONING IN PROGRESS
+Status: PRODUCTION WORKER + D1 HEALTH GREEN; OPERATIONAL DATA BOOTSTRAP NEXT
 
 Implemented:
 - multilingual FAQ + dynamic CRUD/revisions
-- Owner/Sudo role management and role-scoped commands
+- Owner/Sudo roles and scoped commands
 - configurable encrypted AI Primary/Fallback
 - grounded AI + human handoff
 - Staff Inbox per-user topics and monitoring
 - Take Over / Return to AI + stale-AI suppression
-- TEST GitHub Actions -> Cloudflare deployment
-- deployment-online notification
+- TEST deployment automation
+- guarded PRODUCTION deployment automation
+- deployment-online notice
 - editable/addable Owner/Admin manuals
 - same-user first-message topic provisioning lock
-- guarded production deployment workflow
 
 ## Production checkpoint
-The Owner has created isolated production D1 `school-of-nursing-faq-bot-prod-db` and registered its UUID as GitHub secret `CLOUDFLARE_PRODUCTION_D1_DATABASE_ID`.
+Verified by live workflow/user evidence:
+- isolated production D1 exists
+- production D1 ID is stored as `CLOUDFLARE_PRODUCTION_D1_DATABASE_ID`
+- `Deploy PRODUCTION to Cloudflare` is green
+- production Worker `school-of-nursing-faq-bot` is deployed
+- production `/health` returns `environment=production`
+- four production Worker runtime secrets are configured
+- production `AI_CONFIG_MASTER_KEY` is intentionally fresh, so encrypted TEST AI credentials are not portable and will be reconfigured on production
 
-The first production deployment reached Worker deployment successfully but the workflow health step returned HTTP 404 because it assumed a hard-coded workers.dev account subdomain.
+Telegram webhook still points to TEST; go-live has not happened.
 
-`src/index.ts` already implements GET `/health`, so the failure is endpoint resolution rather than an absent application health route.
+## Production operational-data bootstrap
+Status: IMPLEMENTED ON `test`; PROMOTION/RUN PENDING
 
-The production workflow is now hardened to:
-- explicitly set `workers_dev: true`
-- explicitly set `preview_urls: false`
-- query Cloudflare API for the actual account workers.dev subdomain
-- verify that the production Worker workers.dev route is enabled
-- construct the production health URL dynamically
-- require `/health` to return `ok=true` and `environment=production`
+Workflow:
+`.github/workflows/bootstrap-production-data.yml`
 
-This workflow fix is developed on `test` and should be promoted to `main` before rerunning production deployment.
+It runs manually from `main` with confirmation `BOOTSTRAP_PRODUCTION_DATA` and uses the existing Cloudflare API token plus TEST/PRODUCTION D1 IDs.
+
+Copied allow-list:
+- current FAQ entries
+- current manual sections
+- Sudo Admin roles
+- active/inactive staff membership
+- operator identity metadata required for Admin/Staff labels
+- operational bot settings: persona, monitoring mode, Staff Inbox ID, handoff route, dedicated staff ID
+
+Not copied:
+- ordinary user history/questions
+- escalation history
+- conversation takeover state
+- monitoring-topic mappings
+- setup/admin sessions
+- encrypted AI credentials
+- AI cache/tests/model bindings
+- deployment markers / command sync fingerprint
+
+After copy the workflow forces production command-scope resynchronization and verifies production `/health` again.
 
 ## Canonical Worker stack
 Wrangler enters `src/manual_entry.ts`.
@@ -62,36 +85,19 @@ Wrangler enters `src/manual_entry.ts`.
 
 `/adminmanual` — Owner read/edit/add; Sudo Admin read-only.
 
-Manual browsing uses one Telegram pager message. Manual storage remains isolated from FAQ matching and AI grounding.
+Manual storage remains isolated from FAQ matching and AI grounding.
 
 ## Multiuser / Staff Inbox isolation
-Different Telegram users have independent profile/language, question logs, conversation mode, claimant, topic, and AI/human lifecycle.
+Different Telegram users have independent profile/language, question logs, conversation mode, claimant, topic, and AI/human lifecycle. Migration 0008 guards same-user concurrent first-topic provisioning.
 
-Migration 0008 prevents same-user concurrent first-message duplicate topic creation with a D1 provisioning lock. Staff-side delivery fails closed if an isolated topic cannot be established.
-
-## Take Over controls
-Migration 0006 prevents stale AI output after control changes.
-
-Migration 0007 keeps Return to AI on the newest human-control USER mirror.
-
-## TEST deployment
-`.github/workflows/deploy-test.yml` remains the normal development deployment path for `test`.
-
-## Production deployment
-`.github/workflows/deploy-production.yml` is manual-only and main-only, guarded by confirmation `DEPLOY_PRODUCTION`.
-
-Production Worker: `school-of-nursing-faq-bot`
-
-Production D1: `school-of-nursing-faq-bot-prod-db`
-
-Telegram webhook remains on TEST until production health and runtime state are ready.
-
-## Remaining production prerequisites
-After health succeeds:
-- configure/verify production Worker runtime secrets: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET`, `BOT_OWNER_TELEGRAM_ID`, `AI_CONFIG_MASTER_KEY`
-- initialize required production FAQ/AI/manual/admin/staff operational state
-- move Telegram webhook to production
-- smoke-test full user/operator path
+## Production go-live sequence
+1. promote production-bootstrap workflow/docs from `test` to `main`
+2. run `Bootstrap PRODUCTION operational data`
+3. verify bootstrap green + production health
+4. move Telegram webhook to production Worker
+5. smoke-test normal FAQ, Owner/Admin, manuals and Staff Inbox
+6. configure production AI provider/API key through `/ai`
+7. verify grounded AI, fallback and human handoff
 
 ## Current migrations
 - 0001 initial
@@ -105,15 +111,7 @@ After health succeeds:
 - 0009 editable manuals
 - 0010 manual newline cleanup
 
-Canonical 0010 file: `migrations/0010_manual_newline_cleanup.sql`.
-
-## Next exact slice
-1. promote production health-resolution fix from `test` to `main`
-2. rerun production workflow
-3. verify production health green
-4. finish production runtime configuration
-5. move webhook
-6. smoke-test production
+Canonical 0010: `migrations/0010_manual_newline_cleanup.sql`.
 
 ## Deferred validation debt
 - multiuser simultaneous live stress test
