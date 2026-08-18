@@ -1,10 +1,13 @@
 import { buildAgentSystemPrompt, parseAgentDecision, type AgentDecision } from "./agent_policy";
 import { getAiAvailability } from "./ai_fail_safe";
+import { notifyAiOutage, notifyAiRecovered } from "./ai_outage_alert";
 import type { Language } from "./faq";
 
 export type AiRuntimeEnv = {
   DB?: D1Database;
   AI_CONFIG_MASTER_KEY?: string;
+  TELEGRAM_BOT_TOKEN?: string;
+  BOT_OWNER_TELEGRAM_ID?: string;
 };
 
 export type GroundedAiResult = {
@@ -194,6 +197,15 @@ async function runOne(
   return parseAgentDecision(raw.trim());
 }
 
+async function recovered(env: AiRuntimeEnv): Promise<void> {
+  await notifyAiRecovered(env);
+}
+
+async function outage(env: AiRuntimeEnv, reason: string): Promise<GroundedAiResult> {
+  await notifyAiOutage(env, reason);
+  return { action: "handoff", answer: "", reason, source: "human" };
+}
+
 export async function runGroundedFaqAgent(
   env: AiRuntimeEnv,
   input: {
@@ -206,7 +218,7 @@ export async function runGroundedFaqAgent(
   try {
     const availability = await getAiAvailability(env);
     if (!availability.ready || !availability.primaryProvider || !availability.primaryModel) {
-      return { action: "handoff", answer: "", reason: `ai_unavailable:${availability.reason}`, source: "human" };
+      return outage(env, `ai_unavailable:${availability.reason}`);
     }
 
     let primaryDecision: AgentDecision | null = null;
@@ -225,6 +237,7 @@ export async function runGroundedFaqAgent(
     }
 
     if (primaryDecision?.action === "answer" && primaryDecision.answer) {
+      await recovered(env);
       return { ...primaryDecision, source: "primary" };
     }
 
@@ -240,22 +253,25 @@ export async function runGroundedFaqAgent(
           input.question,
         );
         if (fallbackDecision?.action === "answer" && fallbackDecision.answer) {
+          await recovered(env);
           return { ...fallbackDecision, source: "fallback" };
         }
         if (fallbackDecision?.action === "handoff") {
+          await recovered(env);
           return { ...fallbackDecision, source: "human" };
         }
       } catch {
-        // Human handoff below.
+        // Infrastructure failure falls through to the operational outage alert below.
       }
     }
 
     if (primaryDecision?.action === "handoff") {
+      await recovered(env);
       return { ...primaryDecision, source: "human" };
     }
 
-    return { action: "handoff", answer: "", reason: "primary_and_fallback_failed", source: "human" };
+    return outage(env, "primary_and_fallback_failed");
   } catch {
-    return { action: "handoff", answer: "", reason: "ai_runtime_failure", source: "human" };
+    return outage(env, "ai_runtime_failure");
   }
 }
