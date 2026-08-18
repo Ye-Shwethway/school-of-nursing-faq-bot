@@ -126,6 +126,14 @@ export async function setDailyAvailabilitySchedule(
   return available;
 }
 
+export async function hasDailyAvailabilitySchedule(
+  db: D1Database | undefined,
+  userId: number,
+): Promise<boolean> {
+  if (!db) return false;
+  return (await presenceRow(db, userId))?.schedule_enabled === 1;
+}
+
 export async function markStaffActiveNow(
   db: D1Database | undefined,
   userId: number,
