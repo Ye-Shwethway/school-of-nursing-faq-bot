@@ -15,7 +15,7 @@ Read in order:
 Treat live repository plus verified Cloudflare/Telegram evidence as authoritative over remembered chat context.
 
 ## Current checkpoint
-Production infrastructure, operational data, Telegram webhook, Owner identity binding, AI provider setup and main-only deployment pipeline are working. The latest behavior slice makes `/language` visible in the Telegram command menu for every user role instead of supporting it as a hidden command only.
+Production infrastructure, operational data, Telegram webhook, Owner identity binding, AI provider setup and the main-only deployment pipeline are working. `/language` is visible for all users. The latest behavior slice connects Sudo Admin grants to Staff Inbox access and makes Staff Inbox group switching explicit in `/staff`.
 
 ## Main-only operating model
 - `main` is the only active development/canonical/production branch.
@@ -32,6 +32,36 @@ Relevant `main` pushes automatically validate and deploy production.
 A fresh master key is valid, but credentials encrypted with an older key cannot be decrypted with the new one and must be entered again through `/ai`.
 
 `src/secure_entry.ts` catches exceptions from AI credential setup. If encryption/configuration fails, the submitted API-key message is best-effort deleted and the Owner receives an explicit configuration error instead of the webhook path silently stopping.
+
+## Sudo Admin -> Staff Inbox lifecycle
+Canonical implementation is in `src/staff_ux_entry.ts`, reusing `handleAdminCommand()` from `src/admin.ts` rather than duplicating authority rules.
+
+On successful Owner `/sudo grant <telegram_user_id>`:
+- `admin_roles` grants `sudo_admin`
+- the target is enabled in `staff_members`
+- Telegram command scope refresh is attempted best-effort
+- if the Staff Inbox is configured, membership is checked with `getChatMember`
+- if needed, the bot creates a one-use `createChatInviteLink`
+- the invite is sent to the target in private chat
+- if target DM is unavailable, the invite is sent to the Owner privately as fallback
+- invite creation failure produces an Owner-visible message about bot admin/invite permissions
+
+On `/sudo revoke <telegram_user_id>`:
+- Sudo authority is revoked
+- bot-side `staff_members` authorization is disabled
+- current implementation does not auto-kick an already joined user from the Telegram group; that remains a deliberate future policy choice
+
+## Staff Inbox switching
+`/staff` in a Telegram group now exposes `Use / Switch to this Staff Inbox`.
+
+The panel displays whether:
+- this group is already active
+- another Staff Inbox is currently bound
+- no Staff Inbox exists yet
+
+Switching replaces `staff_inbox_chat_id`, sets handoff routing to `group`, and sends all new handoff/monitoring traffic to the new group. Monitoring topic identity is keyed by both user and staff chat, so new group topics are isolated naturally. Old group messages/mappings remain historical and are no longer active routing targets.
+
+Deleting or leaving the old Telegram group is not required for the bot-side switch and remains an Owner-side Telegram action.
 
 ## Single production pipeline
 The production workflow performs:
@@ -62,8 +92,9 @@ Required production runtime bindings include:
 - approved FAQ/manual/admin/staff/settings data was bootstrapped
 - Telegram webhook cutover completed green
 - `/start` works through production
-- Owner identity is recognized after restoring `BOT_OWNER_TELEGRAM_ID` as a Cloudflare secret
-- production Gemini provider setup is working after correcting `AI_CONFIG_MASTER_KEY`
+- Owner identity is recognized
+- production Gemini provider setup is working
+- `/language` is visible in Telegram command menus
 
 ## Command registry
 Public menu for all users:
@@ -75,7 +106,7 @@ Sudo Admin inherits public commands and adds:
 Expected Owner menu:
 `/start`, `/language`, `/whoami`, `/admin`, `/admins`, `/faq`, `/adminmanual`, `/sudo`, `/ai`, `/staff`, `/ownermanual`, `/cancel`, `/reset`.
 
-`src/command_menu.ts` command schema revision is `3` for this visible-language change. Production deployment verification expects exact Owner read-back of 13 commands.
+`src/command_menu.ts` command schema revision is `3`. Production deployment verification expects exact Owner read-back of 13 commands.
 
 ## Environment isolation
 Historical TEST and production used the same Telegram bot token, which previously allowed TEST health checks to send misleading deployment notices to the live Owner chat.
@@ -92,17 +123,18 @@ Wrangler entrypoint: `src/manual_entry.ts`
 2. `deployment_notice_entry.ts` — production-only notice + production ops endpoints
 3. `latest_return_entry.ts`
 4. `monitoring_message_entry.ts`
-5. `staff_ux_entry.ts`
+5. `staff_ux_entry.ts` — Staff Inbox UX + Sudo-to-staff invite lifecycle
 6. `ux_entry.ts`
 7. `secure_entry.ts` — private Owner AI setup interception + setup error handling
 8. `runtime_entry.ts`
 9. `index.ts` — fallback + `/health`
 
 ## Next exact sequence
-1. verify the production pipeline carrying command schema revision 3 is green
-2. confirm `/language` is visible in both Owner and normal-user Telegram command menus
-3. run any remaining grounded AI + fallback/handoff smoke checks
-4. continue directly on `main`
+1. verify the production pipeline carrying the Sudo/Staff Inbox slice is green
+2. grant Sudo to a real user who has already started the bot and verify invite delivery
+3. verify the one-use private Staff Inbox join succeeds
+4. test Staff Inbox switching only when a replacement group is desired
+5. continue directly on `main`
 
 ## Current migrations
 0001 through 0010; canonical 0010 is `migrations/0010_manual_newline_cleanup.sql`.
