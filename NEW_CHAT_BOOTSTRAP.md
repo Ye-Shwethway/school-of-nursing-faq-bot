@@ -15,7 +15,7 @@ Read in order:
 Treat live repository plus verified Cloudflare/Telegram evidence as authoritative over remembered chat context.
 
 ## Current checkpoint
-Production infrastructure, operational data, Telegram webhook, Owner identity binding, AI provider setup and the main-only deployment pipeline are working. `/language` is visible for all users. Sudo grants provision Staff Inbox access, Staff Inbox switching is explicit, and Owner `/clearmessage` is deployed with a corrected tracked-ID deletion algorithm and Telegram permission diagnostics.
+Production infrastructure, operational data, Telegram webhook, Owner identity binding, AI provider setup and the main-only deployment pipeline are working. `/language` is visible for all users. Sudo grants provision Staff Inbox access, Staff Inbox switching is explicit, and Owner `/clearmessage` is under live hardening after the first bulk-delete result proved able to overstate success.
 
 ## Main-only operating model
 - `main` is the only active development/canonical/production branch.
@@ -61,21 +61,22 @@ Wrangler enters `src/clear_message_entry.ts`, which wraps the existing runtime.
 
 Migration `0011_group_message_cleanup.sql` creates `group_message_ledger` and records observed group message IDs without storing message bodies.
 
-The first cleanup implementation used a synthetic contiguous ID sweep and proved unreliable in production. It has been replaced.
+The first production cleanup treated successful `deleteMessages` calls as confirmation that every requested ID was removed. Telegram can silently skip missing IDs, so that count was not authoritative and is retired.
 
 Current Owner `/clearmessage` behavior:
 - works only in the active Staff Inbox group
-- verifies the bot's own membership/admin state before showing confirmation
-- requires group-admin delete permission (`can_delete_messages`) to delete other users' messages in a supergroup
+- verifies bot membership/admin state and `can_delete_messages`
+- reads `getMe.can_read_all_group_messages` for privacy-mode diagnostics
 - requires explicit confirmation before deletion
 - loads only actual tracked IDs from `group_message_ledger`
-- deletes in batches of at most 100 IDs
-- narrows a failed batch and finally retries an exact ID with `deleteMessage`
-- preserves failed ledger rows and removes only successfully deleted rows
-- sends a private Owner result with deleted count, failed count, and Telegram's first error description
-- considers at most the newest 5,000 tracked IDs in the under-48-hour window
+- calls `deleteMessage` for each tracked ID and counts an ID only when Telegram returns `result=true`
+- preserves failed ledger rows and removes only confirmed-deleted rows
+- sends a private Owner result with confirmed-deleted count, failed count, tracked-ID count, privacy-mode state, and Telegram's first error description
+- considers at most the newest 5,000 tracked IDs inside the under-48-hour window
 
-Telegram Bot API only allows ordinary message deletion for messages younger than 48 hours. Messages that predate ledger observation cannot be guaranteed to be discovered because Bot API does not expose general chat-history enumeration.
+Telegram Bot API only allows ordinary message deletion for messages younger than 48 hours. A group-admin bot receives ordinary group updates; `getMe.can_read_all_group_messages=true` additionally means global Group Privacy Mode is disabled. Messages that predate ledger observation cannot be guaranteed to be discovered because Bot API does not expose general chat-history enumeration.
+
+Broader ledger coverage for every downstream bot-originated Staff Inbox message is still a known follow-up if live diagnostics show those messages are not represented in the ledger.
 
 ## Single production pipeline
 The production workflow performs:
@@ -134,7 +135,7 @@ Canonical runtime suppresses deployment-online notices unless `APP_ENV === "prod
 ## Canonical Worker stack
 Wrangler entrypoint: `src/clear_message_entry.ts`
 
-1. `clear_message_entry.ts` — Staff Inbox message ledger + Owner cleanup control + Telegram deletion diagnostics
+1. `clear_message_entry.ts` — Staff Inbox message ledger + Owner cleanup control + per-message Telegram deletion diagnostics
 2. `manual_entry.ts` — Owner/Admin manuals + command sync
 3. `deployment_notice_entry.ts` — production-only notice + production ops endpoints
 4. `latest_return_entry.ts`
@@ -146,10 +147,10 @@ Wrangler entrypoint: `src/clear_message_entry.ts`
 10. `index.ts` — fallback + `/health`
 
 ## Next exact sequence
-1. verify the corrected `/clearmessage` production deployment green
-2. run `/clearmessage` in the active Staff Inbox
-3. if the bot reports missing delete permission, enable the bot's Delete messages admin permission in Telegram and retry
-4. verify actual tracked messages disappear and the private cleanup result reports a nonzero deleted count
+1. verify the per-message-confirmed `/clearmessage` production deployment green
+2. create fresh disposable messages after that deployment and run `/clearmessage`
+3. inspect confirmed-deleted, failed, tracked IDs, privacy-mode state and first Telegram error
+4. if incoming test messages delete correctly but bot-originated Staff Inbox messages are missing, expand downstream ledger coverage
 5. continue directly on `main`
 
 ## Current migrations
