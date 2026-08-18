@@ -3,6 +3,14 @@ name: Test Build
 on:
   push:
     branches: [test]
+    paths:
+      - 'src/**'
+      - 'migrations/**'
+      - 'wrangler.jsonc'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'tsconfig.json'
+      - '.github/workflows/test-typecheck.yml'
   workflow_dispatch:
 
 permissions:
@@ -10,7 +18,7 @@ permissions:
 
 concurrency:
   group: test-build-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   validate:
