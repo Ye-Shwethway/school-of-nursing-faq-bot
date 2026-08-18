@@ -41,6 +41,9 @@ function effectiveFromRow(row: PresenceRow | null, now = new Date()): boolean {
   if (row.schedule_enabled === 1 && row.schedule_start_minute !== null && row.schedule_end_minute !== null) {
     return insideDailyWindow(yangonMinute(now), row.schedule_start_minute, row.schedule_end_minute);
   }
+  // A non-null temporary-unavailable timestamp that has already expired means
+  // an unscheduled staff member has automatically returned to available.
+  if (unavailableUntil !== null) return true;
   return row.available === 1;
 }
 
@@ -193,7 +196,7 @@ export async function sweepStaffAvailability(db: D1Database | undefined): Promis
   for (const row of rows.results ?? []) {
     const expiresAt = parseSqliteUtc(row.unavailable_until);
     const expired = expiresAt !== null && expiresAt <= now.getTime();
-    const effective = effectiveFromRow({ ...row, unavailable_until: expired ? null : row.unavailable_until }, now);
+    const effective = effectiveFromRow(row, now);
     if (expired || row.available !== (effective ? 1 : 0)) {
       await db.prepare(
         `UPDATE staff_presence
