@@ -1,5 +1,5 @@
 # Main-only production pipeline. Touching this file intentionally triggers a production validation/deploy run.
-# Staff presence/notification checkpoint: Owner registry now contains 17 commands.
+# Escalation Inbox checkpoint: Owner registry now contains 18 commands.
 name: Deploy PRODUCTION to Cloudflare
 
 on:
@@ -207,8 +207,8 @@ jobs:
           fi
           node -e '
             const b=JSON.parse(process.argv[1]);
-            const expected=["start","language","whoami","admin","admins","faq","adminmanual","noti","available","unavailable","sudo","ai","staff","clearmessage","ownermanual","cancel","reset"];
-            if(b.ok!==true||b.environment!=="production"||b.command_count!==17||JSON.stringify(b.owner_commands)!==JSON.stringify(expected)){
+            const expected=["start","language","whoami","admin","admins","faq","cases","adminmanual","noti","available","unavailable","sudo","ai","staff","clearmessage","ownermanual","cancel","reset"];
+            if(b.ok!==true||b.environment!=="production"||b.command_count!==18||JSON.stringify(b.owner_commands)!==JSON.stringify(expected)){
               console.error("Owner command verification failed", b); process.exit(1);
             }
           ' "$response"
@@ -231,6 +231,6 @@ jobs:
             echo "- Production health: PASS"
             echo "- Runtime secrets preserved: PASS"
             echo "- Owner command setMyCommands: PASS"
-            echo "- Owner command getMyCommands read-back: PASS (17/17)"
+            echo "- Owner command getMyCommands read-back: PASS (18/18)"
             echo "- TEST pipeline: none"
           } >> "$GITHUB_STEP_SUMMARY"
