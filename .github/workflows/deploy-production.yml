@@ -1,12 +1,17 @@
 name: Deploy PRODUCTION to Cloudflare
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'migrations/**'
+      - 'wrangler.jsonc'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'tsconfig.json'
+      - '.github/workflows/deploy-production.yml'
   workflow_dispatch:
-    inputs:
-      confirmation:
-        description: 'Type DEPLOY_PRODUCTION to confirm the live deployment'
-        required: true
-        type: string
 
 permissions:
   contents: read
@@ -18,7 +23,6 @@ concurrency:
 jobs:
   deploy-production:
     name: Validate and deploy PRODUCTION
-    if: github.ref == 'refs/heads/main' && inputs.confirmation == 'DEPLOY_PRODUCTION'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     environment: production
@@ -38,11 +42,10 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Verify production deployment inputs
+      - name: Verify production credentials
         shell: bash
         run: |
           test "${GITHUB_REF}" = "refs/heads/main" || { echo "Production deploys are allowed from main only."; exit 1; }
-          test "${{ inputs.confirmation }}" = "DEPLOY_PRODUCTION" || { echo "Production confirmation phrase is missing."; exit 1; }
           test -n "$CLOUDFLARE_API_TOKEN" || { echo "Missing GitHub secret: CLOUDFLARE_API_TOKEN"; exit 1; }
           test -n "$CLOUDFLARE_ACCOUNT_ID" || { echo "Missing GitHub secret: CLOUDFLARE_ACCOUNT_ID"; exit 1; }
           test -n "$PRODUCTION_D1_DATABASE_ID" || { echo "Missing GitHub secret: CLOUDFLARE_PRODUCTION_D1_DATABASE_ID"; exit 1; }
@@ -59,7 +62,7 @@ jobs:
           node <<'NODE'
           const fs = require('fs');
           const source = JSON.parse(fs.readFileSync('wrangler.jsonc', 'utf8'));
-          const production = {
+          fs.writeFileSync('.wrangler.production.generated.json', JSON.stringify({
             $schema: source.$schema,
             name: process.env.PRODUCTION_WORKER_NAME,
             main: source.main,
@@ -73,8 +76,7 @@ jobs:
               database_id: process.env.PRODUCTION_D1_DATABASE_ID,
               migrations_dir: 'migrations'
             }]
-          };
-          fs.writeFileSync('.wrangler.production.generated.json', JSON.stringify(production, null, 2));
+          }, null, 2));
           NODE
 
       - name: Validate D1 migrations locally
@@ -89,51 +91,56 @@ jobs:
       - name: Deploy production Worker
         run: npx wrangler deploy --config .wrangler.production.generated.json --var "APP_ENV:production" --var "DEPLOY_REVISION:${GITHUB_SHA}"
 
-      - name: Resolve production workers.dev endpoint
+      - name: Resolve production origin
         id: worker_endpoint
         shell: bash
         run: |
           api="https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}"
           auth="Authorization: Bearer ${CLOUDFLARE_API_TOKEN}"
-
-          account_payload="$(curl --fail --silent --show-error "${api}/workers/subdomain" -H "$auth")"
-          worker_payload="$(curl --fail --silent --show-error "${api}/workers/scripts/${PRODUCTION_WORKER_NAME}/subdomain" -H "$auth")"
-
-          account_subdomain="$(node -e '
-            const p = JSON.parse(process.argv[1]);
-            if (p.success !== true || !p.result?.subdomain) process.exit(1);
-            process.stdout.write(p.result.subdomain);
-          ' "$account_payload")"
-
-          worker_enabled="$(node -e '
-            const p = JSON.parse(process.argv[1]);
-            if (p.success !== true) process.exit(1);
-            process.stdout.write(String(p.result?.enabled === true));
-          ' "$worker_payload")"
-
-          if [ "$worker_enabled" != "true" ]; then
-            echo "Worker workers.dev route is not enabled after deploy."
-            echo "$worker_payload"
-            exit 1
-          fi
-
-          health_url="https://${PRODUCTION_WORKER_NAME}.${account_subdomain}.workers.dev/health"
-          echo "health_url=$health_url" >> "$GITHUB_OUTPUT"
-          echo "Resolved production endpoint: $health_url"
+          account_payload="$(curl --fail --silent --show-error --connect-timeout 10 --max-time 20 "${api}/workers/subdomain" -H "$auth")"
+          worker_payload="$(curl --fail --silent --show-error --connect-timeout 10 --max-time 20 "${api}/workers/scripts/${PRODUCTION_WORKER_NAME}/subdomain" -H "$auth")"
+          account_subdomain="$(node -e 'const p=JSON.parse(process.argv[1]); if(p.success!==true||!p.result?.subdomain)process.exit(1); process.stdout.write(p.result.subdomain)' "$account_payload")"
+          worker_enabled="$(node -e 'const p=JSON.parse(process.argv[1]); if(p.success!==true)process.exit(1); process.stdout.write(String(p.result?.enabled===true))' "$worker_payload")"
+          test "$worker_enabled" = "true" || { echo "Worker workers.dev route is not enabled."; exit 1; }
+          origin="https://${PRODUCTION_WORKER_NAME}.${account_subdomain}.workers.dev"
+          echo "origin=$origin" >> "$GITHUB_OUTPUT"
 
       - name: Verify production health
         shell: bash
         env:
-          HEALTH_URL: ${{ steps.worker_endpoint.outputs.health_url }}
+          PRODUCTION_ORIGIN: ${{ steps.worker_endpoint.outputs.origin }}
         run: |
-          echo "Checking $HEALTH_URL"
-          response="$(curl --fail --silent --show-error --retry 5 --retry-delay 2 "$HEALTH_URL")"
+          response="$(curl --fail --silent --show-error --connect-timeout 10 --max-time 30 --retry 5 --retry-delay 2 "${PRODUCTION_ORIGIN}/health")"
+          echo "$response"
+          node -e 'const b=JSON.parse(process.argv[1]); if(b.ok!==true||b.environment!=="production")process.exit(1)' "$response"
+
+      - name: Arm one-time Owner command verification nonce
+        shell: bash
+        run: |
+          NONCE="$(node -e "process.stdout.write(require('crypto').randomBytes(32).toString('hex'))")"
+          echo "::add-mask::$NONCE"
+          echo "OPS_NONCE=$NONCE" >> "$GITHUB_ENV"
+          payload="$(node -e 'process.stdout.write(JSON.stringify({sql:`INSERT INTO bot_settings (setting_key, setting_value, updated_by, updated_at) VALUES (\"owner_command_resync_nonce\", ?1, 0, CURRENT_TIMESTAMP) ON CONFLICT(setting_key) DO UPDATE SET setting_value=excluded.setting_value, updated_by=0, updated_at=CURRENT_TIMESTAMP`,params:[process.argv[1]]}))' "$NONCE")"
+          response="$(curl --fail --silent --show-error --connect-timeout 10 --max-time 30 -X POST \
+            -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+            -H "Content-Type: application/json" --data "$payload" \
+            "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/d1/database/${PRODUCTION_D1_DATABASE_ID}/query")"
+          node -e 'const b=JSON.parse(process.argv[1]); if(b.success!==true){console.error(b);process.exit(1)}' "$response"
+
+      - name: Verify Owner command registry through Telegram read-back
+        shell: bash
+        env:
+          PRODUCTION_ORIGIN: ${{ steps.worker_endpoint.outputs.origin }}
+        run: |
+          response="$(curl --fail --silent --show-error --connect-timeout 10 --max-time 45 -X POST \
+            -H "X-Ops-Nonce: ${OPS_NONCE}" \
+            "${PRODUCTION_ORIGIN}/ops/telegram/owner-command-resync")"
           echo "$response"
           node -e '
-            const body = JSON.parse(process.argv[1]);
-            if (body.ok !== true || body.environment !== "production") {
-              console.error("Unexpected production health response", body);
-              process.exit(1);
+            const b=JSON.parse(process.argv[1]);
+            const expected=["start","whoami","admin","admins","faq","adminmanual","sudo","ai","staff","ownermanual","cancel","reset"];
+            if(b.ok!==true||b.environment!=="production"||b.command_count!==12||JSON.stringify(b.owner_commands)!==JSON.stringify(expected)){
+              console.error("Owner command verification failed", b); process.exit(1);
             }
           ' "$response"
 
@@ -145,16 +152,15 @@ jobs:
         if: success()
         run: |
           {
-            echo "## Cloudflare PRODUCTION deployment"
+            echo "## PRODUCTION deployment"
             echo ""
             echo "- Commit: \`${GITHUB_SHA}\`"
-            echo "- Branch: \`main\`"
-            echo "- Worker: \`${PRODUCTION_WORKER_NAME}\`"
-            echo "- D1: isolated production database"
-            echo "- workers.dev route: explicitly enabled"
-            echo "- Health endpoint: resolved from Cloudflare account metadata"
-            echo "- Local validation: PASS"
-            echo "- Production D1 migrations: applied before deploy"
-            echo "- Health: PASS"
-            echo "- Deployment mode: manual + confirmation guarded"
+            echo "- Source: \`main\`"
+            echo "- Validation: PASS"
+            echo "- Production D1 migrations: PASS"
+            echo "- Worker deploy: PASS"
+            echo "- Production health: PASS"
+            echo "- Owner command setMyCommands: PASS"
+            echo "- Owner command getMyCommands read-back: PASS (12/12)"
+            echo "- TEST pipeline: none"
           } >> "$GITHUB_STEP_SUMMARY"
