@@ -1,5 +1,10 @@
 import app from "./monitoring_message_entry";
-import { getConversationControl, returnConversationToAi } from "./monitoring";
+import {
+  getConversationControl,
+  getUserForMonitoringTopic,
+  renewHumanControlLease,
+  returnConversationToAi,
+} from "./monitoring";
 import { getStaffInboxChatId } from "./handoff";
 import { monitoringUserHeader } from "./monitoring_headers";
 import { ensureIsolatedMonitoringTarget } from "./monitoring_target";
@@ -26,6 +31,7 @@ type TelegramMessage = {
   text?: string;
   chat: { id: number; type?: string; title?: string };
   from?: TelegramUser;
+  reply_to_message?: TelegramMessage;
 };
 
 type TelegramCallbackQuery = {
@@ -169,6 +175,7 @@ async function moveReturnButtonToLatest(env: Env, message: TelegramMessage): Pro
     message_thread_id: target.threadId,
     reply_markup: {
       inline_keyboard: [[
+        { text: "Extend 1h", callback_data: `conv:extend:${message.from.id}` },
         { text: "Return to AI", callback_data: `conv:return:${message.from.id}` },
       ]],
     },
@@ -192,6 +199,62 @@ async function cleanupLatestButtonIfAi(env: Env, telegramUserId: number): Promis
   const latest = await getLatestControlMessage(env.DB, telegramUserId, staffChatId);
   await removeReturnButton(env, staffChatId, latest);
   await setLatestControlMessage(env.DB, telegramUserId, staffChatId, null);
+}
+
+async function claimantActivityUserId(env: Env, message: TelegramMessage): Promise<number | null> {
+  if (!env.DB || !message.from || !message.text) return null;
+  const text = message.text.trim();
+  if (!text || text.startsWith("/")) return null;
+
+  const staffChatId = await getStaffInboxChatId(env.DB);
+  if (!staffChatId || message.chat.id !== staffChatId) return null;
+
+  if (message.message_thread_id) {
+    const userId = await getUserForMonitoringTopic(env.DB, staffChatId, message.message_thread_id);
+    if (userId) {
+      const control = await getConversationControl(env.DB, userId);
+      if (control.mode === "human" && control.claimedBy === message.from.id) return userId;
+    }
+  }
+
+  const replyTo = message.reply_to_message?.message_id;
+  if (!replyTo) return null;
+  const row = await env.DB.prepare(
+    `SELECT telegram_user_id
+     FROM escalation_cases
+     WHERE staff_chat_id=?1 AND staff_message_id=?2
+       AND status='claimed' AND claimed_by=?3`,
+  ).bind(staffChatId, replyTo, message.from.id).first<{ telegram_user_id: number }>();
+  if (!row?.telegram_user_id) return null;
+
+  const control = await getConversationControl(env.DB, row.telegram_user_id);
+  return control.mode === "human" && control.claimedBy === message.from.id
+    ? row.telegram_user_id
+    : null;
+}
+
+async function handleExtendLease(
+  env: Env,
+  callback: TelegramCallbackQuery,
+  telegramUserId: number,
+): Promise<boolean> {
+  if (!env.DB) return false;
+  const control = await getConversationControl(env.DB, telegramUserId);
+  if (control.mode !== "human" || control.claimedBy !== callback.from.id) {
+    await telegramApi(env, "answerCallbackQuery", {
+      callback_query_id: callback.id,
+      text: "Only the current claimant can extend this takeover.",
+      show_alert: true,
+    });
+    return true;
+  }
+
+  const renewed = await renewHumanControlLease(env.DB, telegramUserId, callback.from.id);
+  await telegramApi(env, "answerCallbackQuery", {
+    callback_query_id: callback.id,
+    text: renewed ? "Takeover extended for 1 hour." : "Takeover is no longer active.",
+  });
+  return true;
 }
 
 async function notifyPreviousClaimant(
@@ -293,6 +356,15 @@ export default {
       return json({ ok: true });
     }
 
+    const extendMatch = update.callback_query?.data?.match(/^conv:extend:(\d+)$/);
+    if (extendMatch && update.callback_query) {
+      const telegramUserId = Number(extendMatch[1]);
+      if (Number.isSafeInteger(telegramUserId)) {
+        await handleExtendLease(env, update.callback_query, telegramUserId);
+        return json({ ok: true });
+      }
+    }
+
     const returnMatch = update.callback_query?.data?.match(/^conv:return:(\d+)$/);
     if (returnMatch && update.callback_query) {
       const telegramUserId = Number(returnMatch[1]);
@@ -304,8 +376,13 @@ export default {
     const resetUserId = update.message?.from && commandName(update.message.text ?? "") === "/reset"
       ? update.message.from.id
       : null;
+    const activityUserId = update.message ? await claimantActivityUserId(env, update.message) : null;
 
     const response = await app.fetch(request, env);
+
+    if (activityUserId !== null && update.message?.from) {
+      await renewHumanControlLease(env.DB, activityUserId, update.message.from.id);
+    }
 
     if (returnMatch) {
       const telegramUserId = Number(returnMatch[1]);
