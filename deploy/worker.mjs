@@ -5089,6 +5089,30 @@ async function getManualSection(db, manualKey, sectionKey) {
   return row ? mapSection(row) : null;
 }
 __name(getManualSection, "getManualSection");
+async function createManualSection(db, manualKey, title, body, actorId) {
+  const maxRow = await db.prepare(
+    `SELECT COALESCE(MAX(sort_order), 0) AS max_sort
+     FROM manual_sections WHERE manual_key=?1`
+  ).bind(manualKey).first();
+  const sortOrder = Number(maxRow?.max_sort ?? 0) + 10;
+  const sectionKey = `custom-${crypto.randomUUID()}`;
+  const normalizedTitle = normalizeManualText(title).trim();
+  const normalizedBody = normalizeManualText(body).trim();
+  await db.prepare(
+    `INSERT INTO manual_sections
+      (manual_key, section_key, title, body, sort_order, version, updated_by, updated_at)
+     VALUES (?1, ?2, ?3, ?4, ?5, 1, ?6, CURRENT_TIMESTAMP)`
+  ).bind(manualKey, sectionKey, normalizedTitle, normalizedBody, sortOrder, actorId).run();
+  return {
+    manualKey,
+    sectionKey,
+    title: normalizedTitle,
+    body: normalizedBody,
+    sortOrder,
+    version: 1
+  };
+}
+__name(createManualSection, "createManualSection");
 async function updateManualSection(db, manualKey, sectionKey, body, actorId) {
   const current = await getManualSection(db, manualKey, sectionKey);
   if (!current) return null;
@@ -5181,7 +5205,10 @@ function pagerKeyboard(key, index, total, canEdit) {
   nav.push({ text: `${index + 1}/${total}`, callback_data: "manual:noop" });
   if (index < total - 1) nav.push({ text: "Next \u25B6", callback_data: `manual:page:${key}:${index + 1}` });
   const rows = [nav];
-  if (canEdit) rows.push([{ text: "\u270E Edit this section", callback_data: `manual:editpage:${key}:${index}` }]);
+  if (canEdit) {
+    rows.push([{ text: "\u270E Edit this section", callback_data: `manual:editpage:${key}:${index}` }]);
+    rows.push([{ text: "\uFF0B Add new section", callback_data: `manual:add:${key}` }]);
+  }
   rows.push([{ text: "\u2715 Close", callback_data: "ui:close" }]);
   return { inline_keyboard: rows };
 }
@@ -5299,10 +5326,60 @@ async function handleManualCallback(env, callback) {
     );
     return true;
   }
+  const addMatch = data.match(/^manual:add:(owner|admin)$/);
+  if (addMatch) {
+    if (role !== "owner") {
+      await answerCallback3(env, callback.id, "Owner only");
+      return true;
+    }
+    const key = addMatch[1];
+    await saveSession2(env.DB, callback.from.id, "awaiting_manual_add_title", key, null);
+    await answerCallback3(env, callback.id);
+    await editOrSend3(
+      env,
+      callback.message,
+      [
+        `Add section to ${manualTitle(key)}`,
+        "",
+        "Step 1/2 \u2014 Send the section title.",
+        "Example: 9. Staff escalation tips",
+        "",
+        "Use /cancel to stop."
+      ].join("\n")
+    );
+    return true;
+  }
   if (data === "manual:discard") {
     await clearSession2(env.DB, callback.from.id);
-    await answerCallback3(env, callback.id, "Edit discarded");
-    await editOrSend3(env, callback.message, "Manual edit discarded. Open the manual again when needed.");
+    await answerCallback3(env, callback.id, "Change discarded");
+    await editOrSend3(env, callback.message, "Manual change discarded. Open the manual again when needed.");
+    return true;
+  }
+  if (data === "manual:addsave") {
+    if (role !== "owner") {
+      await answerCallback3(env, callback.id, "Owner only");
+      return true;
+    }
+    const session = await env.DB.prepare(
+      `SELECT state, provider, payload FROM admin_sessions WHERE telegram_user_id=?1`
+    ).bind(callback.from.id).first();
+    if (!session || session.state !== "manual_add_preview" || !session.provider || !session.payload) {
+      await answerCallback3(env, callback.id, "Add session expired");
+      return true;
+    }
+    if (session.provider !== "owner" && session.provider !== "admin") {
+      await clearSession2(env.DB, callback.from.id);
+      await answerCallback3(env, callback.id, "Invalid add session");
+      return true;
+    }
+    const key = session.provider;
+    const payload = JSON.parse(session.payload);
+    await createManualSection(env.DB, key, payload.title, payload.body, callback.from.id);
+    await clearSession2(env.DB, callback.from.id);
+    await answerCallback3(env, callback.id, "Section added");
+    const sections = await listManualSections(env.DB, key);
+    const page = await renderManualPage(env, key, Math.max(0, sections.length - 1), true);
+    if (page) await editOrSend3(env, callback.message, page.text, page.keyboard);
     return true;
   }
   if (data === "manual:save") {
@@ -5343,7 +5420,64 @@ async function consumeManualEditText(env, message) {
   const session = await env.DB.prepare(
     `SELECT state, provider, payload FROM admin_sessions WHERE telegram_user_id=?1`
   ).bind(message.from.id).first();
-  if (!session || session.state !== "awaiting_manual_edit_body" || !session.provider) return false;
+  if (!session || !session.provider) return false;
+  if (session.state === "awaiting_manual_add_title") {
+    if (session.provider !== "owner" && session.provider !== "admin") return false;
+    if (text.length > 120) {
+      await sendMessage6(env, message.chat.id, "Section title is too long. Keep it under 120 characters or use /cancel.");
+      return true;
+    }
+    await saveSession2(env.DB, message.from.id, "awaiting_manual_add_body", session.provider, { title: text });
+    await sendMessage6(
+      env,
+      message.chat.id,
+      [
+        "Step 2/2 \u2014 Send the section content.",
+        "",
+        `Title: ${text}`,
+        "",
+        "Send the complete section body in one message. You will preview it before saving."
+      ].join("\n")
+    );
+    return true;
+  }
+  if (session.state === "awaiting_manual_add_body") {
+    if (session.provider !== "owner" && session.provider !== "admin") return false;
+    if (text.length > 3500) {
+      await sendMessage6(env, message.chat.id, "This section is too long for a clean Telegram manual view. Keep it under 3,500 characters or use /cancel.");
+      return true;
+    }
+    const oldPayload2 = session.payload ? JSON.parse(session.payload) : {};
+    if (!oldPayload2.title) {
+      await clearSession2(env.DB, message.from.id);
+      await sendMessage6(env, message.chat.id, "Add-section session expired. Open the manual and try again.");
+      return true;
+    }
+    const body = text.replace(/\\n/g, "\n");
+    await saveSession2(env.DB, message.from.id, "manual_add_preview", session.provider, {
+      title: oldPayload2.title,
+      body
+    });
+    await sendMessage6(
+      env,
+      message.chat.id,
+      [
+        "Preview \u2014 new section is not saved yet",
+        "",
+        oldPayload2.title,
+        "",
+        body
+      ].join("\n"),
+      {
+        inline_keyboard: [[
+          { text: "\u2713 Add section", callback_data: "manual:addsave" },
+          { text: "Discard", callback_data: "manual:discard" }
+        ]]
+      }
+    );
+    return true;
+  }
+  if (session.state !== "awaiting_manual_edit_body") return false;
   if (text.length > 3500) {
     await sendMessage6(env, message.chat.id, "This section is too long for a clean Telegram manual view. Keep it under 3,500 characters or use /cancel.");
     return true;
