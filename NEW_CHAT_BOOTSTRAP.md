@@ -15,7 +15,7 @@ Read in order:
 Treat live repository plus verified Cloudflare/Telegram evidence as authoritative over remembered chat context.
 
 ## Current checkpoint
-Production infrastructure, operational data and Telegram webhook cutover are green. `/start` works on production. A production Owner command-menu hotfix is being promoted because the Owner account showed only the two public commands after cutover.
+Production infrastructure, operational data and Telegram webhook cutover are green. `/start` works on production. The Owner command-menu sync bug has been fixed and promoted; TEST CI has also been cleaned up after a self-push race caused failed/cancelled validation noise.
 
 Verified production evidence:
 - isolated production D1 `school-of-nursing-faq-bot-prod-db` exists
@@ -33,14 +33,32 @@ Owner account displayed only `/start` and `/whoami`.
 Root cause:
 `src/command_sync.ts` previously swallowed role-specific `setMyCommands` failures and could still persist `command_schema_version`, causing later syncs to treat the command registry as current and skip retries.
 
-Fix on `test`:
+Fix:
 - `syncUserCommandScope()` returns boolean success/failure
 - Owner or Sudo command-scope failure aborts fingerprint persistence
 - later request/health sync can retry and self-heal
-- `COMMAND_SYNC_REVISION` is bumped so production is forced to rebuild command scopes
+- command sync revision was bumped so production is forced to rebuild command scopes
 
 Expected Owner command menu:
 `/start`, `/whoami`, `/admin`, `/admins`, `/faq`, `/adminmanual`, `/sudo`, `/ai`, `/staff`, `/ownermanual`, `/cancel`, `/reset`.
+
+## TEST Build workflow cleanup
+Failed/cancelled evidence:
+- run `32123681126`
+- job `95669489898`
+- typecheck PASS
+- local D1 migration validation PASS
+- Wrangler dry-run PASS
+- failure only at generated artifact refresh push-back to `test`
+- push was rejected as non-fast-forward because a newer commit had reached `test`
+- concurrency then cancelled the stale run in favor of the newer waiting request
+
+Fix in `.github/workflows/test-typecheck.yml`:
+- `contents: read`
+- Test Build no longer commits/pushes generated artifacts into `test`
+- generated Worker/checksum exist only in the runner workspace and uploaded handoff artifact
+- handoff bundle now includes all `migrations/*.sql`, eliminating the stale list that ended at migration 0006
+- `cancel-in-progress: true` remains intentional for obsolete test checkpoints
 
 ## Canonical Worker stack
 Wrangler entrypoint: `src/manual_entry.ts`
@@ -92,11 +110,11 @@ Workflow: `.github/workflows/production-telegram-cutover-once.yml`
 The workflow deploys current main, verifies production health, uses a one-time D1 nonce to authorize the Worker cutover endpoint, calls Telegram `setWebhook`, verifies exact production URL through `getWebhookInfo`, refreshes command scopes and performs final health verification.
 
 ## Next exact sequence
-1. promote the Owner command-menu hotfix from `test` to `main`
-2. tagged production workflow auto-deploys the hotfix and forces command resync
-3. verify Owner menu shows all Owner commands
-4. configure production AI provider/API key through `/ai`
-5. verify grounded AI + fallback/handoff
+1. verify latest Test Build is green with the read-only artifact flow
+2. verify Owner Telegram menu shows all Owner commands
+3. configure production AI provider/API key through `/ai`
+4. verify grounded AI + fallback/handoff
+5. promote the validated CI cleanup from `test` to `main`
 
 ## Current migrations
 - 0001 initial
