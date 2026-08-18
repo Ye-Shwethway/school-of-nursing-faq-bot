@@ -3,66 +3,66 @@
 Last updated: 2026-08-18
 
 ## Goal
-The FAQ bot must remain useful when AI is not configured or when an LLM/provider call fails. AI availability is optional; human continuity is mandatory.
+
+The FAQ bot must remain useful when AI is not configured or when a provider/model call fails. AI availability is optional; safe continuity is mandatory.
 
 ## Canonical runtime order
 
-1. Deterministic canonical FAQ match.
-2. If matched, answer from canonical FAQ without calling AI.
-3. If not matched, inspect AI availability.
-4. If AI is unavailable, route directly to human handoff.
-5. If AI is available, try the bound Primary model.
-6. If Primary fails technically or returns an unsafe/handoff decision, try the bound Fallback model when configured and usable.
-7. If Fallback is absent, fails, times out, returns malformed output, or cannot answer safely, route to human handoff.
+1. deterministic approved FAQ match
+2. if no match, grounded Primary AI when configured
+3. grounded Fallback AI when Primary is unavailable/fails/cannot answer safely
+4. human handoff when automation still cannot answer safely
 
-## Conditions that must NOT crash the user flow
+Any unexpected AI runtime failure resolves to handoff rather than an ungrounded answer or user-visible crash.
 
-Treat all of the following as human-handoff conditions, not fatal request errors:
+## Conditions that must not crash the user flow
+
+Treat these as fail-safe/handoff conditions:
 
 - no AI provider/API key configured
-- `AI_CONFIG_MASTER_KEY` missing
+- `AI_CONFIG_MASTER_KEY` missing or invalid
 - no Primary model bound
-- saved credential missing or unreadable
-- provider authentication failure
-- provider rate limit (`429`)
-- provider `5xx`
-- network/DNS/fetch failure
-- request timeout
-- model removed/unavailable
+- unreadable/missing saved credential
+- provider authentication/rate-limit/5xx/network/timeout failure
+- removed/unavailable model
 - malformed provider response
 - malformed structured AI decision
-- Primary model failure
-- Fallback model failure
+- insufficient or conflicting approved context
+- Primary and/or Fallback failure
 - grounded policy returns `handoff`
-- approved context is insufficient or conflicting
 
 ## User-facing behavior
-Do not expose provider names, API errors, encryption failures, stack traces, or internal configuration.
 
-The user should receive the normal localized human-review message. Do not promise a response time.
+Never expose provider names, API errors, encryption failures, stack traces, secrets, or internal configuration.
 
-## Staff behavior
-Create/retain an escalation case and route through the configured human destination:
+If at least one authorized active staff member is available, use the normal localized human-handoff message without promising a response time.
 
-- Staff Inbox group
-- Dedicated staff
-- `auto` route (group first, dedicated fallback)
+If available staff count is zero, the escalation is still retained, but the user must be told that staff are currently unavailable and that they should try again later. Do not imply immediate staff review when nobody is available.
 
-If staff delivery itself fails, keep the case queued in D1 and send the configured Owner a best-effort warning.
+## Staff continuity
 
-## Monitoring behavior
-AI outage/failure is a risk event.
+Create/retain the escalation case and route it through the configured human destination even when all staff are unavailable.
 
-- `all_alerts` / `alerts_only`: alert staff normally
-- `silent_all`: human handoff still occurs even though routine monitoring is silent
-- `off`: critical human handoff still occurs
+For Staff Inbox group routing, the case stays in the user's isolated topic so staff can review it later.
 
-Monitoring settings may never disable required escalation.
+When staff return, they can:
+
+- mark themselves `/available`
+- respond inside the user's topic and have the bot relay the response back to the user's private chat
+- receive a pending-case reminder in private chat if they are still marked unavailable and new open cases are waiting
+
+## Notification behavior
+
+`/noti off` only suppresses Telegram push notifications for Staff Inbox delivery. It must not disable case persistence or required handoff.
+
+Monitoring mode and Staff Inbox notification mode are separate controls.
 
 ## Primary/Fallback semantics
+
 Fallback is for resilience, not permission to invent an answer.
 
-Both Primary and Fallback use the same strict approved-context policy. If either model cannot establish a grounded answer, it must hand off rather than guess.
+Both Primary and Fallback use the same approved-context policy. If a grounded answer cannot be established, the correct outcome is handoff.
 
-## Code contract
-`src/ai_fail_safe.ts` provides an explicit AI-availability preflight. Future grounded inference orchestration must use fail-closed behavior: any unexpected AI runtime exception resolves to human handoff rather than a user-visible crash or ungrounded model retry loop.
+## Security
+
+AI/setup errors shown to operators must not leak API keys, `AI_CONFIG_MASTER_KEY`, Telegram secrets, Cloudflare credentials, hidden prompts, or private unrelated D1 records.
