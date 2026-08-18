@@ -26,6 +26,7 @@ Implemented:
 - visible `/language` for all users
 - staff notification toggle and staff availability state
 - staff-topic reply relay back to the original user
+- Owner/Admin manuals include the current staff-operations commands and reconnect workflow
 
 ## Staff notifications and availability
 Migration `0012_staff_presence_notifications.sql` adds `staff_presence` and the `staff_notifications_enabled` setting.
@@ -49,6 +50,13 @@ When staff later return, an authorized staff member can write inside that user's
 
 ## Staff Inbox notification semantics
 `/noti off` does not disable monitoring, delete messages, or discard escalation cases. It only sets Telegram `disable_notification=true` for handoff/human-control group delivery. This avoids push-notification spam while preserving the operational record.
+
+## Manual coverage
+Migration `0013_manual_staff_operations.sql` adds a new operational section to both manuals without overwriting existing editable sections.
+
+Owner Manual coverage includes `/language`, `/noti`, `/available`, `/unavailable`, `/clearmessage`, Staff Inbox switching, unavailable-staff behavior, and later topic-reply reconnect.
+
+Admin Manual coverage includes `/language`, `/noti`, `/available`, `/unavailable`, Take Over / Return to AI context, and topic-reply reconnect. Owner-only controls remain explicitly identified as Owner-only.
 
 ## AI configuration contract
 `AI_CONFIG_MASTER_KEY` must be a Cloudflare `secret_text` containing Base64 for exactly 32 random bytes. Credentials encrypted with an older master key must be entered again through `/ai` after key rotation.
@@ -86,14 +94,12 @@ Wrangler entrypoint: `src/staff_presence_entry.ts`.
 11. compatibility fallback + `/health`
 
 ## Current migrations
-0001 through 0012. Canonical 0012: `migrations/0012_staff_presence_notifications.sql`.
+0001 through 0013. Canonical 0013: `migrations/0013_manual_staff_operations.sql`.
 
 ## Next exact work
-1. verify the migration 0012 / presence-notification production run is green
-2. live-smoke `/noti off` and confirm handoff messages remain visible but silent
-3. mark all staff `/unavailable`, trigger an AI-failed inquiry, and confirm the unavailable copy
-4. mark one staff `/available`, reply inside the user's topic, and confirm the user receives the staff message privately
-5. continue directly on `main` in small validated slices
+1. verify the migration 0013 manual-update production run is green
+2. open `/ownermanual` and `/adminmanual` and confirm the new Staff operations sections render correctly
+3. continue directly on `main` in small validated slices
 
 ## Deferred validation debt
 - multiuser simultaneous live stress test
