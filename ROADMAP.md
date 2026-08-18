@@ -12,7 +12,7 @@ Production Telegram FAQ assistant for a university School of Nursing in Burmese,
 - normal production deployment remains explicit and guarded
 
 ## Current foundation
-Status: PRODUCTION WORKER + D1 + OPERATIONAL DATA GREEN; TELEGRAM CUTOVER ARMED
+Status: PRODUCTION LIVE; OWNER COMMAND-MENU HOTFIX IN PROMOTION
 
 Implemented:
 - multilingual FAQ + dynamic CRUD/revisions
@@ -27,23 +27,37 @@ Implemented:
 - editable/addable Owner/Admin manuals
 - same-user first-message topic provisioning lock
 - approved operational-data bootstrap from TEST D1 to isolated PRODUCTION D1
-- one-time nonce-gated Telegram production cutover automation
+- nonce-gated Telegram production cutover automation
 
 ## Verified production checkpoint
 Verified by live workflow/user evidence:
 - isolated production D1 `school-of-nursing-faq-bot-prod-db` exists
-- production D1 ID is stored as `CLOUDFLARE_PRODUCTION_D1_DATABASE_ID`
-- `Deploy PRODUCTION to Cloudflare` is green
-- production Worker `school-of-nursing-faq-bot` is deployed
-- production `/health` returns `environment=production`
-- four production Worker runtime secrets are configured
+- production Worker `school-of-nursing-faq-bot` is deployed and healthy
 - production operational-data bootstrap completed green
-- production FAQ/manual/admin/staff operational state is initialized from the approved TEST allow-list
-- production `AI_CONFIG_MASTER_KEY` is intentionally fresh, so encrypted TEST AI credentials were not copied
+- Telegram webhook cutover workflow completed green
+- `/start` works through production
+- deterministic FAQ/runtime paths work
+- production uses a fresh `AI_CONFIG_MASTER_KEY`; AI provider credentials still need production `/ai` configuration
+
+## Owner command-menu issue and hotfix
+Observed after cutover: Owner account displayed only the two public commands (`/start`, `/whoami`).
+
+Root cause in `src/command_sync.ts`:
+- per-user `setMyCommands` failures were swallowed
+- registry synchronization could still persist `command_schema_version` even if Owner/Sudo scoped command registration failed
+- subsequent health/runtime syncs could therefore skip retrying the broken role-specific menu
+
+Hotfix:
+- `syncUserCommandScope()` now returns success/failure
+- Owner or Sudo scope failure prevents command-schema fingerprint persistence
+- later requests/health checks can self-heal by retrying
+- command sync revision bumped so production is forced to rebuild Telegram command scopes
+
+Expected Owner menu after resync:
+`/start`, `/whoami`, `/admin`, `/admins`, `/faq`, `/adminmanual`, `/sudo`, `/ai`, `/staff`, `/ownermanual`, `/cancel`, `/reset`.
 
 ## Production operational-data bootstrap
-Workflow:
-`.github/workflows/bootstrap-production-data.yml`
+Workflow: `.github/workflows/bootstrap-production-data.yml`
 
 Copied allow-list:
 - current FAQ entries
@@ -61,36 +75,17 @@ Not copied:
 - setup/admin sessions
 - encrypted AI credentials
 - AI cache/tests/model bindings
-- deployment markers / command sync fingerprint
 
-## One-time Telegram production cutover
-Status: ARMED FOR MAIN PROMOTION
+## Production cutover automation
+Workflow: `.github/workflows/production-telegram-cutover-once.yml`
 
-Runtime endpoint:
-`POST /ops/telegram/cutover`
-
-Workflow:
-`.github/workflows/production-telegram-cutover-once.yml`
-
-Security/behavior:
-- production-only endpoint
-- requires one-time high-entropy nonce stored in production D1
-- workflow generates and masks the nonce, writes it to D1, then calls the production Worker
-- Worker atomically consumes the nonce before changing Telegram webhook
-- Worker uses its own Cloudflare runtime secrets `TELEGRAM_BOT_TOKEN` and `TELEGRAM_WEBHOOK_SECRET`; the bot token is never copied into GitHub Actions
-- webhook target is the actual production Worker origin + `/telegram/webhook`
-- Telegram `setWebhook` must succeed
-- Telegram `getWebhookInfo` read-back must equal the production webhook URL
-- production command scopes are refreshed after cutover
-- final production health must pass
-
-The one-time workflow only runs for a `main` push whose head commit message contains `[production-cutover]`. Normal future `main` promotions do not retrigger it.
+The workflow deploys current main to production, verifies health, uses a one-time D1 nonce, calls Telegram `setWebhook`, verifies `getWebhookInfo`, refreshes command scopes, and performs a final production health check.
 
 ## Canonical Worker stack
 Wrangler enters `src/manual_entry.ts`.
 
 1. manual pager/edit/add + command sync
-2. deployment online notice + one-time production cutover endpoint
+2. deployment online notice + production cutover endpoint
 3. latest Return-to-AI control
 4. monitoring presentation / isolated handoff
 5. Staff Inbox UX
@@ -99,26 +94,12 @@ Wrangler enters `src/manual_entry.ts`.
 8. dynamic FAQ/AI runtime
 9. compatibility fallback + `/health`
 
-## Manuals
-`/ownermanual` — Owner read/edit/add.
-
-`/adminmanual` — Owner read/edit/add; Sudo Admin read-only.
-
-Manual storage remains isolated from FAQ matching and AI grounding.
-
-## Multiuser / Staff Inbox isolation
-Different Telegram users have independent profile/language, question logs, conversation mode, claimant, topic, and AI/human lifecycle. Migration 0008 guards same-user concurrent first-topic provisioning.
-
-## Production go-live sequence
-1. promote this tagged cutover checkpoint from `test` to `main`
-2. one-time main-push workflow auto-deploys current main to production
-3. production health passes before cutover
-4. workflow arms and consumes a one-time D1 nonce
-5. Telegram webhook moves to production and is read-back verified
-6. final production health passes
-7. smoke-test normal FAQ, Owner/Admin, manuals and Staff Inbox
-8. configure production AI provider/API key through `/ai`
-9. verify grounded AI, fallback and human handoff
+## Next exact work
+1. promote Owner command-menu hotfix from `test` to `main`
+2. auto-deploy current main through tagged production cutover workflow
+3. verify Owner Telegram menu shows the full Owner command set
+4. configure production AI provider/API key through `/ai`
+5. verify grounded AI, fallback and human handoff
 
 ## Current migrations
 - 0001 initial
@@ -139,8 +120,8 @@ Canonical 0010: `migrations/0010_manual_newline_cleanup.sql`.
 - same-user near-simultaneous first-message live race test
 
 ## Later slice
-After controlled production go-live:
-- remove the one-time cutover workflow after successful cutover
+After production stabilization:
+- remove or retire the one-time cutover workflow
 - latency / route telemetry without secrets
 - provider/model performance comparison
 - answer-presentation polish only where live UX shows a real need
