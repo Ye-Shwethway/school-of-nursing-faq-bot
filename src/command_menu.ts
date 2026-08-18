@@ -7,6 +7,7 @@ export type BotCommand = {
 
 const PUBLIC_COMMANDS: BotCommand[] = [
   { command: "start", description: "Start School of Nursing assistant" },
+  { command: "language", description: "Change language" },
   { command: "whoami", description: "Show my Telegram identity" },
 ];
 
@@ -28,7 +29,7 @@ const OWNER_COMMANDS: BotCommand[] = [
   { command: "reset", description: "Reset transient conversation state" },
 ];
 
-const COMMAND_SYNC_REVISION = 2;
+const COMMAND_SYNC_REVISION = 3;
 
 export const COMMAND_SCHEMA_VERSION = JSON.stringify({
   revision: COMMAND_SYNC_REVISION,
