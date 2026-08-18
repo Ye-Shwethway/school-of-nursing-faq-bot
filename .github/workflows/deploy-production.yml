@@ -1,5 +1,5 @@
 # Main-only production pipeline. Touching this file intentionally triggers a production validation/deploy run.
-# Escalation Inbox checkpoint: Owner registry now contains 18 commands.
+# Spam-protection checkpoint: Owner registry now contains 19 commands.
 name: Deploy PRODUCTION to Cloudflare
 
 on:
@@ -66,23 +66,13 @@ jobs:
             const rows=bindings.map(b=>({name:b.name,type:b.type}));
             console.log("Pre-deploy production bindings:", JSON.stringify(rows));
             const byName=new Map(rows.map(r=>[r.name,r.type]));
-            const requirements={
-              DB:"d1",
-              TELEGRAM_BOT_TOKEN:"secret_text",
-              TELEGRAM_WEBHOOK_SECRET:"secret_text",
-              AI_CONFIG_MASTER_KEY:"secret_text",
-              BOT_OWNER_TELEGRAM_ID:"secret_text"
-            };
+            const requirements={DB:"d1",TELEGRAM_BOT_TOKEN:"secret_text",TELEGRAM_WEBHOOK_SECRET:"secret_text",AI_CONFIG_MASTER_KEY:"secret_text",BOT_OWNER_TELEGRAM_ID:"secret_text"};
             const problems=[];
             for(const [name,type] of Object.entries(requirements)){
               if(!byName.has(name)) problems.push(`${name} is missing`);
               else if(byName.get(name)!==type) problems.push(`${name} must be ${type}, found ${byName.get(name)}`);
             }
-            if(problems.length){
-              console.error("Production runtime binding preflight failed:", problems.join("; "));
-              console.error("BOT_OWNER_TELEGRAM_ID must be stored as a Cloudflare Secret, not a plain Variable.");
-              process.exit(1);
-            }
+            if(problems.length){console.error("Production runtime binding preflight failed:", problems.join("; "));process.exit(1);}
           ' "$settings"
 
       - name: Install dependencies
@@ -105,12 +95,7 @@ jobs:
             workers_dev: true,
             preview_urls: false,
             vars: { APP_ENV: 'production' },
-            d1_databases: [{
-              binding: 'DB',
-              database_name: process.env.PRODUCTION_D1_DATABASE_NAME,
-              database_id: process.env.PRODUCTION_D1_DATABASE_ID,
-              migrations_dir: 'migrations'
-            }]
+            d1_databases: [{binding:'DB',database_name:process.env.PRODUCTION_D1_DATABASE_NAME,database_id:process.env.PRODUCTION_D1_DATABASE_ID,migrations_dir:'migrations'}]
           }, null, 2));
           NODE
 
@@ -131,25 +116,13 @@ jobs:
         run: |
           api="https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}"
           auth="Authorization: Bearer ${CLOUDFLARE_API_TOKEN}"
-          settings="$(curl --fail --silent --show-error --connect-timeout 10 --max-time 20 \
-            "${api}/workers/scripts/${PRODUCTION_WORKER_NAME}/settings" -H "$auth")"
+          settings="$(curl --fail --silent --show-error --connect-timeout 10 --max-time 20 "${api}/workers/scripts/${PRODUCTION_WORKER_NAME}/settings" -H "$auth")"
           node -e '
-            const p=JSON.parse(process.argv[1]);
-            if(p.success!==true) process.exit(1);
-            const bindings=Array.isArray(p.result?.bindings)?p.result.bindings:[];
-            const rows=bindings.map(b=>({name:b.name,type:b.type}));
-            console.log("Post-deploy production bindings:", JSON.stringify(rows));
-            const byName=new Map(rows.map(r=>[r.name,r.type]));
+            const p=JSON.parse(process.argv[1]); if(p.success!==true) process.exit(1);
+            const bindings=Array.isArray(p.result?.bindings)?p.result.bindings:[]; const byName=new Map(bindings.map(b=>[b.name,b.type]));
             const required=["DB","TELEGRAM_BOT_TOKEN","TELEGRAM_WEBHOOK_SECRET","AI_CONFIG_MASTER_KEY","BOT_OWNER_TELEGRAM_ID"];
-            const missing=required.filter(x=>!byName.has(x));
-            if(missing.length){
-              console.error("Deployment removed required production bindings:", missing.join(", "));
-              process.exit(1);
-            }
-            if(byName.get("BOT_OWNER_TELEGRAM_ID")!=="secret_text"){
-              console.error("BOT_OWNER_TELEGRAM_ID must remain a secret_text binding after deploy.");
-              process.exit(1);
-            }
+            const missing=required.filter(x=>!byName.has(x)); if(missing.length) process.exit(1);
+            if(byName.get("BOT_OWNER_TELEGRAM_ID")!=="secret_text") process.exit(1);
           ' "$settings"
 
       - name: Resolve production origin
@@ -162,9 +135,8 @@ jobs:
           worker_payload="$(curl --fail --silent --show-error --connect-timeout 10 --max-time 20 "${api}/workers/scripts/${PRODUCTION_WORKER_NAME}/subdomain" -H "$auth")"
           account_subdomain="$(node -e 'const p=JSON.parse(process.argv[1]); if(p.success!==true||!p.result?.subdomain)process.exit(1); process.stdout.write(p.result.subdomain)' "$account_payload")"
           worker_enabled="$(node -e 'const p=JSON.parse(process.argv[1]); if(p.success!==true)process.exit(1); process.stdout.write(String(p.result?.enabled===true))' "$worker_payload")"
-          test "$worker_enabled" = "true" || { echo "Worker workers.dev route is not enabled."; exit 1; }
-          origin="https://${PRODUCTION_WORKER_NAME}.${account_subdomain}.workers.dev"
-          echo "origin=$origin" >> "$GITHUB_OUTPUT"
+          test "$worker_enabled" = "true" || exit 1
+          echo "origin=https://${PRODUCTION_WORKER_NAME}.${account_subdomain}.workers.dev" >> "$GITHUB_OUTPUT"
 
       - name: Verify production health
         shell: bash
@@ -182,11 +154,8 @@ jobs:
           echo "::add-mask::$NONCE"
           echo "OPS_NONCE=$NONCE" >> "$GITHUB_ENV"
           payload="$(node -e 'process.stdout.write(JSON.stringify({sql:`INSERT INTO bot_settings (setting_key, setting_value, updated_by, updated_at) VALUES (\"owner_command_resync_nonce\", ?1, 0, CURRENT_TIMESTAMP) ON CONFLICT(setting_key) DO UPDATE SET setting_value=excluded.setting_value, updated_by=0, updated_at=CURRENT_TIMESTAMP`,params:[process.argv[1]]}))' "$NONCE")"
-          response="$(curl --fail --silent --show-error --connect-timeout 10 --max-time 30 -X POST \
-            -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
-            -H "Content-Type: application/json" --data "$payload" \
-            "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/d1/database/${PRODUCTION_D1_DATABASE_ID}/query")"
-          node -e 'const b=JSON.parse(process.argv[1]); if(b.success!==true){console.error(b);process.exit(1)}' "$response"
+          response="$(curl --fail --silent --show-error --connect-timeout 10 --max-time 30 -X POST -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" -H "Content-Type: application/json" --data "$payload" "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/d1/database/${PRODUCTION_D1_DATABASE_ID}/query")"
+          node -e 'const b=JSON.parse(process.argv[1]); if(b.success!==true)process.exit(1)' "$response"
 
       - name: Verify Owner command registry through Telegram read-back
         shell: bash
@@ -194,23 +163,13 @@ jobs:
           PRODUCTION_ORIGIN: ${{ steps.worker_endpoint.outputs.origin }}
         run: |
           body_file="$(mktemp)"
-          status="$(curl --silent --show-error --connect-timeout 10 --max-time 45 -o "$body_file" -w '%{http_code}' -X POST \
-            -H "X-Ops-Nonce: ${OPS_NONCE}" \
-            "${PRODUCTION_ORIGIN}/ops/telegram/owner-command-resync")"
-          response="$(cat "$body_file")"
-          rm -f "$body_file"
-          echo "Owner command endpoint HTTP ${status}"
-          echo "$response"
-          if [ "$status" -lt 200 ] || [ "$status" -ge 300 ]; then
-            echo "Owner command endpoint returned non-success HTTP status."
-            exit 1
-          fi
+          status="$(curl --silent --show-error --connect-timeout 10 --max-time 45 -o "$body_file" -w '%{http_code}' -X POST -H "X-Ops-Nonce: ${OPS_NONCE}" "${PRODUCTION_ORIGIN}/ops/telegram/owner-command-resync")"
+          response="$(cat "$body_file")"; rm -f "$body_file"; echo "$response"
+          if [ "$status" -lt 200 ] || [ "$status" -ge 300 ]; then exit 1; fi
           node -e '
             const b=JSON.parse(process.argv[1]);
-            const expected=["start","language","whoami","admin","admins","faq","cases","adminmanual","noti","available","unavailable","sudo","ai","staff","clearmessage","ownermanual","cancel","reset"];
-            if(b.ok!==true||b.environment!=="production"||b.command_count!==18||JSON.stringify(b.owner_commands)!==JSON.stringify(expected)){
-              console.error("Owner command verification failed", b); process.exit(1);
-            }
+            const expected=["start","language","whoami","admin","admins","faq","cases","limits","adminmanual","noti","available","unavailable","sudo","ai","staff","clearmessage","ownermanual","cancel","reset"];
+            if(b.ok!==true||b.environment!=="production"||b.command_count!==19||JSON.stringify(b.owner_commands)!==JSON.stringify(expected)) process.exit(1);
           ' "$response"
 
       - name: Remove generated production config
@@ -231,6 +190,6 @@ jobs:
             echo "- Production health: PASS"
             echo "- Runtime secrets preserved: PASS"
             echo "- Owner command setMyCommands: PASS"
-            echo "- Owner command getMyCommands read-back: PASS (18/18)"
+            echo "- Owner command getMyCommands read-back: PASS (19/19)"
             echo "- TEST pipeline: none"
           } >> "$GITHUB_STEP_SUMMARY"
