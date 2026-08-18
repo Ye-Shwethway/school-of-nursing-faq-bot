@@ -1,5 +1,6 @@
 import app from "./cases_entry";
-import { handleFaqCallback } from "./faq_admin";
+import { consumeFaqAdminText, handleFaqCallback, type FaqUiResponse } from "./faq_admin";
+import { notifyFaqChange } from "./faq_notify";
 
 interface Env {
   APP_ENV: string;
@@ -14,6 +15,7 @@ interface Env {
 type TelegramUser = { id: number };
 type TelegramMessage = {
   message_id: number;
+  message_thread_id?: number;
   text?: string;
   chat: { id: number; type?: string };
   from?: TelegramUser;
@@ -24,7 +26,7 @@ type TelegramCallbackQuery = {
   data?: string;
   message?: TelegramMessage;
 };
-type TelegramUpdate = { callback_query?: TelegramCallbackQuery };
+type TelegramUpdate = { message?: TelegramMessage; callback_query?: TelegramCallbackQuery };
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -49,6 +51,22 @@ async function telegramApi(env: Env, method: string, body: unknown): Promise<any
   }
 }
 
+async function sendMessage(
+  env: Env,
+  chatId: number,
+  text: string,
+  keyboard?: unknown,
+  options?: { disableNotification?: boolean; messageThreadId?: number },
+): Promise<any | null> {
+  return telegramApi(env, "sendMessage", {
+    chat_id: chatId,
+    text,
+    reply_markup: keyboard,
+    disable_notification: options?.disableNotification,
+    message_thread_id: options?.messageThreadId,
+  });
+}
+
 async function editOrSend(env: Env, message: TelegramMessage, text: string, keyboard?: unknown): Promise<void> {
   const edited = await telegramApi(env, "editMessageText", {
     chat_id: message.chat.id,
@@ -57,12 +75,19 @@ async function editOrSend(env: Env, message: TelegramMessage, text: string, keyb
     reply_markup: keyboard,
   });
   if (!edited) {
-    await telegramApi(env, "sendMessage", {
-      chat_id: message.chat.id,
-      text,
-      reply_markup: keyboard,
-    });
+    await sendMessage(env, message.chat.id, text, keyboard, { messageThreadId: message.message_thread_id });
   }
+}
+
+async function notifyMutation(env: Env, actorId: number, result: FaqUiResponse): Promise<void> {
+  if (!result.mutation) return;
+  await notifyFaqChange(
+    env.DB,
+    env.BOT_OWNER_TELEGRAM_ID,
+    actorId,
+    result.mutation,
+    async (target, text, options) => sendMessage(env, target, text, undefined, options),
+  );
 }
 
 async function handleWebhook(request: Request, env: Env): Promise<Response> {
@@ -88,10 +113,35 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
       { DB: env.DB, AI_CONFIG_MASTER_KEY: env.AI_CONFIG_MASTER_KEY },
     );
     await telegramApi(env, "answerCallbackQuery", { callback_query_id: callback.id });
-    if (callback.message && result.text) {
-      await editOrSend(env, callback.message, result.text, result.keyboard);
-    }
+    if (callback.message && result.text) await editOrSend(env, callback.message, result.text, result.keyboard);
     return json({ ok: true });
+  }
+
+  const message = update.message;
+  if (message?.from && message.text) {
+    try {
+      const result = await consumeFaqAdminText(
+        env.DB,
+        message.from.id,
+        env.BOT_OWNER_TELEGRAM_ID,
+        message.text,
+      );
+      if (result.handled) {
+        if (result.text) {
+          await sendMessage(
+            env,
+            message.chat.id,
+            result.text,
+            result.keyboard,
+            { messageThreadId: message.message_thread_id },
+          );
+        }
+        await notifyMutation(env, message.from.id, result);
+        return json({ ok: true });
+      }
+    } catch {
+      // Let the canonical lower stack handle non-authoring messages or transient failures.
+    }
   }
 
   return app.fetch(request, env);
