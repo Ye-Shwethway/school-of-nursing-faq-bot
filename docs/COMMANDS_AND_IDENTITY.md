@@ -2,93 +2,75 @@
 
 Last updated: 2026-08-18
 
-## Public landing
-`/start` is the public School of Nursing landing surface.
+## Identity rule
 
-It must contain only user-facing actions such as language selection and normal inquiry guidance. Owner/Admin controls must never be mixed into `/start`.
+Immutable Telegram numeric user ID is the authority key. Usernames and display names are metadata only.
 
-## Public command visibility
-Normal users see only:
+`/whoami` is available to every user and should display human-readable identity together with the numeric ID when possible.
 
-- `/start`
-- `/whoami`
+## Public command menu
 
-`/language` remains a supported compatibility command but is intentionally hidden from the public command menu because language selection is available through the `/start` UI.
-
-## `/whoami`
-Available to every user in the bot's private chat.
-
-The response includes:
-
-- first/last name when Telegram provides them
-- `@username` when available
-- immutable numeric Telegram user ID
-
-Canonical display format:
-
-`Name (@username) — ID: 123456789`
-
-If no stored name is available:
-
-`Unknown name — ID: 123456789`
-
-The numeric ID is the authority key used when Owner grants Sudo Admin or Staff access. Usernames are never authority.
-
-## Management identity rule
-Administrative and staff-management screens must not show a bare Telegram ID when identity metadata is available.
-
-Always display human-readable identity and immutable ID together. This applies to:
-
-- Owner display
-- Sudo Admin lists
-- grant/revoke confirmations
-- Staff lists/status where user metadata is available
-- future user lookup and case-management screens
-
-## Role-scoped command menus
-The Worker manages Telegram commands through the Bot API rather than requiring manual BotFather updates.
-
-Public/private default:
+All users see:
 
 - `/start`
+- `/language`
 - `/whoami`
 
-Current Sudo Admin private scope adds:
+`/language` is intentionally visible so users can change interface language without reopening `/start`.
+
+## Sudo Admin command menu
+
+Sudo Admin inherits the public commands and adds:
 
 - `/admin`
 - `/admins`
+- `/faq`
+- `/adminmanual`
+- `/noti`
+- `/available`
+- `/unavailable`
 
-Current Owner private scope adds:
+`/noti`, `/available`, and `/unavailable` are operational Staff Inbox commands. They are valid only where the handler's server-side authorization/context rules permit them.
+
+## Owner command menu
+
+Owner inherits the Sudo/Public set and additionally has:
 
 - `/sudo`
 - `/ai`
 - `/staff`
+- `/clearmessage`
+- `/ownermanual`
+- `/cancel`
+- `/reset`
 
-Owner inherits Admin + public commands.
+Expected Owner command count: **17**.
 
-Only runtime-ready commands are exposed. `/faq` will be added to the Admin/Owner registry when migration 0005 and the dynamic FAQ runtime cutover are complete; adding it to the registry will make it appear automatically without BotFather.
+Canonical order:
 
-## Automatic synchronization
-Command definitions live in `src/command_menu.ts`.
+`start`, `language`, `whoami`, `admin`, `admins`, `faq`, `adminmanual`, `noti`, `available`, `unavailable`, `sudo`, `ai`, `staff`, `clearmessage`, `ownermanual`, `cancel`, `reset`.
 
-The command-registry fingerprint is derived from the command arrays themselves. When code changes the registry, the first webhook after deployment detects a changed fingerprint and calls Telegram `setMyCommands` to synchronize:
+## Command synchronization
 
-1. public private-chat scope
-2. Owner private-chat scope
-3. every current Sudo Admin private-chat scope
+Definitions live in `src/command_menu.ts` and are synchronized through Telegram Bot API scopes. Command schema revision is currently `5`.
 
-No BotFather command update is required.
+The production workflow performs an exact Owner command read-back after deployment. A menu is not considered canonical merely because commands were submitted; production verification must match the expected set and order.
 
-`/start` and `/whoami` also self-heal the current user's role scope.
+Role changes also refresh the affected user's private command scope best-effort.
 
-After `/sudo grant <id>` or `/sudo revoke <id>`, the affected user's private command scope is refreshed immediately.
+## Operational command semantics
+
+- `/noti on|off` — enable/disable Staff Inbox push notifications without discarding group messages/cases.
+- `/available` — mark the authorized staff member available.
+- `/unavailable` — mark the authorized staff member unavailable.
+- `/clearmessage` — Owner-only best-effort recent Staff Inbox cleanup; Telegram history/deletion limitations mean it is not a guaranteed full purge.
+- `/cancel` — cancel the current setup/edit wizard only.
+- `/reset` — clear transient conversation control/session state and return to AI mode; it does not erase persistent FAQ/AI/role configuration.
+
+## Management display rule
+
+Administrative screens should show readable identity plus immutable ID together whenever metadata is available. This applies to Owner, Sudo Admins, staff, grants/revokes, and case/user management.
 
 ## Security boundary
-Telegram command visibility is UX, not authorization.
 
-All privileged handlers must still verify immutable Telegram user ID and server-side role state. Manually typing a hidden command must never bypass Owner/Admin authorization.
-
-## Failure behavior
-Command-menu synchronization is best-effort and non-fatal.
-
-A Telegram command API outage or missing pre-migration `bot_settings` table must not crash FAQ answering, human handoff, or other bot behavior. The next eligible request retries synchronization.
+Telegram command visibility is UX, not authorization. Every privileged handler must verify numeric Telegram identity and server-side role/state. Manually typing a command must never bypass authority or Staff Inbox context checks.
