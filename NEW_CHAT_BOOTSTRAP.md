@@ -16,7 +16,11 @@ Live repository plus verified Cloudflare/Telegram evidence outranks remembered c
 ## Current checkpoint
 The project is main-only and production-live. FAQ-first onboarding, false-escalation filtering, rotated Telegram token + automatic webhook cutover, rotated AI master-key credential save, and Bot Owner override of another Admin's stale Take Over are live-accepted.
 
-Newest implementation on `main` adds a persisted **1-hour human-control inactivity lease with claimant renewal and automatic Return to AI**. Do not call this newest timer slice production-green until the production workflow and live scheduled-expiry acceptance are verified.
+Newest implementations on `main`:
+1. persisted **1-hour human-control inactivity lease + claimant renewal + scheduled auto-return**
+2. deployment online notice **change summary** so the reboot message shows what was deployed
+
+Do not call these newest slices production-green until production workflow/live acceptance is verified.
 
 ## Human-control lease contract
 - Every successful `Take Over` starts a 1-hour inactivity lease.
@@ -28,7 +32,7 @@ Newest implementation on `main` adds a persisted **1-hour human-control inactivi
 - Claimant Return to AI, Owner override, resolve/reset and auto-expiry clear lease timestamps.
 
 ## Scheduled auto-return
-Canonical `wrangler.jsonc` now has:
+Canonical `wrangler.jsonc` has:
 `triggers.crons = ["*/5 * * * *"]`.
 
 Top-level `src/interaction_guard_entry.ts` exposes `scheduled()` and calls `sweepExpiredHumanControls()` from `src/human_control_lease.ts`.
@@ -56,9 +60,18 @@ Current migration range: `0001` through `0028`.
 - adds Owner/Admin manual sections for lease/auto-return behavior
 
 ## Production deployment contract
-The production workflow creates an isolated Wrangler config. It now copies `source.triggers` into that generated config; otherwise canonical Cron settings would be lost at deploy time.
+The production workflow creates an isolated Wrangler config and copies `source.triggers`; otherwise canonical Cron settings would be lost at deploy time.
 
 Remote D1 migrations run before Worker deploy. Production still validates typecheck, local migrations, dry-run bundle, remote migrations, bindings, `/health`, webhook cutover/read-back and exact Owner command registry 19/19.
+
+### Deployment reboot change metadata
+The workflow derives the subject of `GITHUB_SHA`, normalizes it to one line, caps it at 180 characters and injects it as `DEPLOY_CHANGE` together with `DEPLOY_REVISION`.
+
+`src/deployment_notice_entry.ts` now renders:
+- `Revision: <short sha>`
+- `Change: <deploy-triggering commit subject>` when available
+
+This is intentionally deploy-time metadata; the Worker does not need GitHub API credentials. In the current direct-to-main model the `Change:` value is the triggering commit subject. If PR merges are adopted later, the same field can expose the merge/PR title. Missing change metadata never blocks the health/online notice.
 
 ## Owner authority contract
 - Sudo/Admin may Take Over.
@@ -90,6 +103,8 @@ Top flow:
 - claimant staff-activity renewal
 - Owner override path
 
+`deployment_notice_entry.ts` owns the production health-triggered online notice and renders both revision and deploy change metadata.
+
 ## Existing product surfaces
 - multilingual deterministic/dynamic FAQ
 - public role-aware `/faq`
@@ -99,6 +114,7 @@ Top flow:
 - Staff Inbox human takeover/resolve/return-to-AI
 - Owner override of stale Admin takeover
 - 1-hour human-control lease + auto-return
+- reboot notice with revision + deployed change summary
 - `/limits`, progressive inquiry limits, Interaction Flood Guard
 - Owner-only permanent ban/unban
 - Input Quality Gate + AI clarify-vs-handoff
@@ -113,16 +129,17 @@ Command schema revision: **9**. Sudo total: **12**. Owner total: **19**.
 ## Next exact validation
 After the triggered production workflow is green:
 1. confirm migration 0028 applied and deployment/health/webhook/commands all pass
-2. Admin Take Over a test user
-3. confirm human-mode relay works
-4. claimant presses `Extend 1h` and gets successful acknowledgement
-5. claimant sends a valid Staff Inbox reply and lease renews
-6. another Admin cannot extend/renew that claim
-7. claimant Return to AI still works
-8. repeat Take Over and confirm Owner override still works
-9. for scheduled-expiry acceptance, use a controlled test lease/expiry rather than waiting blindly for an unknown stale claim
-10. after expiry + Cron sweep, user must be in AI mode, receive localized auto-return notice, claimant must receive expiry notification/fallback, and next user question must enter FAQ/AI
-11. case/question/user history must remain unchanged
+2. confirm `🟢 Bot is Online!` includes the correct short revision plus `Change:` matching the triggering commit subject
+3. Admin Take Over a test user
+4. confirm human-mode relay works
+5. claimant presses `Extend 1h` and gets successful acknowledgement
+6. claimant sends a valid Staff Inbox reply and lease renews
+7. another Admin cannot extend/renew that claim
+8. claimant Return to AI still works
+9. repeat Take Over and confirm Owner override still works
+10. use a controlled expiry test for scheduled auto-return
+11. after expiry + Cron sweep, user must be in AI mode, receive localized auto-return notice, claimant must receive expiry notification/fallback, and next user question must enter FAQ/AI
+12. case/question/user history must remain unchanged
 
 ## Documentation rule
 After every behavior/schema/deployment slice, keep `ROADMAP.md`, this file, manuals and `docs/TELEGRAM_DESIGN_RULES.md` synchronized with live repository reality.
