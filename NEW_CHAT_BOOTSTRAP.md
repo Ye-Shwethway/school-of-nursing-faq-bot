@@ -17,14 +17,14 @@ Treat live repository plus verified Cloudflare/Telegram evidence as authoritativ
 ## Current checkpoint
 Production FAQ, AI, Telegram webhook, Owner identity, Staff Inbox, Sudo provisioning, main-only deployment and visible `/language` are working. `/clearmessage` is retained as a best-effort utility because Telegram history/deletion behavior limits full cleanup guarantees.
 
-The current deployment slice adds Staff Inbox notification control, explicit staff availability, unavailable-user messaging, and staff-topic reply relay back to users.
+The current operational slice adds Staff Inbox notification control, explicit staff availability, unavailable-user messaging, staff-topic reply relay back to users, and matching Owner/Admin manual coverage.
 
 ## Staff presence / notification slice
 Migration `0012_staff_presence_notifications.sql` adds:
 - `staff_presence`
 - `staff_notifications_enabled` bot setting
 
-Wrangler entrypoint is now `src/staff_presence_entry.ts`, wrapping `src/clear_message_entry.ts`.
+Wrangler entrypoint is `src/staff_presence_entry.ts`, wrapping `src/clear_message_entry.ts`.
 
 Active Staff Inbox commands:
 - `/noti on`
@@ -57,6 +57,28 @@ Authorized staff can later write a normal text message inside the affected user'
 - leaves another staff member's existing claim intact instead of stealing control
 
 If Telegram cannot deliver the private reply, an error is posted silently in the topic.
+
+## Manual coverage
+Migration `0013_manual_staff_operations.sql` adds one new section to each manual using `INSERT OR IGNORE`, so existing runtime-edited manual sections are not overwritten.
+
+Owner Manual section covers:
+- `/language`
+- `/noti on|off`
+- `/available`
+- `/unavailable`
+- `/clearmessage`
+- Staff Inbox switching
+- no-available-staff handoff behavior
+- later topic-reply reconnect to the original user
+
+Admin Manual section covers:
+- `/language`
+- `/noti on|off`
+- `/available`
+- `/unavailable`
+- Take Over / Return to AI context
+- topic-reply reconnect to the original user
+- clear identification of Owner-only controls
 
 ## Command registry
 Public:
@@ -92,14 +114,13 @@ Production exact Owner read-back target: 17 commands.
 11. `index.ts`
 
 ## Current migrations
-0001 through 0012; canonical 0012 is `migrations/0012_staff_presence_notifications.sql`.
+0001 through 0013; canonical 0013 is `migrations/0013_manual_staff_operations.sql`.
 
 ## Next exact sequence
-1. verify migration 0012 + 17-command production deployment green
-2. test `/noti off` then trigger handoff and confirm group message remains but arrives silently
-3. mark all staff `/unavailable`, trigger an unanswered question, confirm unavailable copy
-4. mark one staff `/available`, reply in the user topic, confirm private relay to user
-5. continue directly on `main`
+1. verify migration 0013 production deployment green
+2. open `/ownermanual` and confirm the new Staff operations section renders correctly
+3. open `/adminmanual` and confirm the role-appropriate Staff operations section renders correctly
+4. continue directly on `main`
 
 ## Documentation rule
 After every meaningful runtime/deployment/architecture slice, update this file before stopping.
