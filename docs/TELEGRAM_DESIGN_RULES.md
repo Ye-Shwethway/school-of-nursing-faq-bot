@@ -53,8 +53,29 @@ Recommended order: `မြန်မာ` · `English` · `简体中文`. Persist 
 - Paginate long FAQ lists instead of dumping every FAQ into one tall message. Default to about 6–8 items per page.
 - Use two buttons in a row only when both labels are compact; use one full row for longer labels.
 - FAQ detail view shows only the selected-language approved question and answer for normal users.
-- Owner/Sudo `/faq` remains a management surface and may expose Browse, Add, Inactive, Help, Edit, Disable, and Restore according to authorization.
+- Owner/Sudo `/faq` remains a management surface and may expose Browse, Add, Inactive, Help, Edit, Disable, Restore, and multilingual drafting according to authorization.
 - Public and privileged FAQ browsing should share the same clean list/navigation grammar so visual fixes apply globally.
+
+## Multilingual FAQ authoring
+- Owner and Sudo Admins may author a FAQ from one language they understand confidently: Burmese, English, or Simplified Chinese.
+- The chosen source-language question and answer are authoritative. AI is a drafting assistant only and must never become the authority for policy facts.
+- `✨ Generate other 2 languages` may use the configured Primary AI and then configured Fallback AI if necessary.
+- Translation prompts must preserve meaning and must not add, remove, infer, or invent dates, fees, eligibility, accreditation, contacts, URLs, scholarship/loan/bond rules, policy terms, or promises.
+- AI-generated translations are drafts. Show all three languages for review before publication.
+- Nothing becomes canonical until an authorized admin presses `✅ Approve & Save`.
+- If AI is unavailable, times out, returns invalid output, or both providers fail, preserve the source draft and offer retry plus manual entry for the remaining languages. AI failure must never block FAQ authoring.
+- A multilingual edit draft must leave the currently-live FAQ unchanged until approval.
+- Individual-field editing remains available for precise corrections after or instead of multilingual drafting.
+
+## Escalation Inbox
+- `/cases` is an Owner/Sudo administrative command. It may be used in the bot's private chat or in the configured active Staff Inbox group; do not expose it to normal users or unrelated groups.
+- Show Open, Claimed, Resolved, and All filters with compact pager navigation; default to about 6 cases per page.
+- Case list labels should show case number plus a compact human-readable question excerpt, newest first.
+- Case detail may show operational identity data, language, status, timestamps, stored escalation reason, original question, claimant, and linked FAQ. This information is privileged and must not be exposed publicly.
+- `＋ Add as FAQ` should prefill the case's original question and source language into a draft; require an authorized answer and multilingual review before publication.
+- `Find Related FAQ` should help admins review an existing FAQ before deciding whether to edit it or create a new one.
+- The archive is a knowledge-management surface. Live conversation Take Over/Resolve controls remain on the original Staff Inbox escalation message where reply context is correct.
+- Historical cases created before reason persistence may show that their detailed reason was not stored.
 
 ## Normal FAQ message
 1. concise answer
@@ -96,7 +117,8 @@ Policy-sensitive answers must come from canonical data. Never creatively alter d
 ## Interaction defaults
 - `/start`: welcome + language selector for new users; concise home state for returning users.
 - `/language`: one-shot language selector; successful choice saves the language, removes the picker, and sends one localized confirmation message.
-- `/faq`: role-aware FAQ surface — read-only localized library for normal users; management surface for Owner/Sudo.
+- `/faq`: role-aware FAQ surface — read-only localized library for normal users; management/multilingual authoring surface for Owner/Sudo.
+- `/cases`: Owner/Sudo Escalation Inbox in private chat or the active Staff Inbox group.
 - Unknown command: short help path.
 - Free text: log → deterministic FAQ match → grounded fallback → escalation.
 
