@@ -14,94 +14,89 @@ Historical branch: `test` (dormant/reference-only)
 Live repository plus verified Cloudflare/Telegram evidence outranks remembered chat context.
 
 ## Current checkpoint
-The project is main-only and production-live. FAQ-first onboarding and the deterministic false-escalation filter have been live-accepted.
+The project is main-only and production-live. FAQ-first onboarding, false-escalation filtering, the rotated Telegram bot token, and automatic webhook cutover are live-accepted.
 
-The Telegram bot token was rotated in Cloudflare. The new token is confirmed valid for outbound Bot API calls because the new bot received the production-online message, but inbound commands were initially unavailable because the old production workflow did not re-register the webhook after a token rotation.
+Newest issue: after rotating `AI_CONFIG_MASTER_KEY`, Owner could open `/ai` and select Gemini but submitting a Gemini API key produced no visible response. The replacement master-key string was independently validated as Base64 decoding to exactly 32 bytes, so the newest source slice hardens AI credential-message routing rather than replacing the key again.
 
-The latest deployment slice fixes that gap: `.github/workflows/deploy-production.yml` now performs an automatic nonce-gated Telegram webhook cutover + read-back after production health and before exact Owner command verification. The latest run requires live `/start` verification on the new bot before calling this cutover production-accepted.
+Newest implementation on `main`:
+- new `src/ai_setup_entry.ts` consumes active Owner-private `awaiting_ai_*` text before FAQ/cases/monitoring/UX lower routing
+- canonical `consumeAiSetupText()` remains the encryption/storage authority
+- secret input is deleted after processing
+- success/error feedback is explicit
+- failure to send the setup result is no longer silently acknowledged
+- `rate_limit_entry.ts` now forwards to `ai_setup_entry.ts`
+- `secure_entry.ts` retains its old lower AI-setup path only as a fallback
+- production deploy notice now treats Owner delivery as authoritative; Sudo delivery cannot suppress an Owner retry
 
-## Current product surfaces
-- multilingual deterministic/dynamic FAQ
-- public role-aware `/faq` with localized paginated read-only browsing
-- FAQ-first `/start`/`/language` onboarding with localized Browse FAQ CTA
-- Owner/Sudo FAQ management and multilingual AI-assisted drafting
-- `/cases` escalation archive with Add as FAQ / Find Related FAQ / confirmed delete
-- Staff Inbox human takeover/resolve/return-to-AI, presence, notifications, topic relay
-- `/limits` Owner/Sudo limit management
-- progressive free-text inquiry rate limiting
-- private command/callback/message Interaction Flood Guard
-- Owner-only permanent ban/unban
-- Input Quality Gate suppressing obvious junk/fragment false escalations
-- AI clarify-vs-handoff policy
-- retry-safe deploy-online notification
-- automatic Telegram webhook cutover/read-back during production deployment
-- editable Owner/Admin manuals covering current operations
+Do not call this newest slice production-green until workflow + live `/ai` credential acceptance are verified.
 
-## FAQ-first onboarding contract
-`/start` and `/language` use the one-shot `မြန်မာ` · `English` · `简体中文` picker. After selection: persist language → delete picker → localized FAQ-first confirmation → localized `📚 Browse FAQ` button.
+## AI credential setup contract
+`AI_CONFIG_MASTER_KEY` must be Base64 for exactly 32 random bytes.
 
-## False escalation / Input Quality Gate
-Normal private free-text reaches this gate after flood/rate protection and FAQ-admin interception but before lower FAQ/AI/handoff processing.
+Rotation semantics:
+- credentials encrypted under the previous master key cannot be decrypted with the new master key
+- after rotating the secret, re-enter each provider API key through `/ai`
+- the newly submitted provider key is encrypted under the current master key and upserted into `ai_provider_credentials`
 
-Filter without AI/case creation:
-- numbers only
-- punctuation/symbol-only input
-- single-character noise
-- URL-only, username-only, or phone-number-only input
-- repeated-character garbage
-- acknowledgement-only/basic greeting/thanks with no usable school question
+Active setup flow:
+1. Owner runs `/ai` privately
+2. selects provider
+3. provider setup creates `awaiting_ai_*` session
+4. next non-command private Owner text is intercepted by `ai_setup_entry.ts`
+5. `consumeAiSetupText()` validates/encrypts/stores it
+6. submitted secret message is deleted
+7. bot must send an explicit success/error message
+8. success offers `Fetch models`
+9. model fetch decrypts with the current master key and validates provider access
+10. test ping must pass before binding Primary/Fallback
 
-Do not use length alone. Short meaningful school topics such as `fees?`, `tuition`, `admission`, `CDM`, and `accreditation` continue normally. Human-controlled conversations and active admin/setup sessions bypass the gate.
+## Canonical Worker stack
+Wrangler entrypoint: `src/interaction_guard_entry.ts`.
 
-## AI clarify vs handoff contract
-Grounded AI semantics:
-- `answer` — approved-grounding-supported answer
-- `clarify` — meaningful but incomplete/ambiguous/fragmentary input requiring more detail; no case
-- `handoff` — sufficiently specific School of Nursing question requiring real staff review/action because approved knowledge cannot safely answer
-
-Do not use handoff for obvious junk or input that first requires clarification.
-
-## Spam protection contract
-### Inquiry rate gate
-- 10 private free-text inquiries / 10 minutes
-- repeat hits within 24h: 30 min → 2h → 12h
-- no automatic permanent ban
-- rejected text does not call AI/create case
-- blocked warning max once / 5 min
-- Owner/Sudo bypass
-
-### Interaction Flood Guard
-- normal: 20 private interactions / 60 sec
-- active cooldown/restriction/permanent ban: 6 / 60 sec
-- threshold breach → 5-minute flood block
-- later blocked traffic silent-dropped
-- Owner/Sudo bypass
-- `Exempt 1h` never bypasses flood protection
-
-## `/limits` contract
-Owner/Sudo: Unlock Now, Exempt 1h, Restrict 2h, Reset Strikes. Owner-only: confirmed permanent ban + unban.
+Top flow:
+1. `interaction_guard_entry.ts` — private interaction flood guard
+2. `rate_limit_entry.ts` — `/limits` + normal-user inquiry rate gate
+3. `ai_setup_entry.ts` — Owner-private AI credential setup interception
+4. `faq_ai_entry.ts` — FAQ-authoring interception
+5. `input_quality_entry.ts` — deterministic false-escalation filter
+6. `cases_entry.ts` — `/cases`
+7. lower Staff/manual/deploy/monitoring/UX/security/runtime stack
 
 ## Telegram deployment / token rotation contract
-Production Worker exposes `/ops/telegram/cutover` in `deployment_notice_entry.ts`.
+Every production deploy:
+1. deploy Worker
+2. verify bindings and `/health`
+3. arm one-time `telegram_cutover_nonce`
+4. call `/ops/telegram/cutover`
+5. runtime calls Telegram `setWebhook` with current bot token + webhook secret
+6. `getWebhookInfo` must read back the production `/telegram/webhook`
+7. exact Owner command registry verification must pass 19/19
 
-Every production deploy now:
-1. validates and deploys Worker
-2. resolves production origin
-3. verifies `/health`
-4. generates a random one-time cutover nonce
-5. stores `telegram_cutover_nonce` in production D1
-6. POSTs `/ops/telegram/cutover` with `X-Cutover-Nonce`
-7. runtime calls Telegram `setWebhook` using the current Cloudflare `TELEGRAM_BOT_TOKEN` and `TELEGRAM_WEBHOOK_SECRET`
-8. runtime verifies `getWebhookInfo` points to the production `/telegram/webhook`
-9. workflow then performs the exact 19-command Owner set/read-back verification
+The current new bot is already responding to commands, proving inbound webhook delivery is working after token rotation.
 
-Therefore, after future `TELEGRAM_BOT_TOKEN` rotations, running the production workflow is the canonical cutover. The webhook secret may remain unchanged unless intentionally rotated or compromised.
+## Deployment online notice contract
+A revision is claimed atomically. Owner is the authoritative recipient:
+- Owner send success keeps the claim
+- Owner send failure releases the claim for a later `/health` retry
+- Sudo notifications are best-effort only after Owner success
+- Sudo success cannot suppress an Owner retry
+- notice failure never fails health
 
-## Deployment online notice retry
-A revision is claimed before notice delivery to avoid duplicate concurrent sends. If all Owner/Sudo Telegram sends fail, the claim is released so a later `/health` can retry. Notice failure does not fail health.
+## Existing product surfaces
+- multilingual deterministic/dynamic FAQ
+- public role-aware `/faq`
+- FAQ-first `/start`/`/language` onboarding
+- Owner/Sudo FAQ management + multilingual AI-assisted drafts
+- `/cases` escalation archive
+- Staff Inbox human takeover/resolve/return-to-AI
+- `/limits`, progressive inquiry limits, interaction flood protection
+- Owner-only permanent ban/unban
+- deterministic Input Quality Gate
+- AI clarify-vs-handoff policy
+- editable manuals
 
-## Escalation Inbox contract
-`/cases` remains Owner/Sudo only. The Input Quality Gate and AI clarification policy keep typo/junk/incomplete false cases out of this archive where possible.
+## False escalation contract
+Obvious junk/low-information private input is clarified without AI or case creation. Do not length-block short meaningful school topics. Human-controlled conversations and active admin/setup sessions bypass the quality gate.
 
 ## Command registry
 Public (4): `/start`, `/language`, `/faq`, `/whoami`.
@@ -110,32 +105,19 @@ Owner adds: `/sudo`, `/ai`, `/staff`, `/clearmessage`, `/ownermanual`, `/cancel`
 Command schema revision: **9**. Sudo total: **12**. Owner total: **19**.
 
 ## Migrations / manuals
-Current migration range: `0001` through `0026`. Latest manual migration: `0026_manual_false_escalation_guard.sql`.
-
-## Canonical Worker stack
-Wrangler entrypoint: `src/interaction_guard_entry.ts`.
-
-Top flow:
-1. `interaction_guard_entry.ts`
-2. `rate_limit_entry.ts`
-3. `faq_ai_entry.ts`
-4. `input_quality_entry.ts`
-5. `cases_entry.ts`
-6. lower Staff/monitoring/FAQ/AI/runtime stack
-
-`agent_policy.ts` owns clarify-vs-handoff semantics. `deployment_notice_entry.ts` owns retry-safe online notices plus nonce-gated Telegram webhook cutover.
-
-## Production workflow contract
-`.github/workflows/deploy-production.yml` is the sole production workflow and must pass typecheck, migrations through `0026`, dry-run bundle, remote migrations, production deploy, binding preservation, `/health`, **Telegram webhook cutover/read-back**, and exact 19-command Owner Telegram read-back.
+Current migration range: `0001` through `0026`. No new migration is required for the AI routing hardening slice.
 
 ## Next exact validation
-1. on the new bot, `/start` must receive a response — this proves inbound webhook delivery
-2. `/language` and `/faq` must work
-3. Owner command menu remains 19/19
-4. filtered junk still produces clarification + FAQ CTA with no `/cases`
-5. short meaningful FAQ queries still work
-6. meaningful incomplete questions clarify without a case
-7. specific unanswered questions still hand off
+After the triggered production workflow is green:
+1. confirm new `🟢 Bot is Online!` reaches Owner for the new revision
+2. `/start`, `/language`, `/faq` still respond
+3. Owner `/ai` → Gemini → send API key
+4. submitted API-key message must disappear
+5. bot must immediately return either explicit success or explicit configuration error; silence is a failure
+6. on success, press `Fetch models`
+7. confirm Gemini model list loads
+8. select model → Test Ping → bind only after ping passes
+9. verify FAQ, false-escalation, limits/flood guard, `/cases`, and Staff Inbox remain intact
 
 ## Documentation rule
-After every behavior/schema/deployment slice, keep `ROADMAP.md`, this file, manuals, and `docs/TELEGRAM_DESIGN_RULES.md` synchronized with live repository reality.
+After every behavior/schema/deployment slice, keep `ROADMAP.md`, this file, manuals, and `docs/TELEGRAM_DESIGN_RULES.md` synchronized with repository/live reality.
