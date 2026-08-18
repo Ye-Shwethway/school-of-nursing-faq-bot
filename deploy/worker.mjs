@@ -4953,6 +4953,13 @@ function ownerId4(env) {
   return Number.isSafeInteger(id) ? id : null;
 }
 __name(ownerId4, "ownerId");
+function json8(body, status = 200) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "content-type": "application/json; charset=utf-8" }
+  });
+}
+__name(json8, "json");
 async function telegramApi8(env, method, body) {
   if (!env.TELEGRAM_BOT_TOKEN) return null;
   try {
@@ -5040,9 +5047,57 @@ async function notifyDeploymentOnline(env) {
   }
 }
 __name(notifyDeploymentOnline, "notifyDeploymentOnline");
+async function handleProductionTelegramCutover(request, env) {
+  if (env.APP_ENV !== "production") return json8({ ok: false, error: "production_only" }, 404);
+  if (!env.DB || !env.TELEGRAM_BOT_TOKEN || !env.TELEGRAM_WEBHOOK_SECRET) {
+    return json8({ ok: false, error: "production_runtime_not_ready" }, 503);
+  }
+  const suppliedNonce = request.headers.get("x-cutover-nonce")?.trim();
+  if (!suppliedNonce) return json8({ ok: false, error: "missing_nonce" }, 401);
+  const row = await env.DB.prepare(
+    `SELECT setting_value FROM bot_settings WHERE setting_key='telegram_cutover_nonce'`
+  ).first();
+  if (!row?.setting_value || row.setting_value !== suppliedNonce) {
+    return json8({ ok: false, error: "invalid_nonce" }, 403);
+  }
+  const consumed = await env.DB.prepare(
+    `DELETE FROM bot_settings
+     WHERE setting_key='telegram_cutover_nonce' AND setting_value=?1`
+  ).bind(suppliedNonce).run();
+  if ((consumed.meta.changes ?? 0) !== 1) {
+    return json8({ ok: false, error: "nonce_already_consumed" }, 409);
+  }
+  const origin = new URL(request.url).origin;
+  const webhookUrl = `${origin}/telegram/webhook`;
+  const setResult = await telegramApi8(env, "setWebhook", {
+    url: webhookUrl,
+    secret_token: env.TELEGRAM_WEBHOOK_SECRET,
+    allowed_updates: ["message", "callback_query"],
+    drop_pending_updates: false
+  });
+  if (setResult !== true) {
+    return json8({ ok: false, error: "telegram_set_webhook_failed" }, 502);
+  }
+  const info = await telegramApi8(env, "getWebhookInfo", {});
+  if (!info || info.url !== webhookUrl) {
+    return json8({ ok: false, error: "telegram_webhook_readback_failed" }, 502);
+  }
+  await syncDeploymentCommandMenus(env);
+  return json8({
+    ok: true,
+    environment: "production",
+    webhook_url: webhookUrl,
+    pending_update_count: Number(info.pending_update_count ?? 0),
+    last_error_message: info.last_error_message ?? null
+  });
+}
+__name(handleProductionTelegramCutover, "handleProductionTelegramCutover");
 var deployment_notice_entry_default = {
   async fetch(request, env) {
     const url = new URL(request.url);
+    if (request.method === "POST" && url.pathname === "/ops/telegram/cutover") {
+      return handleProductionTelegramCutover(request, env);
+    }
     const response = await latest_return_entry_default.fetch(request, env);
     if (request.method === "GET" && url.pathname === "/health" && response.ok) {
       await syncDeploymentCommandMenus(env);
@@ -5132,13 +5187,13 @@ async function updateManualSection(db, manualKey, sectionKey, body, actorId) {
 __name(updateManualSection, "updateManualSection");
 
 // src/manual_entry.ts
-function json8(body, status = 200) {
+function json9(body, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
     headers: { "content-type": "application/json; charset=utf-8" }
   });
 }
-__name(json8, "json");
+__name(json9, "json");
 function commandName6(text) {
   return text.trim().split(/\s+/, 1)[0].toLowerCase().replace(/@[^\s]+$/, "");
 }
@@ -5511,7 +5566,7 @@ var manual_entry_default = {
     }
     if (env.TELEGRAM_WEBHOOK_SECRET) {
       const supplied = request.headers.get("X-Telegram-Bot-Api-Secret-Token");
-      if (supplied !== env.TELEGRAM_WEBHOOK_SECRET) return json8({ ok: false }, 401);
+      if (supplied !== env.TELEGRAM_WEBHOOK_SECRET) return json9({ ok: false }, 401);
     }
     let update;
     try {
@@ -5521,13 +5576,13 @@ var manual_entry_default = {
     }
     await syncCommandsBeforeIntercept(env);
     if (update.callback_query && await handleManualCallback(env, update.callback_query)) {
-      return json8({ ok: true });
+      return json9({ ok: true });
     }
     if (update.message && await handleManualCommand(env, update.message)) {
-      return json8({ ok: true });
+      return json9({ ok: true });
     }
     if (update.message && await consumeManualEditText(env, update.message)) {
-      return json8({ ok: true });
+      return json9({ ok: true });
     }
     return deployment_notice_entry_default.fetch(request, env);
   }
