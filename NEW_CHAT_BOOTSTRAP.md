@@ -15,16 +15,16 @@ Read in order:
 Treat live repository plus verified Cloudflare/Telegram evidence as authoritative over remembered chat context.
 
 ## Current checkpoint
-The TEST bot is functionally mature enough for the first repository promotion to `main`.
+The first repository promotion has completed.
 
-Do not add more feature slices before that promotion unless a blocking regression is found.
+Promotion checkpoint:
+`ea076d9f1ebf992f866c9fa38020ec19cd83d789`
 
-Important branch state at this checkpoint:
-- `main` still represents the original bootstrap-era source and has never received the developed bot stack
-- `test` contains the full current implementation
-- the first `test` -> `main` promotion is now the next repository milestone
+At that checkpoint, `main` was fast-forwarded from the original bootstrap history to the full approved TEST implementation, including the production-promotion foundation and the duplicate migration cleanup.
 
-Merging to `main` does NOT automatically deploy Cloudflare production.
+Production Cloudflare has NOT been deployed by this promotion. Repository promotion and Telegram go-live are separate boundaries.
+
+Continue feature development on `test`; promote to `main` only after validation.
 
 ## Current canonical Worker stack
 Wrangler entrypoint: `src/manual_entry.ts`
@@ -129,11 +129,9 @@ Workflow:
 
 Deploy-relevant `test` pushes validate/typecheck, validate local migrations, dry-run Wrangler, apply remote TEST migrations, deploy `school-of-nursing-faq-bot-test`, verify `/health`, refresh command menus and trigger the revision-scoped online notice.
 
-TEST runtime remains the known-good validation environment.
+TEST runtime remains the development/validation environment.
 
 ## Production Promotion Foundation v1
-Repository-side foundation now exists on `test`.
-
 Workflow:
 `.github/workflows/deploy-production.yml`
 
@@ -170,16 +168,15 @@ A Telegram bot token has one active webhook destination at a time.
 
 The webhook must remain on the current known-good endpoint until production Worker health and production data/config are ready. Moving the webhook to `school-of-nursing-faq-bot` is the actual Telegram go-live boundary.
 
-## First promotion sequence
-1. finish/review this production-foundation checkpoint on `test`
-2. verify current TEST build is green
-3. promote `test` to `main`
-4. verify `main` equals the approved TEST checkpoint
-5. create/configure separate production Cloudflare resources
-6. manually deploy production from `main`
-7. verify production health
-8. move Telegram webhook to production
-9. smoke-test `/start`, FAQ, grounded AI, Owner/Admin commands, manuals, Staff Inbox, Take Over/Return to AI
+## Next exact work
+1. create the separate production D1 database
+2. save its UUID as GitHub secret `CLOUDFLARE_PRODUCTION_D1_DATABASE_ID`
+3. configure production Worker runtime secrets
+4. deliberately initialize required production D1 operational content/config
+5. manually run `Deploy PRODUCTION to Cloudflare` from `main` using confirmation `DEPLOY_PRODUCTION`
+6. verify production health
+7. move Telegram webhook to production
+8. smoke-test `/start`, FAQ, grounded AI, Owner/Admin commands, manuals, Staff Inbox, Take Over/Return to AI
 
 ## Current migrations
 - 0001 initial
@@ -193,8 +190,10 @@ The webhook must remain on the current known-good endpoint until production Work
 - 0009 editable operating manuals
 - 0010 manual newline cleanup
 
+There is only one canonical `0010` migration file: `migrations/0010_manual_newline_cleanup.sql`.
+
 ## Known deferred validation debt
-Useful after promotion, but not a reason to keep expanding TEST before first `main` checkpoint:
+Useful after production setup, but not a reason to add more features now:
 - simultaneous multiuser live stress test
 - same-user near-simultaneous first-message race test
 
