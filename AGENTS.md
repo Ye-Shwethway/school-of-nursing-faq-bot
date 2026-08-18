@@ -13,10 +13,10 @@ Before changing code or architecture, read:
 Current repository evidence is authoritative over remembered chat context.
 
 ## Branch policy
-- `test` is the active development branch.
-- `main` is the verified canonical/production branch.
-- Do not implement directly on `main`.
-- Develop and validate on `test`; merge to `main` only after review/verification.
+- `main` is the single active development, canonical, and production source branch.
+- The historical `test` branch is dormant/reference-only and must not have active workflows or deployments.
+- Implement on `main` in small validated slices.
+- Relevant `main` pushes are validated and deployed by the single production workflow.
 
 ## Working rules
 - Prefer the smallest runnable implementation slice.
@@ -52,3 +52,5 @@ Documentation-only spelling/formatting changes do not require a roadmap checkpoi
 
 ## Validation
 Use focused checks for the changed slice. Critical boundaries requiring explicit validation include webhook parsing, privilege enforcement, canonical FAQ selection, persistence migrations, language preference behavior, escalation/logging paths, and deployment configuration.
+
+The single production workflow must validate typecheck, local migrations, production bundle, remote migrations, production health, and exact Owner command read-back before reporting success.
