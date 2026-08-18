@@ -5,17 +5,25 @@ export type BotCommand = {
   description: string;
 };
 
+const START_COMMAND: BotCommand = { command: "start", description: "Start School of Nursing assistant" };
+const LANGUAGE_COMMAND: BotCommand = { command: "language", description: "Change language" };
+const WHOAMI_COMMAND: BotCommand = { command: "whoami", description: "Show my Telegram identity" };
+const FAQ_COMMAND: BotCommand = { command: "faq", description: "Browse School of Nursing FAQs" };
+
 const PUBLIC_COMMANDS: BotCommand[] = [
-  { command: "start", description: "Start School of Nursing assistant" },
-  { command: "language", description: "Change language" },
-  { command: "faq", description: "Browse School of Nursing FAQs" },
-  { command: "whoami", description: "Show my Telegram identity" },
+  START_COMMAND,
+  LANGUAGE_COMMAND,
+  FAQ_COMMAND,
+  WHOAMI_COMMAND,
 ];
 
 const ADMIN_COMMANDS: BotCommand[] = [
-  ...PUBLIC_COMMANDS,
+  START_COMMAND,
+  LANGUAGE_COMMAND,
+  WHOAMI_COMMAND,
   { command: "admin", description: "Open administrator tools" },
   { command: "admins", description: "List authorized administrators" },
+  FAQ_COMMAND,
   { command: "adminmanual", description: "Read the Sudo Admin manual" },
   { command: "noti", description: "Turn Staff Inbox notifications on or off" },
   { command: "available", description: "Mark myself available for staff replies" },
