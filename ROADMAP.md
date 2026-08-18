@@ -15,7 +15,7 @@ Production Telegram FAQ assistant for a university School of Nursing in Burmese,
 
 ## Current production checkpoint
 
-Status: **PRODUCTION LIVE; MAIN-ONLY PIPELINE ACTIVE; PUBLIC FAQ LIBRARY + NORMAL-USER COMMAND-SCOPE FIX IMPLEMENTED**
+Status: **PRODUCTION LIVE; MAIN-ONLY PIPELINE ACTIVE; PUBLIC FAQ LIBRARY + NORMAL-USER COMMAND-SCOPE FIX + LANGUAGE SELECTOR CLEANUP IMPLEMENTED**
 
 Implemented/current:
 
@@ -27,6 +27,7 @@ Implemented/current:
 - public FAQ detail view limited to the user's selected language
 - normal users inherit the global private-chat command scope; stale per-chat command overrides are removed during command-schema synchronization
 - visible `/language` for all users
+- language selection is one-shot: save choice, show a short callback confirmation, then delete the selector message without sending a second persistent confirmation
 - Owner/Sudo roles and scoped command menus
 - encrypted configurable AI Primary/Fallback
 - grounded AI + human handoff
@@ -53,6 +54,12 @@ FAQ browsing uses the user's saved Burmese, English, or Simplified Chinese langu
 Owner/Sudo `/faq` remains the FAQ management entry point with Browse, Add, Inactive, Help, Edit, Disable, and Restore controls.
 
 No schema migration was required; existing `faq_entries` data remains canonical.
+
+## Language selector UX
+
+`/language` opens a one-shot selector in the order `မြန်မာ` · `English` · `简体中文`.
+
+After a valid selection is persisted, the bot acknowledges it through the callback toast and deletes the selector message. It does not leave the old selector behind and does not send a second persistent confirmation message. Users can reopen the selector at any time with `/language`.
 
 ## Command registry
 
@@ -147,7 +154,7 @@ Wrangler entrypoint: `src/staff_presence_entry.ts`.
 6. monitoring / FAQ / AI / human handoff
 7. Staff Inbox UX + Sudo invite lifecycle
 8. Telegram UX/navigation polish
-9. secure AI setup interception
+9. secure AI setup interception + one-shot language callback cleanup
 10. dynamic FAQ/AI runtime
 11. compatibility fallback + `/health`
 
@@ -159,7 +166,7 @@ Latest canonical migration: `migrations/0015_owner_manual_main_only_cleanup.sql`
 
 ## Next work
 
-No additional feature slice is active after the normal-user command-scope correction. Verify the public `/faq` command appears for an already-existing normal user after the production deployment completes; if Telegram client UI remains stale, reopen the bot chat/menu before treating it as a runtime defect.
+No additional feature slice is active after the language-selector cleanup. Continue from a new explicit product requirement or verified production defect.
 
 When new work begins, use live repository and verified production evidence as authority, implement on `main` in small bounded slices, and update this file plus `NEW_CHAT_BOOTSTRAP.md` after meaningful changes.
 
