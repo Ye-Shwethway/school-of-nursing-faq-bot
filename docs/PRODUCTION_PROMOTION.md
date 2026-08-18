@@ -1,96 +1,117 @@
-# Production Promotion Runbook
+# Production Operations Runbook
 
 Last updated: 2026-08-18
 
-## Purpose
-Promote the validated TEST bot to `main` and then deploy a deliberately isolated production Worker without turning every `main` update into an automatic live release.
+> Historical filename retained for continuity. The old TEST-to-PRODUCTION promotion model is retired.
 
-## Branch contract
-- `test` = active development and live TEST validation
-- `main` = canonical production source
-- production deployment is manual-only
-- merging to `main` does not automatically deploy Cloudflare production
+## Current branch contract
 
-## Production isolation
-Production must use a D1 database separate from the TEST database.
+- `main` is the single active development, canonical, and production source branch.
+- historical `test` is dormant/reference-only.
+- no TEST workflow or TEST deployment remains active.
+- relevant pushes to `main` automatically run the production workflow.
 
-Expected production database name:
-`school-of-nursing-faq-bot-prod-db`
-
-The production D1 UUID is not committed to this public repository. Store it as the GitHub Actions secret:
-`CLOUDFLARE_PRODUCTION_D1_DATABASE_ID`
-
-The production workflow generates a temporary Wrangler config during the job and deletes it afterwards.
-
-TEST continues to use the existing TEST Worker/database configuration in `wrangler.jsonc`.
+There is no normal TEST → main promotion step anymore.
 
 ## Production workflow
-File:
+
+Canonical file:
+
 `.github/workflows/deploy-production.yml`
 
-Trigger:
-- manual `workflow_dispatch` only
-- workflow must be run from `main`
-- confirmation input must equal `DEPLOY_PRODUCTION`
+Relevant `main` pushes validate and deploy production automatically. The workflow also supports manual dispatch when needed, but manual dispatch is not the normal promotion boundary.
 
-The workflow:
-1. checks out `main`
-2. verifies Cloudflare credentials and the production D1 ID secret
-3. installs dependencies
-4. runs strict TypeScript typecheck
-5. generates an isolated temporary production Wrangler config
-6. validates migrations locally
-7. performs a production Worker dry run
-8. applies migrations to the production D1 database
-9. deploys `school-of-nursing-faq-bot`
-10. verifies `/health` reports `environment=production`
-11. removes the temporary Wrangler config
+Current pipeline:
 
-## Required GitHub Actions secrets
-Already used by TEST and reusable for production:
+1. verify branch and required GitHub deployment secrets
+2. preflight required Cloudflare Worker runtime bindings
+3. install dependencies
+4. strict TypeScript typecheck
+5. generate isolated production Wrangler config
+6. validate D1 migrations locally
+7. validate Worker bundle with dry run
+8. apply remote production D1 migrations
+9. deploy production Worker
+10. verify required runtime bindings remain present
+11. verify production `/health`
+12. arm one-time Owner command resync nonce
+13. resync Telegram Owner command registry
+14. exact Telegram command read-back
+15. remove generated config and write deployment summary
+
+## Production resources
+
+Production Worker:
+
+`school-of-nursing-faq-bot`
+
+Production D1 database:
+
+`school-of-nursing-faq-bot-prod-db`
+
+The production D1 UUID is not committed to this public repository. GitHub Actions uses `CLOUDFLARE_PRODUCTION_D1_DATABASE_ID`.
+
+## GitHub production secrets
+
+Required deployment-side secrets:
+
 - `CLOUDFLARE_API_TOKEN`
 - `CLOUDFLARE_ACCOUNT_ID`
-
-New production-specific secret:
 - `CLOUDFLARE_PRODUCTION_D1_DATABASE_ID`
 
-Do not commit API tokens, Telegram tokens, encryption keys, or D1 exports.
+Runtime Telegram/AI secrets belong on the Cloudflare Worker, not in repository files.
 
-## Cloudflare-side runtime secrets
-The production Worker needs its own live runtime secret configuration before the Telegram webhook is moved to it:
-- `TELEGRAM_BOT_TOKEN`
-- `TELEGRAM_WEBHOOK_SECRET`
-- `BOT_OWNER_TELEGRAM_ID`
-- `AI_CONFIG_MASTER_KEY`
+## Cloudflare runtime bindings
 
-Provider credentials, FAQ content, manuals, roles, and Staff Inbox configuration are D1 data and therefore must be deliberately initialized/migrated for the production D1 database.
+Required production runtime bindings include:
 
-## Telegram webhook rule
-A Telegram bot token has one active webhook destination at a time.
+- `DB` — D1 binding
+- `TELEGRAM_BOT_TOKEN` — `secret_text`
+- `TELEGRAM_WEBHOOK_SECRET` — `secret_text`
+- `BOT_OWNER_TELEGRAM_ID` — `secret_text`
+- `AI_CONFIG_MASTER_KEY` — `secret_text`
 
-Do not point the live Telegram bot webhook at the production Worker until:
-- production Worker health is green
-- production D1 migrations are complete
-- required production Worker secrets exist
-- required FAQ/AI/admin/manual data has been initialized
+`AI_CONFIG_MASTER_KEY` must be Base64 representing exactly 32 random bytes.
 
-Moving the webhook is the go-live boundary.
+## Telegram go-live state
 
-## First promotion sequence
-1. finish repository-side production foundation on `test`
-2. validate TEST build/typecheck
-3. fast-forward or PR-merge `test` into `main`
-4. verify `main` equals the approved `test` checkpoint
-5. create the separate production D1 database in Cloudflare
-6. save its UUID as `CLOUDFLARE_PRODUCTION_D1_DATABASE_ID`
-7. configure production Worker secrets
-8. initialize required production D1 operational data
-9. manually run `Deploy PRODUCTION to Cloudflare` from `main` with confirmation `DEPLOY_PRODUCTION`
-10. verify production `/health`
-11. move Telegram webhook to production Worker
-12. smoke-test `/start`, FAQ, grounded AI, Owner commands, manuals, Staff Inbox, Take Over/Return to AI
+The production Telegram webhook cutover is already complete. `/start`, FAQ, grounded AI, Owner identity, Staff Inbox, manuals, and current command menus operate through production.
 
-## Rollback boundary
-Because `main` merge and production deploy are separate actions, a repository promotion does not by itself change the live Telegram bot.
+A deploy must therefore preserve the live webhook contract; it is no longer a pre-production cutover exercise.
 
-If a production deploy is unhealthy, do not move the Telegram webhook. If the webhook has already moved, restore it to the last known-good Worker while the production revision is repaired.
+## Current production validation
+
+A successful deployment is not considered complete until the workflow confirms:
+
+- typecheck PASS
+- local migration validation PASS
+- production bundle validation PASS
+- remote migrations PASS
+- Worker deploy PASS
+- production health PASS
+- required runtime bindings preserved
+- exact Owner Telegram command registry PASS
+
+Current expected Owner command count: **17**.
+
+## Runtime smoke-test guidance
+
+After meaningful behavior changes, perform a narrow live smoke test relevant to the changed slice rather than recreating a retired TEST environment.
+
+Typical checks include:
+
+- `/start` and `/language`
+- deterministic FAQ fast path
+- grounded AI reply
+- human handoff
+- `/noti on|off`
+- `/available` / `/unavailable`
+- staff topic reply relay
+- Owner/Admin manuals
+- Staff Inbox switching/Sudo invite flow when changed
+
+## Rollback principle
+
+If a new production revision is unhealthy, restore/fix from `main` using repository and deployment evidence. Do not revive the retired TEST branch as an alternate active environment.
+
+Preserve secrets and production data; do not delete or rotate credentials merely to recover from an application revision unless the credential itself is the confirmed problem.
