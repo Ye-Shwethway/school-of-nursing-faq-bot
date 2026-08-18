@@ -7,7 +7,6 @@ type Env = {
 };
 
 const OUTAGE_KEY = "ai_outage_alert";
-const ALERT_WINDOW_MINUTES = 30;
 
 function ownerId(env: Env): number | null {
   const raw = env.BOT_OWNER_TELEGRAM_ID?.trim();
@@ -38,30 +37,20 @@ export function isAiInfrastructureFailure(reason: string): boolean {
     reason === "ai_runtime_failure";
 }
 
-async function shouldAlertOutage(db: D1Database, reason: string): Promise<boolean> {
-  const row = await db.prepare(
-    `SELECT setting_value, updated_at
-     FROM bot_settings WHERE setting_key=?1`,
-  ).bind(OUTAGE_KEY).first<{ setting_value: string; updated_at: string }>();
+async function claimOutageTransition(db: D1Database, reason: string): Promise<boolean> {
+  const current = await db.prepare(
+    `SELECT setting_value FROM bot_settings WHERE setting_key=?1`,
+  ).bind(OUTAGE_KEY).first<{ setting_value: string }>();
 
-  if (row?.setting_value === reason) {
-    const recent = await db.prepare(
-      `SELECT 1 AS recent
-       FROM bot_settings
-       WHERE setting_key=?1 AND updated_at >= datetime('now', ?2)`,
-    ).bind(OUTAGE_KEY, `-${ALERT_WINDOW_MINUTES} minutes`).first<{ recent: number }>();
-    if (recent?.recent === 1) return false;
-  }
+  // An active outage is one operational state. Do not repeat alerts while it remains active,
+  // even if the underlying provider/config error changes. Recovery clears this marker.
+  if (current?.setting_value) return false;
 
-  await db.prepare(
-    `INSERT INTO bot_settings (setting_key, setting_value, updated_by, updated_at)
-     VALUES (?1, ?2, 0, CURRENT_TIMESTAMP)
-     ON CONFLICT(setting_key) DO UPDATE SET
-       setting_value=excluded.setting_value,
-       updated_by=0,
-       updated_at=CURRENT_TIMESTAMP`,
+  const result = await db.prepare(
+    `INSERT OR IGNORE INTO bot_settings (setting_key, setting_value, updated_by, updated_at)
+     VALUES (?1, ?2, 0, CURRENT_TIMESTAMP)`,
   ).bind(OUTAGE_KEY, reason).run();
-  return true;
+  return (result.meta.changes ?? 0) === 1;
 }
 
 async function activeOutageReason(db: D1Database): Promise<string | null> {
@@ -101,7 +90,7 @@ async function sendOperationalNotice(env: Env, text: string): Promise<void> {
 export async function notifyAiOutage(env: Env, reason: string): Promise<void> {
   if (!env.DB || !isAiInfrastructureFailure(reason)) return;
   try {
-    if (!await shouldAlertOutage(env.DB, reason)) return;
+    if (!await claimOutageTransition(env.DB, reason)) return;
     const destination = await getHandoffDestination(env.DB);
     const fallback = destination
       ? "Human fallback: ACTIVE — unresolved questions continue to be logged and routed to staff."
@@ -111,7 +100,7 @@ export async function notifyAiOutage(env: Env, reason: string): Promise<void> {
       `Reason: ${reason}`,
       fallback,
       "FAQ matching remains available.",
-      `Repeated alerts for the same reason are limited to once per ${ALERT_WINDOW_MINUTES} minutes.`,
+      "This outage alert is sent once and will not repeat until AI recovers.",
     ].join("\n");
     await sendOperationalNotice(env, text);
   } catch {
@@ -130,7 +119,7 @@ export async function notifyAiRecovered(env: Env): Promise<void> {
       [
         "🟢 AI service recovered",
         `Previous outage: ${previousReason}`,
-        "Grounded AI answering is active again. FAQ and human fallback remain available.",
+        "Grounded AI answering is active again. FAQ and human fallback remain the primary continuity paths.",
       ].join("\n"),
     );
   } catch {
