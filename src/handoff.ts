@@ -161,19 +161,21 @@ export async function createEscalationCase(
     sourceQuestionId?: number | null;
     language?: string | null;
     question: string;
+    reason?: string | null;
     staffChatId?: number | null;
   },
 ): Promise<number | null> {
   if (!db) return null;
   const result = await db.prepare(
     `INSERT INTO escalation_cases
-      (telegram_user_id, source_question_id, language, user_question, staff_chat_id, status)
-     VALUES (?1, ?2, ?3, ?4, ?5, 'open')`,
+      (telegram_user_id, source_question_id, language, user_question, reason, staff_chat_id, status)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'open')`,
   ).bind(
     input.telegramUserId,
     input.sourceQuestionId ?? null,
     input.language ?? null,
     input.question,
+    input.reason ?? null,
     input.staffChatId ?? null,
   ).run();
   const caseId = Number(result.meta.last_row_id);
