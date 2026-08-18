@@ -24,12 +24,13 @@ const OWNER_COMMANDS: BotCommand[] = [
   { command: "sudo", description: "Manage Sudo Admin access" },
   { command: "ai", description: "Configure AI agent" },
   { command: "staff", description: "Configure staff and monitoring" },
+  { command: "clearmessage", description: "Clear recent Staff Inbox messages" },
   { command: "ownermanual", description: "Read or edit the Bot Owner manual" },
   { command: "cancel", description: "Cancel the current setup flow" },
   { command: "reset", description: "Reset transient conversation state" },
 ];
 
-const COMMAND_SYNC_REVISION = 3;
+const COMMAND_SYNC_REVISION = 4;
 
 export const COMMAND_SCHEMA_VERSION = JSON.stringify({
   revision: COMMAND_SYNC_REVISION,
