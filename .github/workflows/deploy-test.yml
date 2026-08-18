@@ -1,6 +1,15 @@
 name: Deploy TEST to Cloudflare
 
 on:
+  push:
+    branches: [test]
+    paths:
+      - 'src/**'
+      - 'migrations/**'
+      - 'wrangler.jsonc'
+      - 'package.json'
+      - 'tsconfig.json'
+      - '.github/workflows/deploy-test.yml'
   workflow_dispatch:
 
 permissions:
@@ -22,8 +31,6 @@ jobs:
     steps:
       - name: Checkout test source
         uses: actions/checkout@v4
-        with:
-          ref: test
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -41,6 +48,12 @@ jobs:
 
       - name: Typecheck
         run: npm run typecheck
+
+      - name: Validate D1 migrations locally
+        run: npx wrangler d1 migrations apply school-of-nursing-faq-bot-db --local --env test
+
+      - name: Validate Wrangler bundle
+        run: npx wrangler deploy --dry-run --env test --outdir dist-deploy-test
 
       - name: Apply remote D1 migrations
         run: npx wrangler d1 migrations apply school-of-nursing-faq-bot-db --remote --env test
@@ -69,8 +82,10 @@ jobs:
           {
             echo "## Cloudflare TEST deployment"
             echo ""
+            echo "- Commit: \`${GITHUB_SHA}\`"
             echo "- Branch: \`test\`"
             echo "- Worker: \`school-of-nursing-faq-bot-test\`"
+            echo "- Local validation: PASS"
             echo "- D1 migrations: applied before deploy"
             echo "- Health: PASS"
             echo "- Production Worker: untouched by this workflow"
