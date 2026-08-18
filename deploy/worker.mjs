@@ -3509,6 +3509,17 @@ function privateChat2(message) {
   return Boolean(message.from && (message.chat.type === "private" || message.chat.id === message.from.id));
 }
 __name(privateChat2, "privateChat");
+function withClose(keyboard) {
+  if (!keyboard || typeof keyboard !== "object" || !Array.isArray(keyboard.inline_keyboard)) {
+    return keyboard;
+  }
+  const rows = [...keyboard.inline_keyboard];
+  if (!rows.some((row) => row.some((button) => button.callback_data === "ui:close"))) {
+    rows.push([{ text: "\u2715 Close", callback_data: "ui:close" }]);
+  }
+  return { inline_keyboard: rows };
+}
+__name(withClose, "withClose");
 async function telegramApi3(env, method, body) {
   if (!env.TELEGRAM_BOT_TOKEN) return null;
   try {
@@ -3529,7 +3540,7 @@ async function sendMessage2(env, chatId, text, keyboard) {
   await telegramApi3(env, "sendMessage", {
     chat_id: chatId,
     text,
-    reply_markup: keyboard
+    reply_markup: withClose(keyboard)
   });
 }
 __name(sendMessage2, "sendMessage");
@@ -3692,16 +3703,16 @@ async function telegramApi4(env, method, body) {
   }
 }
 __name(telegramApi4, "telegramApi");
-function withClose(keyboard) {
+function withClose2(keyboard) {
   const rows = keyboard && typeof keyboard === "object" && Array.isArray(keyboard.inline_keyboard) ? [...keyboard.inline_keyboard] : [];
   if (!rows.some((row) => row.some((button) => button.callback_data === "ui:close"))) {
     rows.push([{ text: "\u2715 Close", callback_data: "ui:close" }]);
   }
   return { inline_keyboard: rows };
 }
-__name(withClose, "withClose");
+__name(withClose2, "withClose");
 function monitoringKeyboard2() {
-  return withClose({
+  return withClose2({
     inline_keyboard: [
       [
         { text: "All + Alerts", callback_data: "ux:monitor:all_alerts" },
@@ -3717,7 +3728,7 @@ function monitoringKeyboard2() {
 __name(monitoringKeyboard2, "monitoringKeyboard");
 function aiMenuKeyboard2() {
   const base = aiSettingsKeyboard();
-  return withClose({
+  return withClose2({
     inline_keyboard: [
       ...base.inline_keyboard,
       [
@@ -3767,7 +3778,7 @@ async function closeUi(env, callback) {
 __name(closeUi, "closeUi");
 async function sendFaqUi2(env, actorId, result, message) {
   if (result.text) {
-    if (message) await editOrSend(env, message, result.text, withClose(result.keyboard));
+    if (message) await editOrSend(env, message, result.text, withClose2(result.keyboard));
     else if (message === void 0) return;
   }
   if (result.mutation) {
@@ -3795,7 +3806,7 @@ async function handleFaqUi(env, update) {
   try {
     const pending = await consumeFaqAdminText(env.DB, message.from.id, env.BOT_OWNER_TELEGRAM_ID, text);
     if (pending.handled) {
-      if (pending.text) await sendMessage3(env, message.chat.id, pending.text, pending.keyboard ? withClose(pending.keyboard) : void 0);
+      if (pending.text) await sendMessage3(env, message.chat.id, pending.text, pending.keyboard ? withClose2(pending.keyboard) : void 0);
       if (pending.mutation) {
         await notifyFaqChange(
           env.DB,
@@ -3810,7 +3821,7 @@ async function handleFaqUi(env, update) {
     if (commandName3(text) === "/faq") {
       const result = await handleFaqCommand(env.DB, message.from.id, env.BOT_OWNER_TELEGRAM_ID, text);
       if (result.handled) {
-        if (result.text) await sendMessage3(env, message.chat.id, result.text, withClose(result.keyboard));
+        if (result.text) await sendMessage3(env, message.chat.id, result.text, withClose2(result.keyboard));
         return true;
       }
     }
@@ -3871,30 +3882,30 @@ Persona: ${persona}`, aiMenuKeyboard2());
   const providerMatch = data.match(/^ai:provider:([a-z0-9_-]+)$/);
   if (providerMatch) {
     const result = await startProviderSetup(env.DB, callback.from.id, providerMatch[1]);
-    await editOrSend(env, chatMessage, result.text, withClose(result.keyboard ?? { inline_keyboard: [[{ text: "\u2190 Back", callback_data: "ai:menu" }]] }));
+    await editOrSend(env, chatMessage, result.text, withClose2(result.keyboard ?? { inline_keyboard: [[{ text: "\u2190 Back", callback_data: "ai:menu" }]] }));
     return true;
   }
   const fetchMatch = data.match(/^ai:fetch:([a-z0-9_-]+)$/);
   if (fetchMatch) {
     const result = await fetchProviderModels(env, callback.from.id, fetchMatch[1]);
-    await editOrSend(env, chatMessage, result.text, withClose(result.keyboard ?? { inline_keyboard: [[{ text: "\u2190 Back", callback_data: "ai:menu" }]] }));
+    await editOrSend(env, chatMessage, result.text, withClose2(result.keyboard ?? { inline_keyboard: [[{ text: "\u2190 Back", callback_data: "ai:menu" }]] }));
     return true;
   }
   const modelMatch = data.match(/^ai:model:([a-z0-9_-]+):([A-Za-z0-9_-]+)$/);
   if (modelMatch) {
     const result = await chooseModelForPing(env.DB, callback.from.id, modelMatch[1], modelMatch[2]);
-    await editOrSend(env, chatMessage, result.text, withClose(result.keyboard));
+    await editOrSend(env, chatMessage, result.text, withClose2(result.keyboard));
     return true;
   }
   if (data === "ai:ping") {
     const result = await testSelectedModel(env, callback.from.id);
-    await editOrSend(env, chatMessage, result.text, withClose(result.keyboard));
+    await editOrSend(env, chatMessage, result.text, withClose2(result.keyboard));
     return true;
   }
   const bindMatch = data.match(/^ai:bind:(primary|fallback)$/);
   if (bindMatch) {
     if (!await selectedModelPassedPing(env.DB, callback.from.id)) {
-      await editOrSend(env, chatMessage, "Run Test Ping successfully before binding this model.", withClose({ inline_keyboard: [[{ text: "\u2190 Back", callback_data: "ai:menu" }]] }));
+      await editOrSend(env, chatMessage, "Run Test Ping successfully before binding this model.", withClose2({ inline_keyboard: [[{ text: "\u2190 Back", callback_data: "ai:menu" }]] }));
       return true;
     }
     const result = await bindSelectedModel(env.DB, callback.from.id, bindMatch[1]);
