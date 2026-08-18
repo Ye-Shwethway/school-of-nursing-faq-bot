@@ -12,7 +12,7 @@ Production Telegram FAQ assistant for a university School of Nursing in Burmese,
 - relevant `main` pushes run the single production pipeline automatically.
 
 ## Current foundation
-Status: PRODUCTION LIVE; MAIN-ONLY PIPELINE ACTIVE; AI SETUP HARDENED
+Status: PRODUCTION LIVE; MAIN-ONLY PIPELINE ACTIVE; AI SETUP WORKING
 
 Implemented:
 - multilingual dynamic FAQ
@@ -27,24 +27,25 @@ Implemented:
 - TEST deployment notices suppressed at runtime
 - TEST/one-time workflow clutter retired
 - production runtime-binding preflight/postflight checks
-- AI API-key setup now catches encryption/configuration failures and returns an explicit Owner-visible error instead of silently stopping
+- AI API-key setup catches encryption/configuration failures and returns an explicit Owner-visible error instead of silently stopping
+- `/language` is a visible public command for all users and therefore inherited by Sudo/Admin and Owner command sets
 
 ## Verified production checkpoint
 - production D1 and Worker are healthy
 - production operational-data bootstrap completed green
 - production Telegram webhook cutover completed green
 - `/start` works through production
-- Owner menu shows the expected 12 commands after exact Telegram read-back verification
-- `BOT_OWNER_TELEGRAM_ID` is required as a Cloudflare `secret_text` binding
-- `AI_CONFIG_MASTER_KEY` is required as a Cloudflare `secret_text` binding
-- production AI provider credential setup is the current active validation target
+- `BOT_OWNER_TELEGRAM_ID` is configured as a Cloudflare `secret_text` binding
+- `AI_CONFIG_MASTER_KEY` is configured as a valid Cloudflare `secret_text` binding
+- production Gemini provider setup is working after replacing the master key with valid Base64 for exactly 32 random bytes
+- user reports current production setup is functioning; latest requested UX change is making `/language` visible in all command menus
 
 ## AI configuration contract
 `AI_CONFIG_MASTER_KEY` must be Base64 representing exactly 32 random bytes. It is used as the AES-GCM key for encrypting provider credentials in D1.
 
 Changing the master key invalidates credentials encrypted with an older master key; those provider credentials must be entered again through `/ai`.
 
-`secure_entry.ts` now catches AI setup encryption/configuration exceptions, best-effort deletes submitted secret input, and sends a clear recovery message to the Owner instead of allowing the webhook path to fail silently.
+`secure_entry.ts` catches AI setup encryption/configuration exceptions, best-effort deletes submitted secret input, and sends a clear recovery message to the Owner instead of allowing the webhook path to fail silently.
 
 ## Single production workflow
 Canonical workflow: `.github/workflows/deploy-production.yml`
@@ -61,23 +62,21 @@ Relevant `main` pushes perform:
 9. runtime-binding postflight
 10. production `/health` verification requiring `environment=production`
 11. one-time nonce-gated Owner command resync
-12. exact Telegram `getMyCommands` read-back of all 12 Owner commands
+12. exact Telegram `getMyCommands` read-back of all 13 Owner commands
 
 Only this workflow remains active in `.github/workflows`.
 
-## Retired workflows
-Removed from the live tree after successful completion/consolidation:
-- TEST deployment
-- TEST build/typecheck handoff workflow
-- production operational-data bootstrap
-- one-time Telegram production cutover
-- separate Owner command-resync workflow
+## Command registry
+Public commands visible to every user:
+`/start`, `/language`, `/whoami`.
 
-Their history remains available in Git.
+Sudo Admin inherits the public set and adds:
+`/admin`, `/admins`, `/faq`, `/adminmanual`.
 
-## Owner command registry
 Expected Owner commands:
-`/start`, `/whoami`, `/admin`, `/admins`, `/faq`, `/adminmanual`, `/sudo`, `/ai`, `/staff`, `/ownermanual`, `/cancel`, `/reset`.
+`/start`, `/language`, `/whoami`, `/admin`, `/admins`, `/faq`, `/adminmanual`, `/sudo`, `/ai`, `/staff`, `/ownermanual`, `/cancel`, `/reset`.
+
+Command schema revision is bumped whenever a visible command set changes so Telegram registration is refreshed.
 
 ## Environment isolation rule
 `notifyDeploymentOnline()` is production-only. Historical TEST runtime must not inject deployment messages into the live Owner chat.
@@ -96,11 +95,10 @@ Wrangler enters `src/manual_entry.ts`.
 9. compatibility fallback + `/health`
 
 ## Next exact work
-1. replace production `AI_CONFIG_MASTER_KEY` with a valid 32-byte Base64 Cloudflare secret
-2. let the current main production pipeline deploy the hardened AI setup handler
-3. rerun `/ai` -> Google Gemini -> send the Gemini API key privately
-4. verify encrypted credential save, key-message deletion, model fetch and model binding
-5. verify grounded AI, fallback and human handoff
+1. verify the `/language` visibility deployment completes green with exact 13-command Owner read-back
+2. confirm `/language` is visible for a normal user as well as Owner
+3. continue grounded AI/fallback/handoff production smoke if needed
+4. continue feature work directly on `main` in small validated slices
 
 ## Current migrations
 0001 through 0010. Canonical 0010: `migrations/0010_manual_newline_cleanup.sql`.
