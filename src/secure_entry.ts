@@ -137,9 +137,9 @@ async function handleLanguageSelection(
 
   const language = match[1] as Language;
   const confirmations: Record<Language, string> = {
-    my: "မြန်မာဘာသာကို ရွေးထားပါပြီ။",
-    en: "Language set to English.",
-    zh: "已设置为简体中文。",
+    my: "ဘာသာစကားကို မြန်မာဘာသာအဖြစ် သတ်မှတ်ပြီးပါပြီ။ မေးလိုသည့် မေးခွန်းကို ပို့နိုင်ပါပြီ။",
+    en: "Language set to English. You can now send your question.",
+    zh: "语言已设置为简体中文。现在可以发送您的问题。",
   };
 
   try {
@@ -153,13 +153,11 @@ async function handleLanguageSelection(
     return true;
   }
 
-  await telegramApi(env, "answerCallbackQuery", {
-    callback_query_id: callback.id,
-    text: confirmations[language],
-  });
+  await telegramApi(env, "answerCallbackQuery", { callback_query_id: callback.id });
 
   if (callback.message) {
     await deleteMessage(env, callback.message.chat.id, callback.message.message_id);
+    await sendMessage(env, callback.message.chat.id, confirmations[language]);
   }
   return true;
 }
