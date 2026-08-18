@@ -2,6 +2,7 @@ import app from "./deployment_notice_entry";
 import { getAdminRole } from "./admin";
 import { syncCommandRegistryIfNeeded } from "./command_sync";
 import {
+  createManualSection,
   getManualSection,
   listManualSections,
   updateManualSection,
@@ -109,7 +110,10 @@ function pagerKeyboard(key: ManualKey, index: number, total: number, canEdit: bo
   if (index < total - 1) nav.push({ text: "Next ▶", callback_data: `manual:page:${key}:${index + 1}` });
 
   const rows: InlineKeyboard["inline_keyboard"] = [nav];
-  if (canEdit) rows.push([{ text: "✎ Edit this section", callback_data: `manual:editpage:${key}:${index}` }]);
+  if (canEdit) {
+    rows.push([{ text: "✎ Edit this section", callback_data: `manual:editpage:${key}:${index}` }]);
+    rows.push([{ text: "＋ Add new section", callback_data: `manual:add:${key}` }]);
+  }
   rows.push([{ text: "✕ Close", callback_data: "ui:close" }]);
   return { inline_keyboard: rows };
 }
@@ -248,10 +252,64 @@ async function handleManualCallback(env: Env, callback: TelegramCallbackQuery): 
     return true;
   }
 
+  const addMatch = data.match(/^manual:add:(owner|admin)$/);
+  if (addMatch) {
+    if (role !== "owner") {
+      await answerCallback(env, callback.id, "Owner only");
+      return true;
+    }
+    const key = addMatch[1] as ManualKey;
+    await saveSession(env.DB, callback.from.id, "awaiting_manual_add_title", key, null);
+    await answerCallback(env, callback.id);
+    await editOrSend(
+      env,
+      callback.message,
+      [
+        `Add section to ${manualTitle(key)}`,
+        "",
+        "Step 1/2 — Send the section title.",
+        "Example: 9. Staff escalation tips",
+        "",
+        "Use /cancel to stop.",
+      ].join("\n"),
+    );
+    return true;
+  }
+
   if (data === "manual:discard") {
     await clearSession(env.DB, callback.from.id);
-    await answerCallback(env, callback.id, "Edit discarded");
-    await editOrSend(env, callback.message, "Manual edit discarded. Open the manual again when needed.");
+    await answerCallback(env, callback.id, "Change discarded");
+    await editOrSend(env, callback.message, "Manual change discarded. Open the manual again when needed.");
+    return true;
+  }
+
+  if (data === "manual:addsave") {
+    if (role !== "owner") {
+      await answerCallback(env, callback.id, "Owner only");
+      return true;
+    }
+    const session = await env.DB.prepare(
+      `SELECT state, provider, payload FROM admin_sessions WHERE telegram_user_id=?1`,
+    ).bind(callback.from.id).first<{ state: string; provider: string | null; payload: string | null }>();
+    if (!session || session.state !== "manual_add_preview" || !session.provider || !session.payload) {
+      await answerCallback(env, callback.id, "Add session expired");
+      return true;
+    }
+    if (session.provider !== "owner" && session.provider !== "admin") {
+      await clearSession(env.DB, callback.from.id);
+      await answerCallback(env, callback.id, "Invalid add session");
+      return true;
+    }
+
+    const key = session.provider as ManualKey;
+    const payload = JSON.parse(session.payload) as { title: string; body: string };
+    await createManualSection(env.DB, key, payload.title, payload.body, callback.from.id);
+    await clearSession(env.DB, callback.from.id);
+    await answerCallback(env, callback.id, "Section added");
+
+    const sections = await listManualSections(env.DB, key);
+    const page = await renderManualPage(env, key, Math.max(0, sections.length - 1), true);
+    if (page) await editOrSend(env, callback.message, page.text, page.keyboard);
     return true;
   }
 
@@ -297,7 +355,67 @@ async function consumeManualEditText(env: Env, message: TelegramMessage): Promis
   const session = await env.DB.prepare(
     `SELECT state, provider, payload FROM admin_sessions WHERE telegram_user_id=?1`,
   ).bind(message.from.id).first<{ state: string; provider: string | null; payload: string | null }>();
-  if (!session || session.state !== "awaiting_manual_edit_body" || !session.provider) return false;
+  if (!session || !session.provider) return false;
+
+  if (session.state === "awaiting_manual_add_title") {
+    if (session.provider !== "owner" && session.provider !== "admin") return false;
+    if (text.length > 120) {
+      await sendMessage(env, message.chat.id, "Section title is too long. Keep it under 120 characters or use /cancel.");
+      return true;
+    }
+    await saveSession(env.DB, message.from.id, "awaiting_manual_add_body", session.provider, { title: text });
+    await sendMessage(
+      env,
+      message.chat.id,
+      [
+        "Step 2/2 — Send the section content.",
+        "",
+        `Title: ${text}`,
+        "",
+        "Send the complete section body in one message. You will preview it before saving.",
+      ].join("\n"),
+    );
+    return true;
+  }
+
+  if (session.state === "awaiting_manual_add_body") {
+    if (session.provider !== "owner" && session.provider !== "admin") return false;
+    if (text.length > 3500) {
+      await sendMessage(env, message.chat.id, "This section is too long for a clean Telegram manual view. Keep it under 3,500 characters or use /cancel.");
+      return true;
+    }
+    const oldPayload = session.payload ? JSON.parse(session.payload) as { title?: string } : {};
+    if (!oldPayload.title) {
+      await clearSession(env.DB, message.from.id);
+      await sendMessage(env, message.chat.id, "Add-section session expired. Open the manual and try again.");
+      return true;
+    }
+    const body = text.replace(/\\n/g, "\n");
+    await saveSession(env.DB, message.from.id, "manual_add_preview", session.provider, {
+      title: oldPayload.title,
+      body,
+    });
+    await sendMessage(
+      env,
+      message.chat.id,
+      [
+        "Preview — new section is not saved yet",
+        "",
+        oldPayload.title,
+        "",
+        body,
+      ].join("\n"),
+      {
+        inline_keyboard: [[
+          { text: "✓ Add section", callback_data: "manual:addsave" },
+          { text: "Discard", callback_data: "manual:discard" },
+        ]],
+      },
+    );
+    return true;
+  }
+
+  if (session.state !== "awaiting_manual_edit_body") return false;
 
   if (text.length > 3500) {
     await sendMessage(env, message.chat.id, "This section is too long for a clean Telegram manual view. Keep it under 3,500 characters or use /cancel.");
