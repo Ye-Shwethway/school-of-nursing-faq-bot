@@ -2,152 +2,115 @@
 
 Last updated: 2026-08-18
 
-## Verified live Cloudflare state
+## Current TEST checkpoint
+Repository: `Ye-Shwethway/school-of-nursing-faq-bot`
+Branch: `test`
+
+Cloudflare account:
 - Account ID: `abd28e59860f09dab81b7e09de467f38`
 - D1 database: `school-of-nursing-faq-bot-db`
-- D1 database ID: `9109c1ef-3613-49f8-aee3-c62a3dbdd744`
-- Region: APAC
-- binding name: `DB`
-- live schema currently includes migration 0001 only
-- verified live tables: `users`, `questions`, `admin_roles`, `admin_audit`
-- verified live indexes: `idx_questions_user_created`, `idx_questions_resolution_created`
-- Worker `school-of-nursing-faq-bot-test`: not yet created
-- production Worker `school-of-nursing-faq-bot`: not yet created
-- no Telegram/AI secrets configured
+- D1 ID: `9109c1ef-3613-49f8-aee3-c62a3dbdd744`
+- binding: `DB`
+- TEST Worker: `school-of-nursing-faq-bot-test`
+- production Worker: `school-of-nursing-faq-bot`
 
-The first Worker creation attempt was rejected before creation with Cloudflare error `10021` because compatibility date `2026-08-18` was still future in Cloudflare UTC. No Worker, binding, secret, schema, DNS, KV, R2, Queue, or Durable Object drift occurred.
+The Creator reports that the manual TEST deployment/configuration recovery succeeded and the live bot now passes:
 
-Do not silently change the compatibility date merely to bypass that error. Retry after Cloudflare UTC has reached `2026-08-18`, or deliberately update the repository compatibility date under the normal `test` validation workflow.
+`FAQ miss → Gemini grounded agent → Telegram reply`
+
+The earlier AI API-key routing issue is therefore no longer the current blocker.
+
+Before any mutation, read back the actual Cloudflare Worker/D1 state. Treat that read-back as authoritative if it differs from this report.
 
 ## Branch/environment rule
-- `test` = active validation/development
-- `main` = verified canonical/production
-- deploy only `test` to `school-of-nursing-faq-bot-test` during this handoff
-- do not create/deploy `school-of-nursing-faq-bot` until the validated checkpoint is merged to `main`
+- deploy only the `test` artifact to `school-of-nursing-faq-bot-test`
+- do not deploy or modify production during this refinement handoff
+- do not merge `test` into `main`
+- preserve existing TEST secrets, D1 binding, webhook and `APP_ENV=test`
 
 ## Current application entrypoint
 Wrangler entrypoint:
 
-`src/runtime_entry.ts`
+`src/ux_entry.ts`
 
-The older `src/entry.ts` has been removed. `src/index.ts` remains an intentionally retained legacy/fallback runtime used by the migration-aware wrapper during transitional states.
+Runtime stack:
+1. `ux_entry.ts` — Telegram UX Polish v1 and AI generation control guard
+2. `secure_entry.ts` — AI secret/setup routing guard
+3. `runtime_entry.ts` — dynamic FAQ/AI integration
+4. `index.ts` — retained fallback application runtime
 
-## Repository-side validation evidence
-The current `test` application has passed the focused GitHub build workflow with:
+Do not reconstruct or independently patch the generated Worker.
 
-1. Node 22 dependency installation
-2. `npm run typecheck`
-3. local Wrangler D1 migration application for migrations 0001 through 0005
-4. `wrangler deploy --dry-run --env test`
-5. generation of the deployment bundle
+## New migration required before UX v1 Worker
+Apply exact repository migration:
 
-Latest validated dry-run characteristics at this checkpoint:
-- total upload approximately `182.21 KiB`
-- gzip approximately `39.71 KiB`
-- expected D1 binding: `DB` → `school-of-nursing-faq-bot-db`
-- expected plain variable: `APP_ENV=test`
+`migrations/0006_conversation_control_version.sql`
+
+It adds:
+
+`conversation_control.control_version INTEGER NOT NULL DEFAULT 0`
+
+This column is required by the new runtime. Apply migration 0006 before uploading the new Worker.
+
+Do not reapply or rewrite migrations 0001–0005 unless Cloudflare read-back proves they are actually missing. The currently functioning Gemini/D1 runtime strongly indicates the earlier application migrations are already present, but verify rather than assume.
+
+After migration 0006 verify:
+- `conversation_control.control_version` exists
+- existing rows have a usable default value
+- existing user/admin/FAQ/AI credential data remains intact
 
 ## Exact deployment artifact
-For direct Cloudflare API/MCP upload when Wrangler cannot be run in the Cloudflare-side conversation, use the exact file from the current `test` branch:
+Use only the current generated files from `test`:
+- `deploy/worker.mjs`
+- `deploy/worker.sha256`
 
-`deploy/worker.mjs`
+Verify SHA-256 against the sidecar immediately before upload. Do not rely on an older checksum copied into a chat because the Test Build workflow refreshes the artifact after source changes.
 
-Do not manually rewrite, reformat, summarize, or reconstruct this generated module.
+Repository build gates before artifact refresh:
+1. Node 22 dependency install
+2. strict TypeScript typecheck
+3. local D1 migrations 0001 → 0006
+4. Wrangler `--dry-run --env test`
+5. generated Worker + checksum refresh
 
-SHA-256 is stored alongside it in:
+The `cloudflare-test-handoff` GitHub Actions artifact now includes migration 0006 plus the generated Worker/checksum.
 
-`deploy/worker.sha256`
-
-Current expected SHA-256:
-
-`2f15bd2d97ec86917741603b41eccf6c0a49f88172283ed5fc10021925cddff0`
-
-The GitHub Test Build workflow regenerates the artifact from the current Wrangler build and refreshes the checksum whenever the generated module changes.
-
-## Repository-only migrations to apply
-Live Cloudflare currently has 0001 only. Apply the remaining migrations in order:
-
-1. `migrations/0002_ai_settings.sql`
-2. `migrations/0003_handoff_persona.sql`
-3. `migrations/0004_shadow_monitoring.sql`
-4. `migrations/0005_dynamic_faq.sql`
-
-These migrations have already passed local Wrangler D1 migration validation in GitHub Actions. Do not re-author or combine them on the Cloudflare side; use the exact repository SQL.
-
-After migrations, verify at minimum that the expected new tables exist:
-- `ai_provider_credentials`
-- `ai_model_cache`
-- `ai_model_tests`
-- `ai_model_bindings`
-- `admin_sessions`
-- `bot_settings`
-- `staff_members`
-- `escalation_cases`
-- `escalation_messages`
-- `conversation_control`
-- `monitoring_topics`
-- `faq_entries`
-- `faq_revisions`
-
-The original 22 FAQs are seeded by application runtime when `faq_entries` is empty; migration 0005 itself intentionally creates schema only.
-
-## Test Worker creation/deployment
-Create/upload only:
-
-- Worker name: `school-of-nursing-faq-bot-test`
-- module: exact current `deploy/worker.mjs`
-- compatibility date: `2026-08-18`
-- D1 binding: `DB` → `9109c1ef-3613-49f8-aee3-c62a3dbdd744`
-- plain variable: `APP_ENV=test`
-
-First validate without Telegram or AI credentials:
-
-1. Worker exists and deployment/version ID is recorded.
-2. `DB` binding resolves to the expected D1 ID.
-3. `APP_ENV=test` is present.
-4. `GET /health` returns HTTP 200.
-5. Expected body is equivalent to:
-
-```json
-{
-  "ok": true,
-  "service": "school-of-nursing-faq-bot",
-  "environment": "test"
-}
-```
-
-6. Unknown route returns HTTP 404 / `Not Found`.
-7. Malformed JSON to `/telegram/webhook` returns the canonical invalid-JSON response rather than crashing.
-8. Recheck D1 integrity after deployment.
-
-## Secrets/configuration after foundation health passes
-Cloudflare Worker secrets required for Telegram/runtime configuration:
+## Preserve runtime configuration
+Do not rotate, remove, print or replace existing values unless explicitly requested:
 - `TELEGRAM_BOT_TOKEN`
 - `TELEGRAM_WEBHOOK_SECRET`
 - `BOT_OWNER_TELEGRAM_ID`
 - `AI_CONFIG_MASTER_KEY`
+- provider credentials encrypted in D1
+- current Primary/Fallback model binding
+- Staff Inbox / dedicated responder settings
+- Telegram webhook
 
-`AI_CONFIG_MASTER_KEY` must be the base64 encoding of exactly 32 random bytes.
+## UX v1 live validation
+After migration 0006 and TEST redeploy, validate:
 
-Provider API keys are **not** separate Cloudflare secrets in this design. The Owner enters provider keys through the Telegram `/ai` settings flow; the Worker encrypts them with `AI_CONFIG_MASTER_KEY` and stores ciphertext in D1.
-
-Never expose any secret value in GitHub, Cloudflare reports, Telegram Staff Inbox, or handoff transcripts.
-
-## Live Telegram validation after secrets are configured
-Validate in focused order:
-
-1. `/start` public-only UX and language persistence
-2. `/whoami` name/username + immutable Telegram ID
-3. scoped command menus for normal user, Sudo Admin, and Owner
-4. Sudo grant/revoke and target command-scope refresh
-5. `/faq` dynamic CRUD, revision history, disable/restore, notification fan-out, and immediate knowledge update
-6. AI provider key save → model fetch → Test Ping → Primary/Fallback binding
-7. Male/Female persona
-8. deterministic FAQ → Primary AI → Fallback AI → Human fail-safe
-9. no-AI/no-key/provider-failure path directly to human handoff without crash
-10. group and dedicated responder routes
-11. Staff Inbox forum-topic shadow monitoring / silent messages
-12. atomic Take Over, claimant-only anonymous reply, Resolve, and Return to AI
+1. `GET /health` remains HTTP 200 and environment remains `test`.
+2. A deterministic FAQ still returns immediately and does not unnecessarily invoke AI.
+3. A natural-language FAQ miss that Gemini can answer from approved context shows Telegram native `typing` while generation is in flight.
+4. AI answer is sent as a reply to the originating question.
+5. AI/FAQ/monitoring callback navigation edits the existing menu where possible instead of flooding chat.
+6. `✕ Close` dismisses the current bot-owned menu.
+7. `← Back` returns to the parent screen.
+8. `/cancel` clears only the current wizard/setup and does not delete saved AI provider/model configuration.
+9. `/reset` clears transient session/conversation state and returns the conversation to automated mode while preserving language, FAQ knowledge, AI credentials, model bindings, persona, roles and monitoring settings.
+10. Start a deliberately slow AI request, then use staff `Take Over`; the old in-flight AI result must not be delivered.
+11. Start a deliberately slow AI request, then issue `/reset`; the old in-flight AI result must not be delivered.
+12. While human control is active, user follow-up must reach the staff monitoring destination even when routine monitoring mode is `alerts_only` or `off`.
+13. AI provider-key setup still consumes secret input before normal question routing and the secret-like Telegram message remains best-effort deleted.
 
 ## Stop boundary
-Do not merge `test` into `main` and do not deploy the production Worker during this handoff. Return the exact migration evidence, Worker deployment/version, health responses, binding state, secret-presence state (never values), FAQ seed count, and focused Telegram validation results to the GitHub-side development conversation first.
+After focused TEST validation, stop and report:
+- migration 0006 result
+- Worker deployment/version
+- exact deployed artifact checksum
+- health result
+- each UX validation result
+- any runtime error or behavioral regression
+- confirmation that production was untouched
+
+Do not promote `main` or production until the GitHub-side session reviews this evidence.
