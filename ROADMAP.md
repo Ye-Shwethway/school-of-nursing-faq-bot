@@ -11,9 +11,9 @@ Production Telegram FAQ assistant for a university School of Nursing in Burmese,
 - relevant `main` pushes run `.github/workflows/deploy-production.yml`.
 
 ## Current checkpoint
-Status: **FAQ-FIRST + FALSE-ESCALATION GUARD LIVE; TOKEN/WEBHOOK ROTATION LIVE; AI CREDENTIAL SAVE LIVE; OWNER TAKEOVER OVERRIDE LIVE-ACCEPTED; 1-HOUR HUMAN-CONTROL LEASE + AUTO-RETURN IMPLEMENTED ON MAIN; PRODUCTION/LIVE TIMER VERIFICATION REQUIRED**.
+Status: **FAQ-FIRST + FALSE-ESCALATION GUARD LIVE; TOKEN/WEBHOOK ROTATION LIVE; AI CREDENTIAL SAVE LIVE; OWNER TAKEOVER OVERRIDE LIVE-ACCEPTED; 1-HOUR HUMAN-CONTROL LEASE + AUTO-RETURN IMPLEMENTED ON MAIN; DEPLOYMENT ONLINE NOTICE CHANGE SUMMARY IMPLEMENTED; PRODUCTION/LIVE VERIFICATION REQUIRED**.
 
-Live-confirmed before this newest slice:
+Live-confirmed before the newest timer/notice slices:
 - rotated Telegram bot token works inbound/outbound
 - automatic production webhook cutover works
 - `/language`, `/faq`, normal commands and false-escalation filtering work
@@ -22,7 +22,7 @@ Live-confirmed before this newest slice:
 - Bot Owner can override another Admin's stale `Take Over` and return the user to AI
 
 ## Human-control lease / auto-return
-A successful `Take Over` now starts a persisted **1-hour inactivity lease**.
+A successful `Take Over` starts a persisted **1-hour inactivity lease**.
 
 Lease semantics:
 1. `takeOverConversation()` sets `last_human_activity_at=CURRENT_TIMESTAMP` and `human_control_expires_at=now + 1 hour`.
@@ -58,7 +58,15 @@ Migration `0028_human_control_lease.sql` adds:
 Any human-control claim already active when migration 0028 is applied receives a fresh full one-hour lease instead of being immediately expired.
 
 ## Production deployment support
-The production workflow builds an isolated Wrangler config. It now explicitly copies `source.triggers` into that generated config so the canonical Cron schedule is preserved during production deploy. Remote D1 migrations still run before Worker deploy.
+The production workflow builds an isolated Wrangler config and copies `source.triggers` so the canonical Cron schedule survives deploy. Remote D1 migrations still run before Worker deploy.
+
+### Deployment online change summary
+The production workflow now derives the deploy-triggering Git commit subject from `GITHUB_SHA`, normalizes it to one line, caps it at 180 characters, and injects it into the Worker as `DEPLOY_CHANGE` alongside `DEPLOY_REVISION`.
+
+`src/deployment_notice_entry.ts` displays that metadata as:
+`Change: <commit subject>`
+
+This lets Owner/Sudo see what changed directly in the `🟢 Bot is Online!` reboot notice without opening GitHub. If metadata is unavailable, the notice remains valid and simply omits the `Change:` line. In the current direct-to-`main` model this is the triggering commit subject; a future PR-merge workflow can naturally surface the merge/PR title through the same field.
 
 ## Owner takeover override
 Bot Owner remains higher authority than the current claimant and may force `Return to AI` immediately without waiting for lease expiry. Previous claimant notification and Staff Inbox transition visibility remain required.
@@ -91,6 +99,7 @@ Top flow:
 - Staff Inbox Take Over / Resolve / Return-to-AI
 - Owner override of stale Admin takeover
 - 1-hour inactivity lease + claimant renewal + auto-return
+- deployment online notice with revision + change summary
 - `/limits`, progressive inquiry rate limit, Interaction Flood Guard, Owner-only ban/unban
 - deterministic Input Quality Gate
 - grounded AI `answer | clarify | handoff`
@@ -110,16 +119,17 @@ Newest migration:
 - `0028_human_control_lease.sql` — persisted 1-hour takeover lease, rollout backfill, expiry index, Owner/Admin manual documentation.
 
 ## Validation boundary
-Do not call the newest lease slice production-green until production workflow + live Telegram acceptance confirms:
+Do not call the newest lease/change-summary slices production-green until production workflow + live Telegram acceptance confirms:
 1. typecheck, migration 0028, dry-run bundle, remote migration, deploy and health pass
 2. production deployment preserves the `*/5 * * * *` Cron trigger
-3. Sudo/Admin Take Over starts human mode
-4. `Extend 1h` works only for the active claimant
-5. claimant staff reply renews expiry another hour
-6. another Admin's activity does not renew the lease
-7. manual claimant Return to AI still works
-8. Owner override still works immediately and notifies displaced claimant
-9. an inactivity-expired test claim is auto-returned by scheduled sweep
-10. user receives localized auto-return notice and next question enters FAQ/AI
-11. previous claimant receives expiry notification or Staff Inbox fallback
-12. case/question/user history remains intact
+3. reboot notice shows the current short revision and `Change:` matching the deploy-triggering commit subject
+4. Sudo/Admin Take Over starts human mode
+5. `Extend 1h` works only for the active claimant
+6. claimant staff reply renews expiry another hour
+7. another Admin's activity does not renew the lease
+8. manual claimant Return to AI still works
+9. Owner override still works immediately and notifies displaced claimant
+10. an inactivity-expired test claim is auto-returned by scheduled sweep
+11. user receives localized auto-return notice and next question enters FAQ/AI
+12. previous claimant receives expiry notification or Staff Inbox fallback
+13. case/question/user history remains intact
