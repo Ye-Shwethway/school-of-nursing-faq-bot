@@ -82,20 +82,20 @@ Migration `0011_group_message_cleanup.sql` adds `group_message_ledger` for obser
 
 `/clearmessage` is Owner-only and works only inside the currently active Staff Inbox. It shows a destructive-action confirmation before deleting anything.
 
-The first production implementation used a synthetic `min_id -> max_id` sweep and could appear to succeed without deleting real messages. That algorithm is retired.
+The first production implementation treated successful `deleteMessages` calls as proof that every requested ID was deleted. Telegram documents that missing IDs may be silently skipped, so that count was not reliable and is retired.
 
 Current cleanup behavior:
 - verifies the bot's own Telegram membership/admin state before showing confirmation
 - for supergroups, requires administrator `can_delete_messages`; creator status also passes
+- reads `getMe.can_read_all_group_messages` for privacy-mode diagnostics
 - selects only actual message IDs present in `group_message_ledger`
-- uses Telegram `deleteMessages` in batches of at most 100 IDs
-- if a batch fails, it narrows the batch and finally falls back to `deleteMessage` for an exact ID
+- verifies deletion one message at a time with `deleteMessage`; an ID counts as deleted only when Telegram returns `result=true`
 - captures Telegram's error description for failures instead of silently swallowing them
-- removes only successfully deleted IDs from the ledger
-- sends the Owner a private result: deleted count, failed count, and first Telegram error if any
+- removes only confirmed-deleted IDs from the ledger
+- sends the Owner a private result containing confirmed-deleted count, failed count, tracked-ID count, privacy-mode diagnostic, and first Telegram error if any
 - one cleanup considers at most the newest 5,000 tracked messages younger than the Telegram deletion window
 
-Telegram Bot API permits deletion only for messages younger than 48 hours. The bot must be a group administrator with the appropriate deletion right to delete other users' messages. The Bot API does not expose general chat-history retrieval, so messages that predate ledger observation cannot be guaranteed to be discovered retroactively.
+Telegram Bot API permits deletion only for messages younger than 48 hours. The bot must be a group administrator with the appropriate deletion right to delete other users' messages. Bot admins receive ordinary group messages; `getMe.can_read_all_group_messages=true` additionally indicates that global Group Privacy Mode is disabled. The Bot API does not expose general chat-history retrieval, so messages that predate ledger observation cannot be guaranteed to be discovered retroactively.
 
 ## Single production workflow
 Canonical workflow: `.github/workflows/deploy-production.yml`
@@ -146,10 +146,10 @@ Wrangler enters `src/clear_message_entry.ts`.
 10. compatibility fallback + `/health`
 
 ## Next exact work
-1. verify the corrected `/clearmessage` production deployment completes green
-2. run `/clearmessage` in the active Staff Inbox and read the permission/result diagnostics
-3. if permission diagnostic says `can_delete_messages` is missing, grant that Telegram group-admin permission to the bot and retry
-4. verify actual tracked messages disappear and Owner receives a nonzero deleted count
+1. verify the per-message-confirmed `/clearmessage` production deployment completes green
+2. send fresh disposable messages in the active Staff Inbox after that deployment, then run `/clearmessage`
+3. inspect the Owner result: confirmed-deleted, failed, tracked IDs, privacy mode, first Telegram error
+4. if fresh incoming group messages are tracked/deleted correctly, expand ledger coverage for downstream bot-originated Staff Inbox messages
 5. continue feature work directly on `main` in small validated slices
 
 ## Current migrations
@@ -159,4 +159,4 @@ Wrangler enters `src/clear_message_entry.ts`.
 - multiuser simultaneous live stress test
 - same-user near-simultaneous first-message live race test
 - optional future policy: automatically remove a revoked Sudo Admin from the Telegram Staff Inbox group
-- broader ledger coverage for every bot-originated Staff Inbox control message if production cleanup coverage needs expansion
+- broader ledger coverage for every bot-originated Staff Inbox control/monitoring message
