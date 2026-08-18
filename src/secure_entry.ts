@@ -12,6 +12,9 @@ type Env = {
 
 type TelegramUser = {
   id: number;
+  username?: string;
+  first_name?: string;
+  last_name?: string;
 };
 
 type TelegramMessage = {
@@ -21,9 +24,19 @@ type TelegramMessage = {
   from?: TelegramUser;
 };
 
-type TelegramUpdate = {
+type TelegramCallbackQuery = {
+  id: string;
+  from: TelegramUser;
+  data?: string;
   message?: TelegramMessage;
 };
+
+type TelegramUpdate = {
+  message?: TelegramMessage;
+  callback_query?: TelegramCallbackQuery;
+};
+
+type Language = "my" | "en" | "zh";
 
 type InlineKeyboard = {
   inline_keyboard: Array<Array<{ text: string; callback_data?: string; url?: string }>>;
@@ -90,6 +103,67 @@ async function deleteMessage(env: Env, chatId: number, messageId: number): Promi
   await telegramApi(env, "deleteMessage", { chat_id: chatId, message_id: messageId });
 }
 
+async function setLanguage(
+  db: D1Database | undefined,
+  user: TelegramUser,
+  language: Language,
+): Promise<void> {
+  if (!db) return;
+  await db.prepare(
+    `INSERT INTO users
+      (telegram_user_id, username, first_name, last_name, language, updated_at)
+     VALUES (?1, ?2, ?3, ?4, ?5, CURRENT_TIMESTAMP)
+     ON CONFLICT(telegram_user_id) DO UPDATE SET
+       username=excluded.username,
+       first_name=excluded.first_name,
+       last_name=excluded.last_name,
+       language=excluded.language,
+       updated_at=CURRENT_TIMESTAMP`,
+  ).bind(
+    user.id,
+    user.username ?? null,
+    user.first_name ?? null,
+    user.last_name ?? null,
+    language,
+  ).run();
+}
+
+async function handleLanguageSelection(
+  env: Env,
+  callback: TelegramCallbackQuery,
+): Promise<boolean> {
+  const match = callback.data?.match(/^lang:(my|en|zh)$/);
+  if (!match) return false;
+
+  const language = match[1] as Language;
+  const confirmations: Record<Language, string> = {
+    my: "မြန်မာဘာသာကို ရွေးထားပါပြီ။",
+    en: "Language set to English.",
+    zh: "已设置为简体中文。",
+  };
+
+  try {
+    await setLanguage(env.DB, callback.from, language);
+  } catch {
+    await telegramApi(env, "answerCallbackQuery", {
+      callback_query_id: callback.id,
+      text: "Could not save the language. Please try again.",
+      show_alert: true,
+    });
+    return true;
+  }
+
+  await telegramApi(env, "answerCallbackQuery", {
+    callback_query_id: callback.id,
+    text: confirmations[language],
+  });
+
+  if (callback.message) {
+    await deleteMessage(env, callback.message.chat.id, callback.message.message_id);
+  }
+  return true;
+}
+
 async function activeAiSetupState(db: D1Database | undefined, telegramUserId: number): Promise<string | null> {
   if (!db) return null;
   try {
@@ -137,6 +211,10 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
     update = JSON.parse(raw) as TelegramUpdate;
   } catch {
     return forward(request, raw, env);
+  }
+
+  if (update.callback_query && await handleLanguageSelection(env, update.callback_query)) {
+    return json({ ok: true });
   }
 
   const message = update.message;
