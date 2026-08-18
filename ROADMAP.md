@@ -11,25 +11,27 @@ Production Telegram FAQ assistant for a university School of Nursing in Burmese,
 - relevant `main` pushes run `.github/workflows/deploy-production.yml`.
 
 ## Current checkpoint
-Status: **FAQ-FIRST ONBOARDING LIVE-ACCEPTED; FALSE ESCALATION GUARD + AI CLARIFICATION + DEPLOY-NOTICE RETRY IMPLEMENTED ON MAIN; NEWEST SLICE REQUIRES PRODUCTION VERIFICATION**.
+Status: **FAQ-FIRST ONBOARDING + FALSE ESCALATION GUARD LIVE; PRODUCTION DEPLOY NOW AUTOMATES TELEGRAM WEBHOOK CUTOVER; LATEST CUTOVER RUN REQUIRES LIVE INBOUND-COMMAND VERIFICATION**.
 
-Live-confirmed before this slice:
-- `/language` saves the selected language and returns the new FAQ-first localized confirmation in production.
-- FAQ-first onboarding therefore reached production successfully even though one deploy-online Telegram notice was missed.
+Live-confirmed:
+- `/language` saves the selected language and returns the FAQ-first localized confirmation in production.
+- false-escalation filtering accepts the intended junk/fragment tests without creating cases.
+- the rotated Telegram bot token is valid for outbound Bot API calls because the new bot received the production-online message.
+- the previous production workflow could deploy and sync commands without re-registering the webhook after a bot-token rotation, leaving inbound commands unavailable on the new bot.
 
 Implemented/current:
 - public localized `/faq` library for normal users
-- FAQ-first onboarding after `/start` or `/language`: language selection → picker removal → localized confirmation promoting `/faq` → direct `📚 Browse FAQ` button
-- free-text inquiry positioned as the path for questions not covered by `/faq`
+- FAQ-first `/start` or `/language` onboarding with direct `📚 Browse FAQ`
 - Owner/Sudo FAQ management and multilingual FAQ authoring
 - `/cases` Owner/Sudo Escalation Inbox with confirmed case deletion
 - Staff Inbox Take Over / Resolve / Return-to-AI, presence, notifications, topic reply relay
 - `/limits` Owner/Sudo rate-limit management, temporary exemption/restriction, Owner-only permanent ban/unban
 - 10 inquiries / 10 min progressive inquiry cooldown
 - private Interaction Flood Guard for command/button/message floods
-- new Input Quality Gate to suppress obvious low-information false escalations before FAQ/AI/handoff
+- Input Quality Gate to suppress obvious low-information false escalations before FAQ/AI/handoff
 - AI clarification decision for meaningful but incomplete/ambiguous input
-- production online notice retry when Telegram delivery fails completely
+- production online-notice retry when Telegram delivery fails completely
+- automatic nonce-gated Telegram webhook cutover + read-back in the production workflow
 - manuals and design rules synchronized with current behavior
 
 ## FAQ-first onboarding
@@ -40,10 +42,8 @@ Implemented/current:
 - explain that free-text inquiry is for questions not covered there
 - show one localized `📚 Browse FAQ` inline button that opens the public FAQ list directly
 
-This UX intentionally steers common questions toward deterministic approved FAQ content before free-text/AI usage.
-
 ## False escalation guard
-Normal private free-text now passes an Input Quality Gate after the inquiry/flood protections and after FAQ/admin text routing, but before the lower FAQ/AI/handoff path.
+Normal private free-text passes an Input Quality Gate after inquiry/flood protection and FAQ/admin text routing, but before the lower FAQ/AI/handoff path.
 
 Deterministic no-AI/no-case examples:
 - numbers only such as `1`, `12`, `123`
@@ -60,17 +60,15 @@ Behavior:
 - do not create a new escalation case
 - do not mirror junk into Staff Inbox as a normal unresolved question
 
-The gate deliberately avoids length-only blocking. Short meaningful topics such as `fees?`, `tuition`, `admission`, `CDM`, `accreditation`, etc. continue to FAQ/AI handling.
-
-Human-controlled conversations and active admin/setup sessions bypass the quality gate.
+The gate deliberately avoids length-only blocking. Short meaningful topics such as `fees?`, `tuition`, `admission`, `CDM`, `accreditation`, etc. continue to FAQ/AI handling. Human-controlled conversations and active admin/setup sessions bypass the quality gate.
 
 ## AI clarification vs handoff
-The grounded agent output contract now allows `answer | clarify | handoff`.
+The grounded agent output contract allows `answer | clarify | handoff`.
 
 - `clarify`: incomplete/ambiguous/fragmentary input that needs more context before either an answer or useful staff review. No case should be created.
 - `handoff`: sufficiently specific, meaningful School of Nursing question that staff could reasonably review or act on, but approved knowledge cannot safely answer.
 
-For minimal downstream compatibility, parsed `clarify` decisions are normalized into the existing terminal answered-response path with an internal `clarify:` reason marker. This prevents case creation without widening every runtime consumer in this slice.
+For minimal downstream compatibility, parsed `clarify` decisions are normalized into the existing terminal answered-response path with an internal `clarify:` reason marker.
 
 ## Spam protection architecture
 ### Inquiry rate limit
@@ -103,20 +101,21 @@ Owner-only:
 - `✅ Unban User`
 
 ## Deployment online notice retry
-Production `/health` still performs best-effort command sync and one online notice per revision.
+Production `/health` performs best-effort command sync and one online notice per revision. The revision is atomically claimed before sending; if every Owner/Sudo Telegram delivery fails, the claim is released so a later successful `/health` can retry. Notice failure never fails production health.
 
-Previous flaw: the revision was claimed before Telegram delivery; if all sends failed, that revision could remain permanently marked as notified.
+## Automatic Telegram webhook cutover
+The production Worker already exposes the nonce-gated `/ops/telegram/cutover` endpoint. The production workflow now uses it on every deploy after health succeeds:
+1. generate a random one-time cutover nonce
+2. store it in production D1 as `telegram_cutover_nonce`
+3. POST to `/ops/telegram/cutover` with `X-Cutover-Nonce`
+4. runtime calls Telegram `setWebhook` using the current `TELEGRAM_BOT_TOKEN` and existing `TELEGRAM_WEBHOOK_SECRET`
+5. runtime reads back `getWebhookInfo` and requires the Worker `/telegram/webhook` URL
+6. only then proceed to exact Owner command registry verification
 
-Current behavior:
-- atomically claim the revision before sending to prevent duplicate concurrent notices
-- if at least one Owner/Sudo delivery succeeds, keep the claim
-- if every delivery fails, release the revision claim so a later successful `/health` request can retry
-- notice failure never fails production health
+This closes the bot-token-rotation gap: replacing `TELEGRAM_BOT_TOKEN` in Cloudflare and running the production workflow now re-registers inbound Telegram delivery automatically. `TELEGRAM_WEBHOOK_SECRET` does not need rotation unless intentionally changed or exposed.
 
 ## Escalation Inbox
 `/cases` remains Owner/Sudo only in private bot chat or active Staff Inbox. `🗑 Delete Case` requires confirmation and deletes only the case plus its `escalation_messages`; preserve user, original `questions` log, and linked FAQ.
-
-The new false-escalation guard is intended to keep `/cases` focused on real knowledge gaps and actionable staff work rather than typos/junk fragments.
 
 ## Command registry
 Public (4): `/start`, `/language`, `/faq`, `/whoami`.
@@ -144,27 +143,29 @@ Wrangler entrypoint remains `src/interaction_guard_entry.ts`.
 Top flow:
 1. `interaction_guard_entry.ts` — private interaction flood gate
 2. `rate_limit_entry.ts` — `/limits` + normal-user inquiry rate gate
-3. `faq_ai_entry.ts` — FAQ authoring interception, then forwards normal text to Input Quality Gate
+3. `faq_ai_entry.ts` — FAQ authoring interception
 4. `input_quality_entry.ts` — deterministic false-escalation filter
 5. `cases_entry.ts` — `/cases`
 6. lower Staff/monitoring/FAQ/AI/runtime layers
 
-`agent_policy.ts` owns AI clarify-vs-handoff policy. `deployment_notice_entry.ts` owns retry-safe production-online notice delivery.
+`agent_policy.ts` owns AI clarify-vs-handoff policy. `deployment_notice_entry.ts` owns retry-safe online notice plus nonce-gated Telegram cutover endpoints.
 
 ## Validation boundary
-Do not declare the newest slice production-green until the production workflow passes:
+The production workflow must pass:
 - typecheck
 - local + remote migrations through `0026`
 - Worker dry-run/deploy
+- production binding preservation
 - production health
+- **Telegram webhook cutover + read-back**
 - exact 19-command Owner Telegram read-back
 
-Live acceptance after deploy:
-1. send `1`, `123`, `...`, a single emoji, URL-only, `ok` → localized clarification; no AI answer/handoff; no new `/cases` record
-2. send `fees?`, `CDM?`, `admission?` → normal FAQ/AI path still works
-3. send a meaningful but incomplete school question that AI classifies as clarify → clarification returned; no case
-4. send a specific unanswered School of Nursing question → real handoff and case still occur
-5. verify human-control short replies are not filtered
-6. verify active admin/setup wizard text is not filtered
-7. verify missed online-notice delivery can retry on a later successful `/health`
-8. verify existing FAQ-first onboarding, inquiry limits, flood guard, `/limits`, ban/unban, and `/cases` remain intact
+Live acceptance after the latest deploy:
+1. new bot `/start` receives a response, proving Telegram → Worker webhook delivery
+2. `/language` and `/faq` work on the new bot
+3. Owner command menu remains 19/19
+4. `1`, `123`, `...`, single emoji, URL-only, `ok` → localized clarification; no new `/cases`
+5. `fees?`, `CDM?`, `admission?` → normal FAQ/AI path
+6. meaningful incomplete school question → clarification; no case
+7. specific unanswered School of Nursing question → real handoff/case
+8. human-control and admin/setup text bypass quality filtering
