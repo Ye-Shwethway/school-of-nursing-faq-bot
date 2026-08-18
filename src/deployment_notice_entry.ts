@@ -5,6 +5,7 @@ import { commandScopeForPrivateChat, commandsForRole } from "./command_menu";
 interface Env {
   APP_ENV: string;
   DEPLOY_REVISION?: string;
+  DEPLOY_CHANGE?: string;
   DB?: D1Database;
   TELEGRAM_BOT_TOKEN?: string;
   TELEGRAM_WEBHOOK_SECRET?: string;
@@ -171,6 +172,12 @@ async function releaseRevisionNotice(env: Env, revision: string): Promise<void> 
   }
 }
 
+function deploymentChange(env: Env): string | null {
+  const raw = env.DEPLOY_CHANGE?.replace(/\s+/g, " ").trim();
+  if (!raw) return null;
+  return raw.slice(0, 180);
+}
+
 async function notifyDeploymentOnline(env: Env): Promise<void> {
   // TEST and PRODUCTION share the same Telegram bot token. TEST deployments must
   // never inject operational status messages into the live Owner chat.
@@ -187,12 +194,14 @@ async function notifyDeploymentOnline(env: Env): Promise<void> {
   }
 
   const shortRevision = revision.slice(0, 8);
+  const change = deploymentChange(env);
   const text = [
     "🟢 Bot is Online!",
     "",
     "SR1 School of Nursing Inquiry is online and responding.",
     `Environment: ${env.APP_ENV || "unknown"}`,
     `Revision: ${shortRevision}`,
+    ...(change ? [`Change: ${change}`] : []),
     "Health check: PASS",
     "Command menus: sync requested",
     "",
