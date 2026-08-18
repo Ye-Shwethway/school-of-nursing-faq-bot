@@ -15,146 +15,91 @@ Read in order:
 Treat live repository plus verified Cloudflare/Telegram evidence as authoritative over remembered chat context.
 
 ## Current checkpoint
-Production infrastructure, operational data, Telegram webhook, Owner identity binding, AI provider setup and the main-only deployment pipeline are working. `/language` is visible for all users. Sudo grants provision Staff Inbox access, Staff Inbox switching is explicit, and Owner `/clearmessage` is under live hardening after the first bulk-delete result proved able to overstate success.
+Production FAQ, AI, Telegram webhook, Owner identity, Staff Inbox, Sudo provisioning, main-only deployment and visible `/language` are working. `/clearmessage` is retained as a best-effort utility because Telegram history/deletion behavior limits full cleanup guarantees.
 
-## Main-only operating model
-- `main` is the only active development/canonical/production branch.
-- historical `test` is dormant/reference-only.
-- TEST deploy/build workflows are retired.
-- completed one-time bootstrap/cutover/resync workflows are retired from the live tree.
-- `.github/workflows/deploy-production.yml` is the single active workflow.
+The current deployment slice adds Staff Inbox notification control, explicit staff availability, unavailable-user messaging, and staff-topic reply relay back to users.
 
-Relevant `main` pushes automatically validate and deploy production.
+## Staff presence / notification slice
+Migration `0012_staff_presence_notifications.sql` adds:
+- `staff_presence`
+- `staff_notifications_enabled` bot setting
 
-## AI master-key contract
-`AI_CONFIG_MASTER_KEY` must be a Cloudflare `secret_text` containing Base64 for exactly 32 random bytes. It is imported directly as the AES-GCM key used to encrypt/decrypt provider API credentials stored in D1.
+Wrangler entrypoint is now `src/staff_presence_entry.ts`, wrapping `src/clear_message_entry.ts`.
 
-A fresh master key is valid, but credentials encrypted with an older key cannot be decrypted with the new one and must be entered again through `/ai`.
+Active Staff Inbox commands:
+- `/noti on`
+- `/noti off`
+- `/available`
+- `/unavailable`
 
-`src/secure_entry.ts` catches exceptions from AI credential setup. If encryption/configuration fails, the submitted API-key message is best-effort deleted and the Owner receives an explicit configuration error instead of the webhook path silently stopping.
+Owner, Sudo Admins and active staff can use these commands in the active Staff Inbox. `/noti`, `/available`, `/unavailable` are visible in Owner/Sudo command menus.
 
-## Sudo Admin -> Staff Inbox lifecycle
-Canonical implementation is in `src/staff_ux_entry.ts`, reusing `handleAdminCommand()` from `src/admin.ts` rather than duplicating authority rules.
+`/noti off` is notification-only: handoff/human-control messages remain stored and visible in the Staff Inbox but are sent with `disable_notification=true`.
 
-On successful Owner `/sudo grant <telegram_user_id>`:
-- `admin_roles` grants `sudo_admin`
-- the target is enabled in `staff_members`
-- Telegram command scope refresh is attempted best-effort
-- if the Staff Inbox is configured, membership is checked with `getChatMember`
-- if needed, the bot creates a one-use `createChatInviteLink`
-- the invite is sent to the target in private chat
-- if target DM is unavailable, the invite is sent to the Owner privately as fallback
-- invite creation failure produces an Owner-visible message about bot admin/invite permissions
+Active staff without an explicit presence row default to available. `/unavailable` marks the actor unavailable; `/available` restores availability.
 
-On `/sudo revoke <telegram_user_id>`:
-- Sudo authority is revoked
-- bot-side `staff_members` authorization is disabled
-- current implementation does not auto-kick an already joined user from the Telegram group; that remains a deliberate future policy choice
+## Unavailable handoff behavior
+If deterministic FAQ and grounded AI both cannot answer:
+- escalation is still stored and routed to the Staff Inbox topic
+- when at least one staff member is available, the user receives normal human-handoff copy
+- when available staff count is zero, the user is told that no staff are currently available, the question has been retained, and they should try again later
 
-## Staff Inbox switching
-`/staff` in a Telegram group exposes `Use / Switch to this Staff Inbox`.
+This avoids falsely promising immediate staff review when nobody is available.
 
-Switching replaces `staff_inbox_chat_id`, sets handoff routing to `group`, and sends all new handoff/monitoring traffic to the new group. Monitoring topic identity is keyed by both user and staff chat, so new group topics are isolated naturally. Old group messages/mappings remain historical and are no longer active routing targets.
+## Staff reconnect / reply behavior
+Authorized staff can later write a normal text message inside the affected user's Staff Inbox topic.
 
-## Staff Inbox message cleanup
-Wrangler enters `src/clear_message_entry.ts`, which wraps the existing runtime.
+`src/staff_presence_entry.ts`:
+- maps `(staff_chat_id, message_thread_id)` back to the original Telegram user through `monitoring_topics`
+- marks the replying staff member available
+- takes human control when the conversation is not already claimed by someone else
+- relays the staff text to the user's private chat prefixed as a School of Nursing staff reply
+- leaves another staff member's existing claim intact instead of stealing control
 
-Migration `0011_group_message_cleanup.sql` creates `group_message_ledger` and records observed group message IDs without storing message bodies.
-
-The first production cleanup treated successful `deleteMessages` calls as confirmation that every requested ID was removed. Telegram can silently skip missing IDs, so that count was not authoritative and is retired.
-
-Current Owner `/clearmessage` behavior:
-- works only in the active Staff Inbox group
-- verifies bot membership/admin state and `can_delete_messages`
-- reads `getMe.can_read_all_group_messages` for privacy-mode diagnostics
-- requires explicit confirmation before deletion
-- loads only actual tracked IDs from `group_message_ledger`
-- calls `deleteMessage` for each tracked ID and counts an ID only when Telegram returns `result=true`
-- preserves failed ledger rows and removes only confirmed-deleted rows
-- sends a private Owner result with confirmed-deleted count, failed count, tracked-ID count, privacy-mode state, and Telegram's first error description
-- considers at most the newest 5,000 tracked IDs inside the under-48-hour window
-
-Telegram Bot API only allows ordinary message deletion for messages younger than 48 hours. A group-admin bot receives ordinary group updates; `getMe.can_read_all_group_messages=true` additionally means global Group Privacy Mode is disabled. Messages that predate ledger observation cannot be guaranteed to be discovered because Bot API does not expose general chat-history enumeration.
-
-Broader ledger coverage for every downstream bot-originated Staff Inbox message is still a known follow-up if live diagnostics show those messages are not represented in the ledger.
-
-## Single production pipeline
-The production workflow performs:
-- production credential/runtime-binding preflight
-- install
-- typecheck
-- isolated production config generation
-- local migration validation
-- production Worker dry-run
-- production D1 migrations
-- Worker deploy with `APP_ENV=production` and current revision
-- runtime-binding postflight
-- production health verification
-- one-time Owner command resync
-- exact Telegram read-back of all 14 Owner commands
-
-Required production runtime bindings include:
-- `DB` (`d1`)
-- `TELEGRAM_BOT_TOKEN` (`secret_text`)
-- `TELEGRAM_WEBHOOK_SECRET` (`secret_text`)
-- `AI_CONFIG_MASTER_KEY` (`secret_text`)
-- `BOT_OWNER_TELEGRAM_ID` (`secret_text`)
-
-## Verified production evidence
-- isolated production D1 exists
-- production Worker is healthy
-- production `/health` returns `environment=production`
-- approved FAQ/manual/admin/staff/settings data was bootstrapped
-- Telegram webhook cutover completed green
-- `/start` works through production
-- Owner identity is recognized
-- production Gemini provider setup is working
-- `/language` is visible in Telegram command menus
-- exact Owner command read-back passes with 14 commands including `/clearmessage`
+If Telegram cannot deliver the private reply, an error is posted silently in the topic.
 
 ## Command registry
-Public menu for all users:
+Public:
 `/start`, `/language`, `/whoami`.
 
-Sudo Admin inherits public commands and adds:
-`/admin`, `/admins`, `/faq`, `/adminmanual`.
+Sudo Admin adds:
+`/admin`, `/admins`, `/faq`, `/adminmanual`, `/noti`, `/available`, `/unavailable`.
 
-Expected Owner menu:
-`/start`, `/language`, `/whoami`, `/admin`, `/admins`, `/faq`, `/adminmanual`, `/sudo`, `/ai`, `/staff`, `/clearmessage`, `/ownermanual`, `/cancel`, `/reset`.
+Owner additionally has:
+`/sudo`, `/ai`, `/staff`, `/clearmessage`, `/ownermanual`, `/cancel`, `/reset`.
 
-`src/command_menu.ts` command schema revision is `4`. Production deployment verification expects exact Owner read-back of 14 commands.
+Command schema revision: `5`.
+Production exact Owner read-back target: 17 commands.
 
-## Environment isolation
-Historical TEST and production used the same Telegram bot token, which previously allowed TEST health checks to send misleading deployment notices to the live Owner chat.
-
-Canonical runtime suppresses deployment-online notices unless `APP_ENV === "production"`.
-
-## Runtime contract
-`Dynamic FAQ -> Primary AI -> Fallback AI -> Human Handoff`
+## Existing critical contracts
+- `AI_CONFIG_MASTER_KEY` is a Cloudflare `secret_text` containing Base64 for exactly 32 random bytes.
+- Sudo grant enables staff authorization and provisions a one-use Staff Inbox invite when needed.
+- `/staff` inside a new group can switch the active Staff Inbox.
+- `/clearmessage` remains Owner-only and best-effort.
+- runtime contract remains `Dynamic FAQ -> Primary AI -> Fallback AI -> Human Handoff`.
 
 ## Canonical Worker stack
-Wrangler entrypoint: `src/clear_message_entry.ts`
-
-1. `clear_message_entry.ts` — Staff Inbox message ledger + Owner cleanup control + per-message Telegram deletion diagnostics
-2. `manual_entry.ts` — Owner/Admin manuals + command sync
-3. `deployment_notice_entry.ts` — production-only notice + production ops endpoints
-4. `latest_return_entry.ts`
-5. `monitoring_message_entry.ts`
-6. `staff_ux_entry.ts` — Staff Inbox UX + Sudo-to-staff invite lifecycle
-7. `ux_entry.ts`
-8. `secure_entry.ts` — private Owner AI setup interception + setup error handling
-9. `runtime_entry.ts`
-10. `index.ts` — fallback + `/health`
-
-## Next exact sequence
-1. verify the per-message-confirmed `/clearmessage` production deployment green
-2. create fresh disposable messages after that deployment and run `/clearmessage`
-3. inspect confirmed-deleted, failed, tracked IDs, privacy-mode state and first Telegram error
-4. if incoming test messages delete correctly but bot-originated Staff Inbox messages are missing, expand downstream ledger coverage
-5. continue directly on `main`
+1. `staff_presence_entry.ts` — staff availability, `/noti`, topic reply relay
+2. `clear_message_entry.ts` — best-effort Staff Inbox cleanup
+3. `manual_entry.ts` — manuals + command sync
+4. `deployment_notice_entry.ts` — production ops/deploy notice
+5. `latest_return_entry.ts` — Return-to-AI control
+6. `monitoring_message_entry.ts` — FAQ/AI/handoff + availability-aware copy
+7. `staff_ux_entry.ts` — Staff Inbox UX + Sudo invite lifecycle
+8. `ux_entry.ts`
+9. `secure_entry.ts`
+10. `runtime_entry.ts`
+11. `index.ts`
 
 ## Current migrations
-0001 through 0011; canonical 0011 is `migrations/0011_group_message_cleanup.sql`.
+0001 through 0012; canonical 0012 is `migrations/0012_staff_presence_notifications.sql`.
+
+## Next exact sequence
+1. verify migration 0012 + 17-command production deployment green
+2. test `/noti off` then trigger handoff and confirm group message remains but arrives silently
+3. mark all staff `/unavailable`, trigger an unanswered question, confirm unavailable copy
+4. mark one staff `/available`, reply in the user topic, confirm private relay to user
+5. continue directly on `main`
 
 ## Documentation rule
 After every meaningful runtime/deployment/architecture slice, update this file before stopping.
