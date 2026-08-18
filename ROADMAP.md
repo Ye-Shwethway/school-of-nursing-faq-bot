@@ -12,7 +12,7 @@ Production Telegram FAQ assistant for a university School of Nursing in Burmese,
 - normal production deployment remains explicit and guarded
 
 ## Current foundation
-Status: PRODUCTION LIVE; OWNER COMMAND-MENU HOTFIX DEPLOYED; TEST CI CANCELLATION NOISE FIXED
+Status: PRODUCTION LIVE; OWNER COMMAND REGISTRY UNDER VERIFIED RESYNC
 
 Implemented:
 - multilingual FAQ + dynamic CRUD/revisions
@@ -39,75 +39,57 @@ Verified by live workflow/user evidence:
 - deterministic FAQ/runtime paths work
 - production uses a fresh `AI_CONFIG_MASTER_KEY`; AI provider credentials still need production `/ai` configuration
 
-## Owner command-menu issue and hotfix
-Observed after cutover: Owner account displayed only the two public commands (`/start`, `/whoami`).
+## Owner command-menu issue
+Observed after cutover: Owner account displayed only the two public commands (`/start`, `/whoami`) and later no expanded Owner menu appeared.
 
-Root cause in `src/command_sync.ts`:
-- per-user `setMyCommands` failures were swallowed
-- registry synchronization could still persist `command_schema_version` even if Owner/Sudo scoped command registration failed
-- subsequent health/runtime syncs could therefore skip retrying the broken role-specific menu
+First hotfix in `src/command_sync.ts`:
+- per-user `setMyCommands` failures now return failure
+- Owner/Sudo failure prevents command-schema fingerprint persistence
+- later request/health sync can retry
+- command sync revision was bumped
 
-Hotfix:
-- `syncUserCommandScope()` now returns success/failure
-- Owner or Sudo scope failure prevents command-schema fingerprint persistence
-- later requests/health checks can self-heal by retrying
-- command sync revision bumped so production is forced to rebuild Telegram command scopes
+Remaining gap discovered:
+- ordinary health/cutover command synchronization was still best-effort
+- production workflows could be green without proving Telegram actually stored the Owner-specific command scope
 
-Expected Owner menu after resync:
+Verified resync slice:
+- production-only nonce-gated endpoint `POST /ops/telegram/owner-command-resync`
+- validates `BOT_OWNER_TELEGRAM_ID`
+- directly calls Telegram `setMyCommands` for the Owner private-chat scope
+- immediately calls Telegram `getMyCommands` for the same scope
+- requires exact ordered read-back of all 12 Owner commands
+- mismatch returns failure instead of reporting green
+- `.github/workflows/production-owner-command-resync.yml` deploys current main, arms a one-time D1 nonce, calls the endpoint, and fails unless command count/read-back is exactly 12
+
+Expected Owner menu:
 `/start`, `/whoami`, `/admin`, `/admins`, `/faq`, `/adminmanual`, `/sudo`, `/ai`, `/staff`, `/ownermanual`, `/cancel`, `/reset`.
 
 ## TEST CI cleanup
-Observed run `32123681126` / job `95669489898`:
-- typecheck passed
-- local D1 migration validation passed
-- Wrangler dry-run passed
-- failure occurred only in generated artifact self-push
-- push lost a race with a newer `test` commit and was rejected as non-fast-forward
+Observed run `32123681126` / job `95669489898`: validation passed through Wrangler dry-run; generated artifact self-push lost a non-fast-forward race.
 
-Observed run `32124026795` / job `95670512070`:
-- typecheck passed
-- D1 validation was cancelled only because a newer `test` push arrived while `cancel-in-progress: true` was enabled
-- this was cancellation collateral, not a test assertion or migration failure
+Observed run `32124026795` / job `95670512070`: typecheck passed; D1 validation was cancelled only because a newer `test` push arrived while cancellation was enabled.
 
 Current `.github/workflows/test-typecheck.yml`:
 - read-only repository permission
 - no CI write-back to `test`
 - generated Worker/checksum only in runner artifact
-- all `migrations/*.sql` included in handoff bundle
+- all `migrations/*.sql` included
 - push trigger path-scoped to source/config/migrations/workflow files
-- docs-only continuity commits no longer trigger Test Build
-- `cancel-in-progress: false`, so relevant runs queue instead of being cancelled
+- docs-only continuity commits do not trigger Test Build
+- `cancel-in-progress: false`
 
 ## Production operational-data bootstrap
 Workflow: `.github/workflows/bootstrap-production-data.yml`
 
-Copied allow-list:
-- current FAQ entries
-- current manual sections
-- Sudo Admin roles
-- staff membership
-- operator identity metadata required for labels
-- operational settings: persona, monitoring mode, Staff Inbox ID, handoff route, dedicated staff ID
+Copied allow-list: current FAQ entries, manuals, Sudo roles, staff membership, operator identity metadata, persona/monitoring/Staff Inbox/handoff settings.
 
-Not copied:
-- ordinary user history/questions
-- escalation history
-- conversation takeover state
-- monitoring-topic mappings
-- setup/admin sessions
-- encrypted AI credentials
-- AI cache/tests/model bindings
-
-## Production cutover automation
-Workflow: `.github/workflows/production-telegram-cutover-once.yml`
-
-The workflow deploys current main to production, verifies health, uses a one-time D1 nonce, calls Telegram `setWebhook`, verifies `getWebhookInfo`, refreshes command scopes, and performs a final production health check.
+Not copied: ordinary user history, escalation history, conversation-control state, monitoring-topic mappings, setup sessions, encrypted AI credentials, AI cache/tests/model bindings.
 
 ## Canonical Worker stack
 Wrangler enters `src/manual_entry.ts`.
 
 1. manual pager/edit/add + command sync
-2. deployment online notice + production cutover endpoint
+2. deployment online notice + production ops endpoints
 3. latest Return-to-AI control
 4. monitoring presentation / isolated handoff
 5. Staff Inbox UX
@@ -117,11 +99,10 @@ Wrangler enters `src/manual_entry.ts`.
 9. compatibility fallback + `/health`
 
 ## Next exact work
-1. verify the latest path-scoped Test Build finishes green without cancellation noise
-2. verify Owner Telegram menu shows the full Owner command set
-3. configure production AI provider/API key through `/ai`
+1. promote the verified Owner-command resync slice to `main`
+2. automation must prove Telegram read-back has exactly 12 Owner commands
+3. only after that, continue with production `/ai` provider credential setup
 4. verify grounded AI, fallback and human handoff
-5. once stable, promote the CI workflow cleanup from `test` to `main`
 
 ## Current migrations
 - 0001 initial
@@ -140,10 +121,3 @@ Canonical 0010: `migrations/0010_manual_newline_cleanup.sql`.
 ## Deferred validation debt
 - multiuser simultaneous live stress test
 - same-user near-simultaneous first-message live race test
-
-## Later slice
-After production stabilization:
-- remove or retire the one-time cutover workflow
-- latency / route telemetry without secrets
-- provider/model performance comparison
-- answer-presentation polish only where live UX shows a real need
