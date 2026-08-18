@@ -3,109 +3,93 @@
 Last updated: 2026-08-18
 
 ## Goal
-Keep the FAQ assistant autonomous while giving authorized staff a low-noise oversight surface and a fast way to stop automation when an answer looks wrong or a user needs direct human attention.
-
-## Default mode
-Recommended default: `all_alerts`.
-
-- routine user + bot/AI messages are mirrored silently
-- risky/handoff events remain normal Telegram alerts
-- staff can inspect the full conversation without receiving a notification for every message
+Keep the FAQ assistant autonomous while giving authorized staff a low-noise, user-isolated oversight surface with fast Take Over / Return to AI controls.
 
 ## Monitoring modes
-Stored in `bot_settings.monitoring_mode`.
+Stored in `bot_settings.monitoring_mode`:
 
-- `all_alerts` — mirror routine traffic silently and keep handoff/risk alerts on
-- `silent_all` — mirror routine traffic silently; no extra monitoring alerts
-- `alerts_only` — do not mirror routine traffic; only critical handoff/risk delivery remains
-- `off` — disable routine monitoring; critical human handoff is still never disabled
+- `all_alerts` — mirror routine traffic silently; keep handoff/risk alerts
+- `silent_all` — mirror routine traffic silently without routine alerts
+- `alerts_only` — no routine mirror; critical handoff/risk only
+- `off` — no routine mirror; active human-control delivery and critical handoff remain enabled
 
-Owner controls:
+Owner can manage these from the `/staff` inline control panel or legacy `/staff monitoring ...` commands.
 
-- `/staff monitoring`
-- `/staff monitoring all_alerts`
-- `/staff monitoring silent_all`
-- `/staff monitoring alerts_only`
-- `/staff monitoring off`
+## Staff Inbox topic isolation
+The Staff Inbox should be a private Telegram supergroup with Topics enabled and the bot allowed to manage topics.
 
-The `/staff monitoring` menu also exposes inline buttons for the four modes.
+Canonical mapping:
 
-## Staff Inbox topics
-When a Staff Inbox supergroup is configured, the Worker attempts to create one forum topic per Telegram user using `createForumTopic`.
+`(telegram_user_id, staff_chat_id) -> message_thread_id`
 
-The D1 `monitoring_topics` table maps:
+Each Telegram user therefore gets a separate forum topic. Topic titles carry the user's current identity:
 
-- user Telegram ID
-- Staff Inbox chat ID
-- Telegram `message_thread_id`
+`Name · @username · ID 123456789`
 
-If forum-topic creation is unavailable, routine mirror delivery falls back to the Staff Inbox main chat rather than blocking the user-facing bot.
+Routine message headers are self-describing:
+
+- `USER · Name (@username) · ID 123456789`
+- `BOT · FAQ`
+- `AI · provider/model`
+- `USER · Name (@username) · ID 123456789 · Human control`
+
+The immutable numeric Telegram ID remains the authority key even if a username or display name changes.
+
+## Concurrent first-message provisioning
+Migration `0008_monitoring_topic_provision_lock.sql` adds `monitoring_topic_provision_locks`.
+
+`src/monitoring_target.ts` is the shared topic provisioner for normal monitoring, handoff, and human-control traffic.
+
+For a user's first concurrent messages:
+1. check the canonical `monitoring_topics` mapping
+2. atomically claim `(telegram_user_id, staff_chat_id)` provisioning in D1
+3. only the claimant may call Telegram `createForumTopic`
+4. concurrent requests wait briefly for the canonical mapping instead of creating a duplicate
+5. abandoned locks older than 30 seconds are recoverable
+6. the lock is released after success or failure
+
+**Fail-closed rule:** if an isolated topic cannot be established, monitoring/handoff traffic is not dumped into the Staff Inbox main chat. User-facing FAQ/AI service may continue, but staff-side user conversations must not be mixed.
 
 ## Routine mirror
-For `all_alerts` and `silent_all`:
+For `all_alerts` and `silent_all`, incoming USER and outgoing BOT/AI messages are mirrored into that user's topic with `disable_notification=true` where appropriate.
 
-1. incoming user text is mirrored to the Staff Inbox with `disable_notification=true`
-2. deterministic FAQ responses are mirrored with `disable_notification=true`
-3. later grounded AI responses will use the same mirror path
-4. mirror messages include `Take Over`
-
-Routine mirrors are observational only. Staff does not need to claim a conversation merely to read it.
+Routine mirror cards expose `Take Over`.
 
 ## Human Take Over
-`Take Over` is conversation-level control, not only a case-level action.
+Conversation control is keyed by Telegram user ID in `conversation_control`.
 
-D1 table: `conversation_control`.
+Take Over is atomic. Only the first authorized staff member wins; other staff cannot simultaneously control the same user.
 
-Atomic transition:
-
-```sql
-UPDATE conversation_control
-SET mode='human', claimed_by=?2, claimed_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP
-WHERE telegram_user_id=?1 AND mode='ai';
-```
-
-Only the first authorized staff member wins. Later staff cannot take simultaneous control.
-
-When takeover succeeds:
-
+While human control is active:
 - automated FAQ/AI answering for that user stops
-- the user is told a School of Nursing staff member is handling the conversation
-- the claimant can answer from the monitoring topic
-- replies are relayed as `School of Nursing Staff`
-- claimant identity stays hidden from the user
-- `Return to AI` becomes available
+- the user's new messages stay inside that user's monitoring topic
+- staff replies are relayed anonymously as `School of Nursing Staff`
+- human-control delivery remains available even if routine monitoring is `alerts_only` or `off`
 
-Human-control traffic has higher priority than monitoring-notification preferences. Even if routine monitoring is `alerts_only` or `off`, messages required for an already active human takeover must remain deliverable to the claimant.
+## Latest Return to AI control
+Migration `0007_latest_control_message.sql` adds `monitoring_topics.latest_control_message_id`.
 
-## Return to AI
-Only the current claimant or Bot Owner can return a human-controlled conversation to automation.
+While human control is active:
+- the newest mirrored USER message carries `Return to AI`
+- when another USER message arrives, the new message is sent first
+- only after that succeeds is the old inline keyboard removed
+- the latest message ID becomes the new control pointer
+- returning to AI or `/reset` clears the latest button
 
-The transition clears `claimed_by` and `claimed_at` and restores `mode='ai'`.
+This keeps the control at the bottom of a long staff conversation without leaving duplicate buttons on older messages.
 
-The user receives a short notice that the automated assistant is active again.
+## AI generation race guard
+Migration `0006_conversation_control_version.sql` adds `conversation_control.control_version`.
+
+Take Over, Return to AI, and `/reset` increment the version. Grounded AI captures mode/version before provider work and re-checks before sending a reply. An in-flight answer is discarded if conversation control changed while the model was running.
 
 ## Handoff integration
-Critical handoff is independent of routine monitoring settings.
+Group-route escalation cards are delivered inside the same isolated per-user topic. Dedicated-route escalation remains a private staff-chat path.
 
-If deterministic FAQ and later grounded Primary/Fallback AI cannot answer safely:
+Critical handoff remains independent of routine monitoring mode.
 
-- create an escalation case
-- route it through configured group/dedicated/auto handoff
-- alert staff normally
-- `Take Over` on a case also moves that user's conversation into human-control mode
-
-Monitoring `off` must never silently discard a required human escalation.
-
-## Migration
-`migrations/0004_shadow_monitoring.sql` adds:
-
-- `conversation_control`
-- `monitoring_topics`
-- conversation-control mode index
-
-The existing `bot_settings` table from migration 0003 stores the monitoring mode.
-
-## Current boundary
-The monitoring control plane is implemented before grounded AI inference orchestration.
-
-Current mirrored automated replies are deterministic FAQ responses. Once grounded AI runtime is wired, its user-facing answer must pass through the same mirror function and expose the same Take Over control.
+## Relevant migrations
+- `0004_shadow_monitoring.sql` — `conversation_control`, `monitoring_topics`
+- `0006_conversation_control_version.sql` — stale-AI generation guard
+- `0007_latest_control_message.sql` — latest Return-to-AI pointer
+- `0008_monitoring_topic_provision_lock.sql` — same-user first-topic race guard
