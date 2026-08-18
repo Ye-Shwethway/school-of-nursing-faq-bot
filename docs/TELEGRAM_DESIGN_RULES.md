@@ -60,18 +60,20 @@ Order: `မြန်မာ` · `English` · `简体中文`.
 - Staff Inbox forwarding, topic mirroring, or notification failure must not suppress the user-facing handoff acknowledgement once the escalation path has been accepted.
 
 ### AI outage and human fallback continuity
+- FAQ and Human Staff response are the primary continuity paths. AI is supplementary assistance and may be unavailable, especially under free-tier/provider limits.
 - AI infrastructure/configuration failure must **never reduce the bot to FAQ-only mode**.
 - Deterministic FAQ matching remains available independently of AI provider health.
 - If a meaningful question does not match FAQ and AI is unavailable, the normal human-handoff path remains active.
 - Never expose provider/API-key/master-key/runtime error details to the normal user.
 - Operational AI outage details are for Owner/Staff only.
-- Send `🚨 AI service unavailable` to Bot Owner private chat and the configured Staff Inbox when AI infrastructure fails.
+- Send `🚨 AI service unavailable` to Bot Owner private chat and the configured Staff Inbox only on the **healthy → outage** transition.
 - The operational notice must state whether `Human fallback: ACTIVE` or `Human fallback: QUEUED ONLY`.
 - `ACTIVE` means a staff destination is configured and unresolved questions continue routing to staff.
 - `QUEUED ONLY` means the question/case is persisted but no active staff destination is configured; this state needs operator attention.
-- Throttle the same outage reason to at most one alert per 30 minutes. A materially different failure reason may alert immediately.
+- While an outage remains active, send **no additional outage notices**, regardless of outage duration or changes in the underlying provider/config/runtime reason.
 - A valid AI answer **or valid policy handoff decision** means the AI path is responding; intentional knowledge-gap handoff must not be mislabeled as an outage.
-- When an outage marker exists and a later valid AI decision succeeds, clear the marker and emit one `🟢 AI service recovered` operational notice.
+- On the first valid AI decision after an outage, clear the marker and emit one `🟢 AI service recovered` operational notice.
+- After recovery, a later new outage may emit one new outage notice.
 - Outage/recovery alert failure must never block FAQ answering, human handoff, or the user-facing response.
 
 ### Human takeover authority
