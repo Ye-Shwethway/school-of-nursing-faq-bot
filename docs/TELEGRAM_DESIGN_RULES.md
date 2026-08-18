@@ -142,6 +142,8 @@ Two independent protection layers are required.
 
 ## Deployment online notice
 - Production health may emit one `🟢 Bot is Online!` notice per deployed revision to Owner/Sudo recipients.
+- The notice must show the short deployed revision and, when available, a concise `Change:` line taken from the deploy-triggering Git commit subject so operators can see what changed without opening GitHub.
+- Deployment change text is operational metadata only; normalize it to one line and keep it short enough for mobile scanning.
 - A revision must not be considered permanently notified when Telegram delivery fails to every target.
 - If all Telegram deliveries fail, release the revision notice claim so a later successful `/health` request can retry.
 - Delivery-notice failure must never make production health fail.
