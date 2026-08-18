@@ -42,6 +42,16 @@ Use these meanings consistently across privileged/configuration UI:
 ## Language selector
 Recommended order: `မြန်မာ` · `English` · `简体中文`. Persist the choice until `/language` changes it.
 
+## Public FAQ library
+- `/faq` is a public command and must be visible to normal users as well as privileged users.
+- Normal users receive a read-only FAQ library. Never expose Add, Edit, Disable, Restore, inactive entries, internal keys, revision metadata, or other management controls.
+- FAQ list labels should use the user's saved language and show human-readable questions/topics rather than internal slugs.
+- Paginate long FAQ lists instead of dumping every FAQ into one tall message. Default to about 6–8 items per page.
+- Use two buttons in a row only when both labels are compact; use one full row for longer labels.
+- FAQ detail view shows only the selected-language approved question and answer for normal users.
+- Owner/Sudo `/faq` remains a management surface and may expose Browse, Add, Inactive, Help, Edit, Disable, and Restore according to authorization.
+- Public and privileged FAQ browsing should share the same clean list/navigation grammar so visual fixes apply globally.
+
 ## Normal FAQ message
 1. concise answer
 2. essential qualifying detail
@@ -82,6 +92,7 @@ Policy-sensitive answers must come from canonical data. Never creatively alter d
 ## Interaction defaults
 - `/start`: welcome + language selector for new users; concise home state for returning users.
 - `/language`: language selector.
+- `/faq`: role-aware FAQ surface — read-only localized library for normal users; management surface for Owner/Sudo.
 - Unknown command: short help path.
 - Free text: log → deterministic FAQ match → grounded fallback → escalation.
 
