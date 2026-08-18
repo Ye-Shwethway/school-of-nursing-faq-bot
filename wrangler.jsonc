@@ -1,7 +1,7 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "school-of-nursing-faq-bot",
-  "main": "src/monitoring_message_entry.ts",
+  "main": "src/latest_return_entry.ts",
   "compatibility_date": "2026-08-18",
   "vars": {
     "APP_ENV": "production"
