@@ -30,16 +30,17 @@ export async function syncUserCommandScope(
   telegramApi: TelegramCommandApi,
   telegramUserId: number,
   ownerIdValue?: string,
-): Promise<void> {
+): Promise<boolean> {
   try {
     const role = await getAdminRole(db, telegramUserId, ownerIdValue);
-    await setCommands(
+    return await setCommands(
       telegramApi,
       commandsForRole(role),
       commandScopeForPrivateChat(telegramUserId),
     );
   } catch {
     // Command-menu sync must never break the bot's primary reply path.
+    return false;
   }
 }
 
@@ -69,7 +70,8 @@ export async function syncCommandRegistryIfNeeded(
       : null;
 
     if (ownerId && Number.isSafeInteger(ownerId)) {
-      await syncUserCommandScope(db, telegramApi, ownerId, ownerIdValue);
+      const ownerOk = await syncUserCommandScope(db, telegramApi, ownerId, ownerIdValue);
+      if (!ownerOk) return;
     }
 
     const admins = await db.prepare(
@@ -78,7 +80,8 @@ export async function syncCommandRegistryIfNeeded(
     ).all<{ telegram_user_id: number }>();
 
     for (const row of admins.results ?? []) {
-      await syncUserCommandScope(db, telegramApi, row.telegram_user_id, ownerIdValue);
+      const adminOk = await syncUserCommandScope(db, telegramApi, row.telegram_user_id, ownerIdValue);
+      if (!adminOk) return;
     }
 
     await db.prepare(
