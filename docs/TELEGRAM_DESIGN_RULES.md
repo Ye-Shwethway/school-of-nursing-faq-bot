@@ -21,12 +21,15 @@ The bot represents a university School of Nursing. Interactions should feel form
 - Use Telegram `typing` while a grounded AI request is in flight.
 - Deterministic FAQ answers remain the fast path.
 
-## Language selector
+## Language selector and FAQ-first onboarding
 Order: `မြန်မာ` · `English` · `简体中文`.
 - Persist until `/language` changes it.
 - Picker is one-shot.
 - Save → delete picker → one localized confirmation.
+- The confirmation must promote `/faq` as the first place to check common questions and explain that free-text inquiry is for questions not covered there.
+- Include one localized `📚 Browse FAQ` inline button that opens the public FAQ list directly.
 - Never silent-close a successful selection.
+- `/start` and `/language` may both open the language picker; after selection they converge on the same FAQ-first confirmation flow rather than encouraging immediate AI/free-text use.
 
 ## Public FAQ library
 - `/faq` is public.
@@ -117,8 +120,8 @@ Two independent protection layers are required.
 Policy-sensitive answers must come from canonical data. Never creatively alter dates, costs, eligibility, accreditation, requirements, scholarship/loan/bond rules, or official contacts.
 
 ## Interaction defaults
-- `/start`: welcome/language path.
-- `/language`: save → remove picker → localized confirmation.
+- `/start`: open the language path; after selection, promote FAQ-first self-service.
+- `/language`: save → remove picker → localized FAQ-first confirmation + direct Browse FAQ button.
 - `/faq`: public read-only library for normal users; management/authoring for Owner/Sudo.
 - `/cases`: Owner/Sudo escalation knowledge inbox.
 - `/limits`: Owner/Sudo rate-limit management; permanent ban/unban Owner-only.
