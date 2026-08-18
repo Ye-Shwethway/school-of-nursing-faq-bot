@@ -7,21 +7,19 @@ import {
   ensureConversationControl,
   getConversationControl,
   getMonitoringMode,
-  getMonitoringTopic,
-  saveMonitoringTopic,
   shouldMirrorRoutine,
 } from "./monitoring";
 import {
   attachStaffMessage,
   createEscalationCase,
   getHandoffDestination,
-  getStaffInboxChatId,
 } from "./handoff";
 import {
   monitoringAiHeader,
   monitoringBotHeader,
   monitoringUserHeader,
 } from "./monitoring_headers";
+import { ensureIsolatedMonitoringTarget } from "./monitoring_target";
 
 interface Env {
   APP_ENV: string;
@@ -124,38 +122,15 @@ async function hasInteractiveSession(db: D1Database, userId: number): Promise<bo
   }
 }
 
-function topicTitle(user: TelegramUser): string {
-  const name = [user.first_name, user.last_name].filter(Boolean).join(" ").trim() || "User";
-  const username = user.username ? ` · @${user.username}` : "";
-  return `${name}${username} · ID ${user.id}`.slice(0, 120);
-}
-
 async function ensureMonitoringTarget(
   env: Env,
   user: TelegramUser,
-): Promise<{ chatId: number; threadId?: number } | null> {
-  if (!env.DB) return null;
-  const staffChatId = await getStaffInboxChatId(env.DB);
-  if (!staffChatId) return null;
-  const existing = await getMonitoringTopic(env.DB, user.id, staffChatId);
-  if (existing) {
-    await telegramApi(env, "editForumTopic", {
-      chat_id: staffChatId,
-      message_thread_id: existing,
-      name: topicTitle(user),
-    });
-    return { chatId: staffChatId, threadId: existing };
-  }
-  const topic = await telegramApi(env, "createForumTopic", {
-    chat_id: staffChatId,
-    name: topicTitle(user),
-  });
-  const threadId = Number(topic?.message_thread_id);
-  if (Number.isSafeInteger(threadId)) {
-    await saveMonitoringTopic(env.DB, user.id, staffChatId, threadId);
-    return { chatId: staffChatId, threadId };
-  }
-  return { chatId: staffChatId };
+): Promise<{ chatId: number; threadId: number } | null> {
+  return ensureIsolatedMonitoringTarget(
+    env,
+    user,
+    (method, body) => telegramApi(env, method, body),
+  );
 }
 
 async function mirrorRoutine(env: Env, user: TelegramUser, header: string, text: string): Promise<void> {
@@ -255,6 +230,23 @@ async function humanHandoff(
     staffChatId: destination?.chatId ?? null,
   });
   if (!caseId || !destination) return;
+
+  if (destination.route === "group") {
+    const target = await ensureMonitoringTarget(env, message.from);
+    if (!target) return;
+    const sent = await sendMessage(
+      env,
+      target.chatId,
+      caseText(caseId, message, language, destination.route, reason),
+      { inline_keyboard: [[{ text: "Take Over", callback_data: `case:claim:${caseId}` }]] },
+      { messageThreadId: target.threadId },
+    );
+    if (sent?.message_id) {
+      await attachStaffMessage(env.DB, caseId, target.chatId, Number(sent.message_id));
+    }
+    return;
+  }
+
   const sent = await sendMessage(
     env,
     destination.chatId,
