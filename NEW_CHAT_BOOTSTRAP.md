@@ -39,8 +39,8 @@ Wrangler entrypoint:
 `src/manual_entry.ts`
 
 Layer order:
-1. `manual_entry.ts` — `/ownermanual`, `/adminmanual`, Owner edit/preview/save/discard
-2. `deployment_notice_entry.ts` — revision-aware `🟢 Bot is Online!` notification after successful health request
+1. `manual_entry.ts` — `/ownermanual`, `/adminmanual`, Owner edit/preview/save/discard; also runs command-registry sync before manual interception
+2. `deployment_notice_entry.ts` — deploy-health command sync plus revision-aware `🟢 Bot is Online!` notification
 3. `latest_return_entry.ts` — newest-message Return to AI control during human takeover
 4. `monitoring_message_entry.ts` — user/model-aware staff mirror headers and isolated group handoff
 5. `staff_ux_entry.ts` — group-native `/staff` inline control panel and topic identity updates
@@ -74,7 +74,17 @@ Owner also inherits `/adminmanual` from the Admin command set.
 
 `/language` remains supported but hidden.
 
-Command menus are synced by Worker `setMyCommands`; authorization is still enforced server-side by immutable Telegram numeric ID.
+Authorization is enforced server-side by immutable Telegram numeric ID.
+
+### Command menu synchronization contract
+Role-scoped command menus use Telegram `setMyCommands` and `COMMAND_SCHEMA_VERSION`.
+
+Important current rule:
+- deploy health success runs `syncCommandRegistryIfNeeded` before the online notice, so command additions should appear immediately after a successful deployment without requiring `/start`
+- the outer `manual_entry.ts` also runs registry sync before intercepting `/ownermanual`, `/adminmanual`, or manual callbacks
+- the lower `runtime_entry.ts` still keeps its normal webhook sync as a compatibility/self-heal path
+
+This fixes the earlier gap where an outer runtime layer could consume a new command before the lower command-sync layer saw the update.
 
 ## Editable Owner/Admin manuals — migration 0009
 Migration:
@@ -243,6 +253,7 @@ Pipeline:
 7. remote D1 migrations
 8. deploy TEST with `DEPLOY_REVISION=${GITHUB_SHA}`
 9. verify `/health`
+10. health path refreshes Telegram command menus and then sends the revision online notice
 
 Required GitHub Actions repository secrets:
 - `CLOUDFLARE_API_TOKEN`
@@ -254,9 +265,10 @@ Telegram runtime secrets remain Cloudflare Worker secrets and must not be copied
 `src/deployment_notice_entry.ts` handles deployment visibility.
 
 After a successful `/health` request for a new `DEPLOY_REVISION`:
+- refresh current role-scoped Telegram command menus
 - send `🟢 Bot is Online!` to Bot Owner
 - also send to current Sudo Admins
-- include environment + short revision + PASS status
+- include environment + short revision + PASS status + command-menu sync status text
 - use D1 revision marker so repeated health checks for the same deployment do not spam notifications
 
 ## Current migrations
@@ -272,19 +284,20 @@ After a successful `/health` request for a new `DEPLOY_REVISION`:
 
 ## Current live validation focus
 Before `main` promotion validate on TEST when practical:
-1. `/ownermanual` appears for Owner, renders all Owner sections, and rejects non-Owner access
-2. `/adminmanual` renders for Owner/Sudo Admin; Sudo Admin is read-only
-3. Owner manual edit preview/save/discard works and `/cancel` abandons pending edit
-4. editing manuals does not change FAQ/AI knowledge behavior
-5. two or more different users can ask simultaneously and remain in separate topics
-6. same user can send two near-simultaneous first messages without duplicate topics
-7. no monitoring/handoff fallback mixes users in the main Staff Inbox chat
-8. group handoff card stays inside the correct user's topic
-9. Take Over affects only that user
-10. latest-message Return to AI button moves correctly
-11. stale in-flight AI answer is suppressed after Take Over/reset
-12. online notification arrives once per deployed revision to Owner/Sudo Admins
-13. runtime secrets/config remain intact after automated deploy
+1. after a deploy containing command changes, Owner/Admin command lists update without requiring `/start`
+2. `/ownermanual` appears for Owner, renders all Owner sections, and rejects non-Owner access
+3. `/adminmanual` renders for Owner/Sudo Admin; Sudo Admin is read-only
+4. Owner manual edit preview/save/discard works and `/cancel` abandons pending edit
+5. editing manuals does not change FAQ/AI knowledge behavior
+6. two or more different users can ask simultaneously and remain in separate topics
+7. same user can send two near-simultaneous first messages without duplicate topics
+8. no monitoring/handoff fallback mixes users in the main Staff Inbox chat
+9. group handoff card stays inside the correct user's topic
+10. Take Over affects only that user
+11. latest-message Return to AI button moves correctly
+12. stale in-flight AI answer is suppressed after Take Over/reset
+13. online notification arrives once per deployed revision to Owner/Sudo Admins
+14. runtime secrets/config remain intact after automated deploy
 
 Do not merge `main` until the chosen TEST checks are green.
 
