@@ -11,166 +11,83 @@ Production Telegram FAQ assistant for a university School of Nursing in Burmese,
 - no direct implementation on `main`
 - promote only after TEST behavior is green
 
-## Locked architecture
-- Telegram webhook on Cloudflare Workers + D1
-- normal users: `/start`, `/whoami`
-- role-scoped command menus synced automatically with Telegram `setMyCommands`
-- command-menu schema changes synchronize during deploy health and before outer manual interception
-- immutable Telegram numeric IDs for authority
-- dynamic D1 FAQ knowledge + revisions
-- deterministic FAQ -> grounded Primary AI -> grounded Fallback AI -> Human Handoff
-- AI/config failures fail closed to human review
-- Owner/Sudo Admin management, separate staff responder allow-list
-- Staff Inbox group with per-user forum topics or dedicated private responder
-- anonymous staff relay
-- atomic Take Over / Return to AI
-- editable Owner/Admin operating manuals stored separately from FAQ knowledge
-- public repo; no plaintext runtime credentials
+## Current foundation
+Status: FUNCTIONAL ON `test`
 
-## Foundation through live TEST
-Status: COMPLETE / FUNCTIONAL ON `test`
-
-Verified live capabilities include:
-- 22 multilingual FAQ seeds
-- Owner/Sudo roles, identity display, `/whoami`
-- encrypted configurable AI providers/models
-- Gemini grounded answer path
-- dynamic FAQ CRUD
-- Staff Inbox binding and group routing
-- shadow monitoring
-- human Take Over / Return to AI
+Implemented:
+- 22 multilingual FAQ seeds + dynamic FAQ CRUD/revisions
+- Owner/Sudo role management and role-scoped Telegram commands
+- configurable encrypted AI providers/models with Primary/Fallback
+- grounded AI + human handoff
+- Staff Inbox group binding, per-user forum topics, monitoring
+- Take Over / Return to AI and stale-AI suppression
 - direct GitHub Actions -> Cloudflare TEST deployment
+- deployment-online notification to Owner/Sudo Admins
+- editable Owner/Admin operating manuals separate from FAQ knowledge
 
 `main` and production remain unpromoted.
 
-## Current canonical Worker stack
-Wrangler enters:
+## Canonical Worker stack
+Wrangler enters `src/manual_entry.ts`.
 
-`src/manual_entry.ts`
-
-Layer order:
-1. `manual_entry.ts` — editable Owner/Admin manuals; command registry sync before manual interception
-2. `deployment_notice_entry.ts` — deploy-health command sync and revision-aware online notification
-3. `latest_return_entry.ts` — latest-message Return to AI control during human takeover
-4. `monitoring_message_entry.ts` — user/model-aware staff mirror headers and isolated inquiry/handoff presentation
-5. `staff_ux_entry.ts` — group-native `/staff` inline control panel and topic identity polish
-6. `ux_entry.ts` — typing indicator, reply-to, Close/Back, `/cancel`, `/reset`, stale-AI guard
-7. `secure_entry.ts` — secret/setup routing guard
-8. `runtime_entry.ts` — dynamic FAQ / AI / command integration and lower compatibility command self-heal
-9. `index.ts` — retained fallback / compatibility runtime
-
-Do not bypass or independently reconstruct this stack.
+1. manual pager/edit + command sync
+2. deployment online notice
+3. latest Return-to-AI control
+4. monitoring message presentation / isolated handoff
+5. Staff Inbox UX
+6. Telegram UX polish
+7. secure AI setup interception
+8. dynamic FAQ/AI runtime
+9. compatibility fallback
 
 ## Command menu sync hardening
-Status: IMPLEMENTED ON `test`; LIVE CONFIRMATION PENDING
+Status: IMPLEMENTED; LIVE CONFIRMATION PENDING
 
-Earlier gap: new commands could be present in `command_menu.ts` but an outer runtime layer could intercept the new command before the lower `runtime_entry.ts` command-sync routine ran.
+New command schemas are synchronized during successful deploy health before the online notice. The outer manual layer also runs sync before intercepting manual commands, while the lower runtime keeps self-heal behavior.
 
-Current rule:
-- successful deploy `/health` runs `syncCommandRegistryIfNeeded` before the online notice
-- `manual_entry.ts` also runs registry sync before consuming manual commands/callbacks
-- `runtime_entry.ts` retains its normal webhook self-heal
-
-Expected result: after a successful deployment that changes `COMMAND_SCHEMA_VERSION`, Owner and Sudo Admin command lists refresh without requiring `/start` or another unrelated command.
+Expected result: command additions appear after deploy without requiring `/start`.
 
 ## Editable operating manuals
-Status: IMPLEMENTED ON `test`; LIVE TEST PENDING
+Status: IMPLEMENTED; PAGER POLISH IMPLEMENTED; LIVE TEST PENDING
 
 Commands:
 - `/ownermanual` — Owner read/edit
-- `/adminmanual` — Owner read/edit; Sudo Admin read-only
+- `/adminmanual` — Owner read/edit, Sudo Admin read-only
 
-Manual content is written for ordinary operators, not developers. It explains:
-- Bot / AI / Human Staff layers
-- normal question path
-- role-specific commands
-- FAQ maintenance
-- AI setup/primary/fallback behavior
-- Staff Inbox, monitoring, Take Over, Return to AI
-- deployment-online notices
-- authority and safety boundaries
+Manuals explain Bot / AI / Human Staff layers, normal question flow, role commands, FAQ/AI management, Staff Inbox/monitoring, Take Over/Return to AI, deployment notices, and authority boundaries in plain operational language.
 
-Migration 0009 adds:
-- `manual_sections`
-- `manual_revisions`
+### Single-message pager
+Manual browsing now uses one Telegram message instead of one message per section.
+
+Controls:
+- Previous
+- page indicator
+- Next
+- Owner-only Edit this section
+- Close
+
+Navigation edits the same message with `editMessageText`, preventing chat clutter.
 
 Owner edit workflow:
-`Open manual -> Edit a section -> choose section -> send replacement text -> Preview -> Save/Discard`
+`Open -> navigate -> Edit this section -> replacement text -> Preview -> Save/Discard`
 
-`/cancel` aborts a pending manual edit. Each saved change increments section version and archives the previous text.
+### Line-break correction
+Migration 0010 normalizes legacy literal `\\n` seed sequences to real line breaks. `manual_store.ts` also normalizes on read/save for backward compatibility.
 
-Manual storage is isolated from FAQ storage and must never affect deterministic FAQ matching or AI grounding.
+Manual storage remains isolated from FAQ matching and AI grounding.
 
-See `docs/OPERATOR_MANUALS.md`.
+## Multiuser / Staff Inbox isolation
+Different Telegram users remain independent across profile/language, question logs, conversation mode, claimant, topic, and AI/human lifecycle.
 
-## Telegram UX polish
-Implemented on `test`:
-- native `typing` refresh during AI generation
-- AI/handoff replies attach to original user question
-- `✕ Close`, edit-in-place navigation, consistent Back/Cancel semantics
-- `/cancel` = current wizard/setup only
-- `/reset` = transient conversation/session reset only; persistent FAQ/AI/admin settings preserved
-- Owner command menu includes `/cancel` and `/reset`
-- `/staff` inside the group opens an inline control panel
-- Staff Inbox can be bound from the current group without copying a group ID
-- role-scoped command menu includes `/adminmanual` for Sudo Admins and both manuals for Owner
+Migration 0008 prevents same-user concurrent first-message duplicate topic creation with a D1 provisioning lock. Staff-side delivery fails closed if an isolated topic cannot be established; it must not mix users in the main Staff Inbox chat.
 
-## Staff monitoring presentation
-Each user has a separate Staff Inbox forum topic.
+## Take Over controls
+Migration 0006: conversation control version prevents stale AI output after Take Over, Return to AI, or reset.
 
-Topic title:
-`Name · @username · ID 123456789`
-
-Mirror headers:
-- `USER · Name (@username) · ID 123456789`
-- `BOT · FAQ`
-- `AI · provider/model`
-- human-control USER header includes `Human control`
-
-## Conversation and concurrency hardening
-Migration 0006 — `conversation_control.control_version`
-- Take Over / Return to AI / `/reset` increment version
-- in-flight AI output is discarded after control changes
-
-Migration 0007 — `monitoring_topics.latest_control_message_id`
-- only the newest human-control USER message carries `Return to AI`
-- new USER message moves the button down and removes the older button
-
-Migration 0008 — `monitoring_topic_provision_locks`
-- same-user concurrent first messages cannot independently create duplicate forum topics
-- one request provisions; competitors wait for the canonical mapping
-- stale locks recover after 30 seconds
-- monitoring/group-handoff delivery fails closed if an isolated topic cannot be established
-- no fallback that mixes users into the Staff Inbox main chat
-
-## Multiuser contract
-Different Telegram users are independent across:
-- language/user profile
-- question logs
-- conversation control
-- AI/human takeover state
-- monitoring topic
-- human claimant
-
-Group monitoring and group handoff are isolated by `(telegram_user_id, staff_chat_id) -> message_thread_id`.
-
-A Take Over for User A must not pause User B or User C.
+Migration 0007: only the newest human-control USER message carries Return to AI; newer user traffic moves the button down and removes it from the older message.
 
 ## Deployment visibility
-GitHub workflow `.github/workflows/deploy-test.yml` automatically runs on deploy-relevant pushes to `test` and remains manually dispatchable.
-
-Pipeline:
-1. install dependencies
-2. strict typecheck
-3. local D1 migration validation
-4. Wrangler dry run
-5. remote D1 migrations
-6. deploy TEST Worker with `DEPLOY_REVISION=${GITHUB_SHA}`
-7. verify `/health`
-8. health path refreshes role-scoped Telegram command menus
-9. new revision sends `🟢 Bot is Online!` once to Owner + current Sudo Admins
-
-Duplicate health checks for the same revision do not resend the online notice.
+`.github/workflows/deploy-test.yml` validates, applies migrations, deploys TEST, checks health, refreshes command menus, then sends one `🟢 Bot is Online!` notice per revision to Owner + current Sudo Admins.
 
 ## Current migrations
 - 0001 initial
@@ -181,24 +98,25 @@ Duplicate health checks for the same revision do not resend the online notice.
 - 0006 conversation control version
 - 0007 latest control message
 - 0008 monitoring topic provision lock
-- 0009 editable operating manuals
+- 0009 editable manuals
+- 0010 manual line-break cleanup
 
 ## Current validation focus
-Before `main` promotion, keep testing bounded to live behavior:
-- command additions appear after successful deploy without requiring `/start`
-- Owner `/ownermanual` renders and edit Preview/Save/Discard works
-- Sudo Admin `/adminmanual` renders read-only
-- manual edits do not alter FAQ/AI knowledge behavior
-- multiple simultaneous users create/use distinct topics
-- same user sends two near-simultaneous first messages without duplicate topics
-- group handoff card remains inside the correct user topic
-- Take Over only affects that user
-- latest-message Return to AI button moves correctly
-- online deployment notification reaches Owner/Sudo Admins once per revision
-- no secrets/config regression after automated deployment
+Before `main` promotion:
+- command additions appear after deploy without `/start`
+- `/ownermanual` is a single-message pager
+- `/adminmanual` pager is read-only for Sudo Admin
+- blank lines render correctly with no literal `\\n`
+- Previous/Next reuse the same Telegram message
+- Owner manual edit Preview/Save/Discard works
+- manual edits do not alter FAQ/AI knowledge
+- multiple users remain in distinct topics
+- same-user near-simultaneous first messages do not duplicate topics
+- Take Over only affects one user and latest Return-to-AI control moves correctly
+- online notice arrives once per revision
 
 ## Later slice
 After live-green operational validation:
 - latency / route telemetry without secrets
 - provider/model performance comparison
-- answer presentation polish only where live UX shows a real need
+- answer-presentation polish only where live UX shows a real need
