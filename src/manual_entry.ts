@@ -110,6 +110,10 @@ function pagerKeyboard(key: ManualKey, index: number, total: number, canEdit: bo
   if (index < total - 1) nav.push({ text: "Next ▶", callback_data: `manual:page:${key}:${index + 1}` });
 
   const rows: InlineKeyboard["inline_keyboard"] = [nav];
+  const jumps: Array<{ text: string; callback_data: string }> = [];
+  if (index > 0) jumps.push({ text: "⏮ First", callback_data: `manual:page:${key}:0` });
+  if (index < total - 1) jumps.push({ text: "⏭ Last", callback_data: `manual:page:${key}:${total - 1}` });
+  if (jumps.length) rows.push(jumps);
   if (canEdit) {
     rows.push([{ text: "✎ Edit this section", callback_data: `manual:editpage:${key}:${index}` }]);
     rows.push([{ text: "＋ Add new section", callback_data: `manual:add:${key}` }]);
