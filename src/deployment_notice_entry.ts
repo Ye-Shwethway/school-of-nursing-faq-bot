@@ -1,4 +1,5 @@
 import app from "./latest_return_entry";
+import { syncCommandRegistryIfNeeded } from "./command_sync";
 
 interface Env {
   APP_ENV: string;
@@ -28,6 +29,16 @@ async function telegramApi(env: Env, method: string, body: unknown): Promise<any
     return payload?.result ?? null;
   } catch {
     return null;
+  }
+}
+
+async function syncDeploymentCommandMenus(env: Env): Promise<void> {
+  if (!env.DB || !env.TELEGRAM_BOT_TOKEN) return;
+  const api = (method: string, body: unknown) => telegramApi(env, method, body);
+  try {
+    await syncCommandRegistryIfNeeded(env.DB, api, env.BOT_OWNER_TELEGRAM_ID);
+  } catch {
+    // Command menu refresh is best-effort and must not make health fail.
   }
 }
 
@@ -78,8 +89,9 @@ async function notifyDeploymentOnline(env: Env): Promise<void> {
     `Environment: ${env.APP_ENV || "unknown"}`,
     `Revision: ${shortRevision}`,
     "Health check: PASS",
+    "Command menus: synced",
     "",
-    "Telegram webhook, FAQ, AI, staff handoff, and monitoring runtime are ready.",
+    "Telegram webhook, FAQ, AI, staff handoff, monitoring, and manuals are ready.",
   ].join("\n");
 
   const targets = await notificationTargets(env);
@@ -87,7 +99,6 @@ async function notifyDeploymentOnline(env: Env): Promise<void> {
     targets.map((chatId) => telegramApi(env, "sendMessage", { chat_id: chatId, text })),
   );
 
-  // Keep only the latest deployment marker so bot_settings does not grow forever.
   try {
     await env.DB.prepare(
       `DELETE FROM bot_settings
@@ -103,6 +114,7 @@ export default {
     const url = new URL(request.url);
     const response = await app.fetch(request, env);
     if (request.method === "GET" && url.pathname === "/health" && response.ok) {
+      await syncDeploymentCommandMenus(env);
       await notifyDeploymentOnline(env);
     }
     return response;
