@@ -20,6 +20,7 @@ import {
   monitoringUserHeader,
 } from "./monitoring_headers";
 import { ensureIsolatedMonitoringTarget } from "./monitoring_target";
+import { countAvailableStaff, staffNotificationsEnabled } from "./staff_presence";
 
 interface Env {
   APP_ENV: string;
@@ -50,6 +51,12 @@ const HANDOFF_COPY: Record<Language, string> = {
   my: "ဒီမေးခွန်းကို အတည်ပြုထားသော အချက်အလက်များဖြင့် ယုံကြည်စိတ်ချစွာ မဖြေနိုင်သေးပါ။ မေးခွန်းကို School of Nursing ဝန်ထမ်းများ ပြန်လည်စစ်ဆေးနိုင်ရန် လွှဲပို့ထားပါသည်။",
   en: "I cannot answer this confidently from the approved information. Your question has been forwarded to authorized School of Nursing staff for review.",
   zh: "目前无法根据已批准的信息可靠回答此问题。您的问题已转交给护理学院授权工作人员进一步核查。",
+};
+
+const STAFF_UNAVAILABLE_COPY: Record<Language, string> = {
+  my: "ဒီမေးခွန်းကို လက်ရှိအတည်ပြုထားသော FAQ သို့မဟုတ် AI ဖြင့် ယုံကြည်စိတ်ချစွာ မဖြေနိုင်သေးပါ။ လောလောဆယ် School of Nursing ဝန်ထမ်းများလည်း မအားသေးပါ။ မေးခွန်းကို မှတ်တမ်းတင်ထားပြီးဖြစ်သောကြောင့် နောက်မှ ပြန်လည်ကြိုးစားပါ။ ဝန်ထမ်းတစ်ဦး ပြန်လည်ကြည့်ရှုပြီး ဆက်သွယ်နိုင်ပါသည်။",
+  en: "I cannot answer this confidently from the approved FAQ or AI right now, and no School of Nursing staff are currently available. Your question has been kept for review. Please try again later; a staff member may also follow up when available.",
+  zh: "目前无法根据已批准的 FAQ 或 AI 可靠回答此问题，护理学院工作人员当前也暂时无法在线处理。您的问题已保留待审核，请稍后再试；工作人员恢复在线后也可能主动回复您。",
 };
 
 function json(body: unknown, status = 200) {
@@ -152,12 +159,13 @@ async function relayHumanControl(env: Env, message: TelegramMessage): Promise<bo
   if (!env.DB || !message.from || !message.text) return false;
   const target = await ensureMonitoringTarget(env, message.from);
   if (!target) return false;
+  const notificationsOn = await staffNotificationsEnabled(env.DB);
   await sendMessage(
     env,
     target.chatId,
     `${monitoringUserHeader(message.from)} · Human control\n${message.text}`,
     undefined,
-    { messageThreadId: target.threadId },
+    { disableNotification: !notificationsOn, messageThreadId: target.threadId },
   );
   return true;
 }
@@ -231,6 +239,8 @@ async function humanHandoff(
   });
   if (!caseId || !destination) return;
 
+  const notificationsOn = await staffNotificationsEnabled(env.DB);
+
   if (destination.route === "group") {
     const target = await ensureMonitoringTarget(env, message.from);
     if (!target) return;
@@ -239,7 +249,7 @@ async function humanHandoff(
       target.chatId,
       caseText(caseId, message, language, destination.route, reason),
       { inline_keyboard: [[{ text: "Take Over", callback_data: `case:claim:${caseId}` }]] },
-      { messageThreadId: target.threadId },
+      { disableNotification: !notificationsOn, messageThreadId: target.threadId },
     );
     if (sent?.message_id) {
       await attachStaffMessage(env.DB, caseId, target.chatId, Number(sent.message_id));
@@ -305,8 +315,11 @@ async function handleInquiry(env: Env, message: TelegramMessage): Promise<boolea
 
     const questionId = await logQuestion(env.DB, message, language, "pending", null, "human_handoff");
     await humanHandoff(env, message, language, questionId, ai.reason || "AI could not answer safely");
-    await sendMessage(env, message.chat.id, HANDOFF_COPY[language], undefined, { replyToMessageId: message.message_id });
-    await mirrorRoutine(env, message.from, monitoringBotHeader("handoff"), HANDOFF_COPY[language]);
+
+    const availableStaff = await countAvailableStaff(env.DB);
+    const handoffCopy = availableStaff > 0 ? HANDOFF_COPY[language] : STAFF_UNAVAILABLE_COPY[language];
+    await sendMessage(env, message.chat.id, handoffCopy, undefined, { replyToMessageId: message.message_id });
+    await mirrorRoutine(env, message.from, monitoringBotHeader("handoff"), handoffCopy);
     return true;
   } finally {
     stopTyping();
