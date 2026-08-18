@@ -11,90 +11,68 @@ Production Telegram FAQ assistant for a university School of Nursing in Burmese,
 - relevant main pushes run the production workflow.
 
 ## Current checkpoint
-Live-accepted foundations include FAQ-first onboarding, Telegram webhook cutover, AI credential setup, Owner takeover override, reboot `Change:` metadata, and the previously deployed staff-availability private/group UX.
-
-Newest `main` slice adds:
-1. **automatic staff availability transition notices to both staff private chat and Staff Inbox**
-2. **explicit cancellation for temporary-unavailable timers and recurring schedules**
-
-Do not call this newest slice live-accepted until production workflow + Telegram validation is complete.
+Newest `main` slice corrects staff availability semantics so a recurring daily schedule is **durable** and plain `/available` or `/unavailable` only overrides the current schedule interval. Production/live acceptance is still required for this newest slice.
 
 ## Staff availability contract
 Timezone: **Asia/Yangon / UTC+06:30**.
 
 Supported syntax:
-- `/available` — immediately available; clears recurring schedule
-- `/unavailable` — unavailable indefinitely
-- `/unavailable 3` — temporary unavailable for 3 hours; positive fractional hours up to 168 are allowed
-- `/available 09:00 17:00` — recurring daily schedule
-- `/available 9am 5pm` — alias
-- `/available 20:00 08:00` — overnight schedule
-- `/unavailable cancel` or `/unavailable clear` — cancel active temporary timer; recurring schedule resumes if configured, otherwise staff becomes available
-- `/available cancel` or `/available clear` — remove recurring daily schedule and preserve the effective state at cancellation time as the new manual state
+- `/available 09:00 17:00` or `/available 9am 5pm` — create/update recurring daily schedule
+- `/available` — if a recurring schedule exists, immediately force AVAILABLE only until the next schedule start/end boundary; otherwise set manual AVAILABLE indefinitely
+- `/unavailable` — if a recurring schedule exists, immediately force UNAVAILABLE only until the next schedule start/end boundary; otherwise set manual UNAVAILABLE indefinitely
+- `/unavailable 3` — temporary unavailable timer for 3 hours; recurring schedule remains stored and resumes after timer expiry
+- `/unavailable cancel` or `/unavailable clear` — cancel active temporary timer
+- `/available cancel` or `/available clear` — explicitly remove the recurring daily schedule and preserve current effective state as manual state
 
-`/available` and `/unavailable` may be used in the active Staff Inbox or authorized staff private bot chat. Private use requires an active Staff Inbox and every successful private mutation is mirrored once to the group root. `/noti` remains Staff-Inbox-only.
+Plain availability commands must never silently delete a recurring schedule. Only explicit `/available cancel|clear` removes it.
 
-## Effective-state precedence
-1. active temporary unavailable timer overrides recurring schedule
-2. timer expiry with a schedule resumes schedule-derived state
-3. timer expiry without a schedule returns staff to available
-4. recurring schedule is daily Yangon-time state and supports overnight windows
-5. staff counts evaluate timer/schedule state directly
-6. staff topic reply may clear a temporary timer but preserves recurring schedule
+## Schedule-aware manual override
+Migration `0034_staff_manual_schedule_override.sql` adds `manual_override_until` to `staff_presence`.
 
-## Automatic transition declaration
-Existing Cloudflare Cron remains `*/5 * * * *`.
+When a recurring schedule exists:
+1. plain `/available` or `/unavailable` calculates the next Yangon-time schedule boundary (start or end)
+2. the requested state becomes immediately effective
+3. the recurring schedule remains persisted unchanged
+4. `manual_override_until` stores the next boundary
+5. at that boundary the override expires and schedule-derived state becomes authoritative again
 
-`src/staff_presence.ts` returns transitions only when effective availability actually changes:
-- `timer_expired`
-- `schedule_started`
-- `schedule_ended`
+The existing 5-minute Cron materializes override expiry. If expiry causes an actual AVAILABLE↔UNAVAILABLE change, both affected staff private chat and Staff Inbox receive the existing automatic state-change declaration. If schedule state equals the override state at the boundary, no misleading duplicate state notification is sent.
 
-`src/interaction_guard_entry.ts` sends each transition to:
-- affected staff private bot chat
-- active Staff Inbox group root
+## Private + Staff Inbox contract
+`/available` and `/unavailable` may be used in the active Staff Inbox or authorized staff private bot chat. Private use requires an active Staff Inbox and successful private mutations are mirrored once to group root. `/noti` remains Staff-Inbox-only.
 
-Notice includes resulting AVAILABLE/UNAVAILABLE state, transition reason, Asia/Yangon timezone, and available-staff count.
+## Existing availability behavior retained
+- recurring schedules support 24-hour, am/pm, minute resolution and overnight windows
+- `/unavailable <hours>` supports positive fractional hours up to 168
+- automatic timer/schedule state transitions are declared in staff private chat + Staff Inbox when effective state actually changes
+- staff counts use effective timer/schedule/override state directly
 
-If a timer expires but a recurring schedule means the effective state remains unchanged, no misleading transition notice is sent. Persisted state prevents duplicate notices on later Cron sweeps. Practical transition latency is 0–5 minutes.
+## Migrations
+Current range: `0001` through `0034`.
 
-## Staff availability migrations
-- `0031_staff_availability_schedule.sql` — timer/schedule persistence
-- `0032_private_staff_availability_commands.sql` — private invocation + group mirror/manuals
-- `0033_staff_availability_auto_notice_cancel.sql` — automatic-transition and cancel/clear manual guidance
+Latest availability migrations:
+- `0031_staff_availability_schedule.sql`
+- `0032_private_staff_availability_commands.sql`
+- `0033_staff_availability_auto_notice_cancel.sql`
+- `0034_staff_manual_schedule_override.sql`
 
 ## Command registry
-Command names/order/count remain unchanged. Schema revision is now **11** so updated availability descriptions resync.
-
-Public total: 4. Sudo total: 12. Owner total: 19.
+Command names/order/count unchanged. Schema revision remains **11**. Public 4, Sudo 12, Owner 19.
 
 ## Existing continuity contracts
 - FAQ and Human Staff are primary continuity; AI outages never sever staff handoff.
-- AI outage alerts are transition-only: one outage notice, no repeats while still down, one recovery notice.
+- AI outage alerts are transition-only: one outage notice, no repeats while down, one recovery notice.
 - Human Take Over uses a persisted 1-hour inactivity lease; claimant activity renews it; Cron auto-returns expired claims; Owner may override immediately.
 - Production deploy validates typecheck, migrations, dry-run, bindings, health, Telegram webhook, and exact Owner command registry.
-- `DEPLOY_REVISION` + `DEPLOY_CHANGE` appear in the online notice when available.
-
-## Canonical runtime ownership
-- `src/interaction_guard_entry.ts` — flood guard + scheduled takeover/staff sweeps + automatic staff availability notices
-- `src/staff_presence.ts` — effective staff presence, timers, schedules, cancel helpers, transition detection
-- `src/staff_presence_entry.ts` — availability command parsing, private/group routing, cancellation UX, private→group mirror
-- `src/human_control_lease.ts` — takeover expiry
-- `src/ai_runtime.ts` / `src/ai_outage_alert.ts` — grounded AI + outage/recovery visibility
-
-## Migrations
-Current range: `0001` through `0033`.
+- deployment online notice shows revision + deployed change summary.
 
 ## Validation boundary
 Newest slice requires:
-1. production workflow green including migration 0033
-2. Owner command registry remains exact 19/19 under revision 11
-3. controlled short temporary unavailable timer produces initial update, then exactly one private + one Staff Inbox automatic transition on effective state change
-4. later Cron does not duplicate that transition
-5. schedule start/end each declare the correct state to both locations
-6. timer expiry during scheduled off-hours does not falsely announce AVAILABLE
-7. `/unavailable cancel` and `clear` cancel temporary timer and resume schedule when present
-8. `/available cancel` and `clear` remove recurring schedule while preserving current effective state
-9. private cancellation mirrors to Staff Inbox
-10. no Staff Inbox configured means private availability/cancel operations reject before mutation
-11. existing FAQ, human handoff, takeover lease, Owner override, and AI fallback continue working
+1. production workflow green including migration 0034
+2. create `/available 9am 5pm`, then use plain `/available` outside the window; recurring schedule must remain stored and confirmation must show schedule-resume boundary
+3. next schedule boundary must restore schedule authority automatically
+4. create the schedule, then use plain `/unavailable` inside the window; override must last only until next boundary
+5. `/available cancel` must still explicitly delete the recurring schedule
+6. `/unavailable 3` must preserve recurring schedule and resume it after timer expiry
+7. effective state changes from override expiry must retain private + Staff Inbox automatic declaration behavior
+8. existing FAQ, human handoff, takeover lease, Owner override and AI fallback continue working
