@@ -2,7 +2,12 @@ import app from "./rate_limit_entry";
 import type { Language } from "./faq";
 import { checkInteractionFlood, interactionFloodMessage } from "./interaction_flood";
 import { sweepExpiredHumanControls } from "./human_control_lease";
-import { sweepStaffAvailability } from "./staff_presence";
+import {
+  countAvailableStaff,
+  sweepStaffAvailability,
+  type StaffAvailabilityTransition,
+} from "./staff_presence";
+import { getStaffInboxChatId } from "./handoff";
 
 interface Env {
   APP_ENV: string;
@@ -49,7 +54,7 @@ async function telegramApi(env: Env, method: string, body: unknown): Promise<voi
       body: JSON.stringify(body),
     });
   } catch {
-    // Flood protection must fail closed for the current update without creating retry noise.
+    // Operational notifications are best-effort and must not interrupt scheduled state updates.
   }
 }
 
@@ -61,6 +66,54 @@ async function languageFor(db: D1Database | undefined, userId: number): Promise<
     return row?.language === "my" || row?.language === "zh" ? row.language : "en";
   } catch {
     return "en";
+  }
+}
+
+function transitionReason(transition: StaffAvailabilityTransition): string {
+  if (transition.reason === "timer_expired") {
+    return "Temporary unavailable timer ended.";
+  }
+  if (transition.reason === "schedule_started") {
+    return "Daily availability window started.";
+  }
+  return "Daily availability window ended.";
+}
+
+async function announceStaffAvailabilityTransitions(
+  env: Env,
+  transitions: StaffAvailabilityTransition[],
+): Promise<void> {
+  if (!env.DB || transitions.length === 0) return;
+  const staffInboxId = await getStaffInboxChatId(env.DB);
+  const count = await countAvailableStaff(env.DB);
+
+  for (const transition of transitions) {
+    const state = transition.available ? "AVAILABLE" : "UNAVAILABLE";
+    const reason = transitionReason(transition);
+    await telegramApi(env, "sendMessage", {
+      chat_id: transition.telegramUserId,
+      text: [
+        "🕒 Staff availability auto-update",
+        `Your state is now: ${state}`,
+        `Reason: ${reason}`,
+        "Timezone: Asia/Yangon (UTC+06:30)",
+        `Available staff: ${count}`,
+      ].join("\n"),
+    });
+
+    if (staffInboxId !== null) {
+      await telegramApi(env, "sendMessage", {
+        chat_id: staffInboxId,
+        text: [
+          "🕒 Staff availability auto-update",
+          `Staff: Telegram ID ${transition.telegramUserId}`,
+          `State: ${state}`,
+          `Reason: ${reason}`,
+          "Timezone: Asia/Yangon (UTC+06:30)",
+          `Available staff: ${count}`,
+        ].join("\n"),
+      });
+    }
   }
 }
 
@@ -121,9 +174,13 @@ export default {
   },
 
   async scheduled(_controller: ScheduledController, env: Env, _ctx: ExecutionContext): Promise<void> {
-    await Promise.allSettled([
+    const results = await Promise.allSettled([
       sweepExpiredHumanControls(env),
       sweepStaffAvailability(env.DB),
     ]);
+    const staffSweep = results[1];
+    if (staffSweep.status === "fulfilled") {
+      await announceStaffAvailabilityTransitions(env, staffSweep.value);
+    }
   },
 };
