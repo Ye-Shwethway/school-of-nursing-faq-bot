@@ -13,53 +13,107 @@ Production Telegram FAQ assistant for a university School of Nursing in Burmese,
 - no TEST workflow or TEST deployment is active.
 - relevant `main` pushes run the single production validation/deployment workflow automatically.
 
-## Current production checkpoint
+## Current checkpoint
 
-Status: **PRODUCTION LIVE; MAIN-ONLY PIPELINE ACTIVE; PUBLIC FAQ LIBRARY + NORMAL-USER COMMAND-SCOPE FIX + LANGUAGE SELECTOR CLEANUP IMPLEMENTED**
+Status: **ESCALATION INBOX + AI-ASSISTED MULTILINGUAL FAQ AUTHORING IMPLEMENTED ON MAIN; FINAL PRODUCTION WORKFLOW VERIFICATION REQUIRED**
 
-Implemented/current:
+Current implemented surfaces include:
 
-- multilingual dynamic FAQ
-- public `/faq` command for normal users
-- role-aware FAQ surface: read-only localized library for normal users; management surface for Owner/Sudo
-- localized FAQ labels using approved questions instead of internal slugs
-- paginated FAQ browsing with compact two-column rows only when labels are short
-- public FAQ detail view limited to the user's selected language
-- normal users inherit the global private-chat command scope; stale per-chat command overrides are removed during command-schema synchronization
-- visible `/language` for all users
-- language selection is one-shot: save choice, show a short callback confirmation, then delete the selector message without sending a second persistent confirmation
-- Owner/Sudo roles and scoped command menus
-- encrypted configurable AI Primary/Fallback
-- grounded AI + human handoff
-- Staff Inbox per-user topic monitoring
-- Take Over / Return to AI
-- Sudo grant with staff authorization and Staff Inbox invite provisioning
-- Staff Inbox switching from `/staff`
-- Owner `/clearmessage` retained as best-effort only because Telegram deletion/history behavior prevents full-purge guarantees
-- `/noti on|off` notification control
-- `/available` / `/unavailable` staff presence
-- all-staff-unavailable user messaging
-- staff-topic reply relay back to the original user
-- returning-unavailable staff pending-inquiry reminder with inline availability choice
-- editable/addable Owner/Admin manuals
-- Owner/Admin manuals updated for current staff operations
-- stale TEST deployment guidance removed from Owner manual
+- multilingual dynamic FAQ and public role-aware `/faq`
+- localized paginated read-only FAQ library for normal users
+- Owner/Sudo FAQ management
+- one-language FAQ authoring with optional AI generation of the other two languages
+- explicit multilingual preview and `Approve & Save` before canonical publication
+- manual translation fallback when AI is unavailable or fails
+- AI-assisted multilingual FAQ editing that leaves the current live FAQ unchanged until approval
+- individual-field FAQ editing for precise corrections
+- `/cases` Escalation Inbox for Owner/Sudo in private chat and the configured active Staff Inbox group
+- Open / Claimed / Resolved / All case filters with 6-item pager
+- case detail with user identity, language, status, question, persisted reason for new cases, claimant, timestamps, and linked FAQ
+- escalation-to-FAQ drafting through `＋ Add as FAQ`
+- related-FAQ review through `Find Related FAQ`
+- persisted escalation reason and durable case-to-FAQ link
+- existing Staff Inbox Take Over / Resolve / Return-to-AI operational flow
+- configurable grounded Primary/Fallback AI
+- Staff Inbox per-user topics, presence, notifications, reply relay, and returning-staff reminder
+- editable Owner/Admin manuals, now including escalation and multilingual FAQ workflows
+- clean one-shot `/language`: save → remove picker → send one localized confirmation message
 
-## FAQ library UX
+## Escalation Inbox
 
-`/faq` is public. Normal users can browse only active FAQ entries and never receive Add/Edit/Disable/Restore controls, inactive entries, internal FAQ keys, or revision metadata.
+`/cases` is available only to Bot Owner and Sudo Admins.
 
-FAQ browsing uses the user's saved Burmese, English, or Simplified Chinese language. Lists are paginated at 8 items per page. Two compact labels may share a row; longer labels receive their own row. Callback navigation uses edit-in-place first and provides `✕ Close`.
+Allowed contexts:
 
-Owner/Sudo `/faq` remains the FAQ management entry point with Browse, Add, Inactive, Help, Edit, Disable, and Restore controls.
+- private chat with the bot
+- configured active Staff Inbox group
 
-No schema migration was required; existing `faq_entries` data remains canonical.
+It is rejected in unrelated groups. The inbox displays Open, Claimed, Resolved, and All views, newest first, with 6 cases per page.
+
+Case details expose privileged operational information only: Telegram identity, language, question, status, timestamps, claimant, escalation reason when stored, and linked FAQ when present.
+
+Live Take Over / Resolve remains on the original Staff Inbox escalation message where staff reply context is correct. `/cases` is the archive/knowledge-management view.
+
+Migration `0016_escalation_knowledge_pipeline.sql` adds:
+
+- `escalation_cases.reason`
+- `escalation_cases.linked_faq_key`
+- linked-FAQ index
+
+Cases created before migration 0016 may have no stored detailed reason.
+
+## Escalation → FAQ knowledge pipeline
+
+From a case detail:
+
+- `＋ Add as FAQ` starts a new FAQ draft using the case language and original question.
+- `Find Related FAQ` checks current approved FAQ matching and offers review/edit or new-draft paths.
+- when a case-derived FAQ is approved and saved, the case stores its `linked_faq_key`.
+
+No AI-generated text becomes canonical automatically.
+
+## AI-assisted multilingual FAQ authoring
+
+Owner/Sudo choose one authoritative source language: Burmese, English, or Simplified Chinese.
+
+For a new FAQ:
+
+1. choose source language
+2. supply stable key
+3. write source-language question
+4. write source-language approved answer
+5. either generate the other two languages with AI or enter them manually
+6. review the complete three-language preview
+7. press `✅ Approve & Save`
+
+For AI-assisted editing, the current live FAQ remains unchanged while the draft is prepared. Approval applies the new multilingual version atomically through the existing FAQ mutation/revision path.
+
+AI generation reuses the configured FAQ-agent Primary model and then Fallback model. The translation prompt treats source text as authoritative and prohibits invention or alteration of policy facts, dates, fees, eligibility, accreditation, contacts, URLs, scholarship/loan/bond terms, or promises.
+
+If AI is unavailable, times out, fails, or returns invalid multilingual output, the draft remains stored in the admin session. Admins can retry or fill the remaining languages manually. **AI availability is not a publication dependency.** All three languages are still required before approval.
+
+## FAQ permissions
+
+FAQ Add/Edit/Disable/Restore and multilingual drafting are available to:
+
+- Bot Owner
+- Sudo Admins
+
+Normal users receive read-only FAQ browsing only.
+
+AI provider/key/model configuration remains Owner-only through `/ai`.
 
 ## Language selector UX
 
-`/language` opens a one-shot selector in the order `မြန်မာ` · `English` · `简体中文`.
+`/language` opens `မြန်မာ` · `English` · `简体中文`.
 
-After a valid selection is persisted, the bot acknowledges it through the callback toast and deletes the selector message. It does not leave the old selector behind and does not send a second persistent confirmation message. Users can reopen the selector at any time with `/language`.
+After a valid selection:
+
+1. persist language
+2. delete the selector message
+3. send one short localized confirmation message
+
+Do not silently close and do not leave the old picker in chat.
 
 ## Command registry
 
@@ -69,109 +123,83 @@ Public (4):
 
 Sudo Admin additionally:
 
-`/admin`, `/admins`, `/adminmanual`, `/noti`, `/available`, `/unavailable`
+`/admin`, `/admins`, `/cases`, `/adminmanual`, `/noti`, `/available`, `/unavailable`
 
 Owner additionally:
 
 `/sudo`, `/ai`, `/staff`, `/clearmessage`, `/ownermanual`, `/cancel`, `/reset`
 
-Expected Owner total remains **17**. Command schema revision: **7**.
+Expected Sudo total: **11**.
+Expected Owner total: **18**.
+Command schema revision: **8**.
 
-Normal users must not retain chat-specific command lists. `syncUserCommandScope()` clears a normal user's per-chat scope so Telegram falls back to the global `all_private_chats` public registry. Schema synchronization also removes stale overrides for already-known normal users, fixing command menus that were created before `/faq` became public.
-
-Privileged command ordering remains compatible with the production exact Owner read-back contract.
-
-## Staff notifications and availability
-
-Migration `0012_staff_presence_notifications.sql` adds `staff_presence` and `staff_notifications_enabled`.
-
-Active Staff Inbox commands:
-
-- `/noti on` — normal Staff Inbox notification behavior
-- `/noti off` — keep messages/cases visible but send them silently
-- `/available` — mark current authorized staff available
-- `/unavailable` — mark current authorized staff unavailable
-
-Active staff without an explicit presence row default to available until they mark unavailable.
-
-## Human continuity
-
-When deterministic FAQ and grounded Primary/Fallback AI cannot answer:
-
-- escalation remains stored and routed
-- if at least one active staff member is available, user receives normal staff-handoff copy
-- if available staff count is zero, user is told staff are currently unavailable, the question is retained, and they should try again later
-
-Authorized staff can later reply inside that user's Staff Inbox topic. The bot maps the topic back to the original Telegram user, takes human control when allowed, marks the replying staff member available, and relays the staff text to the user's private chat without exposing staff identity.
-
-## Returning unavailable staff prompt
-
-When an authorized staff member is still marked unavailable and later interacts with the bot privately, the bot checks for open escalation cases. New pending cases can trigger the inline `Mark me Available & Review` / `Stay Unavailable` reminder, with per-staff acknowledgement preventing repeated spam for an unchanged pending set.
+Normal users inherit the global `all_private_chats` public registry; stale normal-user per-chat command overrides are removed during command synchronization.
 
 ## Manuals
 
-Manual storage/revision foundation:
+Manual migrations now include:
 
 - `0009_manuals.sql`
 - `0010_manual_newline_cleanup.sql`
 - `0013_manual_staff_operations.sql`
 - `0014_manual_returning_staff_prompt.sql`
 - `0015_owner_manual_main_only_cleanup.sql`
+- `0017_manual_escalation_knowledge_pipeline.sql`
 
-`0015` archives the old Owner deployment/safety bodies in manual revision history and replaces stale TEST guidance with the current main-only production model.
+Migration `0017` adds Owner and Admin sections covering `/cases`, escalation-to-FAQ drafting, one-language authoring, AI Primary/Fallback translation, explicit approval, manual fallback, and permissions.
 
 ## AI configuration contract
 
 `AI_CONFIG_MASTER_KEY` must be a Cloudflare `secret_text` containing Base64 for exactly 32 random bytes. Credentials encrypted with an older key must be re-entered through `/ai` after key rotation.
 
-## Sudo access
-
-Owner `/sudo grant <telegram_user_id>` grants Sudo authority, enables staff authorization, refreshes command scope best-effort, and provisions a one-use Staff Inbox invite when needed.
-
-`/sudo revoke` removes Sudo authority and disables bot-side staff authorization. Automatic removal of an already-joined Telegram group member is not currently enabled.
-
-## Staff Inbox cleanup
-
-`/clearmessage` is Owner-only and best-effort. It must not be treated as a guaranteed full-history purge.
-
 ## Single production workflow
 
 Canonical workflow: `.github/workflows/deploy-production.yml`.
 
-Relevant `main` pushes perform production binding preflight, install/typecheck, local migration validation, Worker dry-run, remote migrations, deploy, binding postflight, `/health`, nonce-gated Owner command resync, and exact 17-command Owner read-back.
+Relevant `main` pushes perform production binding preflight, dependency install/typecheck, local migration validation, Worker dry-run, remote migrations, production deploy, binding postflight, `/health`, nonce-gated Owner command resync, and exact Telegram Owner command read-back.
 
-The production `/health` path invokes command-registry synchronization, so command schema revision 7 applies the public registry and stale normal-user scope cleanup during deployment validation.
+The workflow now expects the 18-command Owner registry including `/cases`.
 
 ## Canonical Worker stack
 
-Wrangler entrypoint: `src/staff_presence_entry.ts`.
+Wrangler entrypoint: `src/faq_ai_entry.ts`.
 
-1. staff availability / `/noti` / returning-staff reminder / topic reply relay
-2. best-effort Staff Inbox cleanup
-3. manuals + command synchronization
-4. production deploy notice / ops endpoints
-5. latest Return-to-AI control
-6. monitoring / FAQ / AI / human handoff
-7. Staff Inbox UX + Sudo invite lifecycle
-8. Telegram UX/navigation polish
-9. secure AI setup interception + one-shot language callback cleanup
-10. dynamic FAQ/AI runtime
-11. compatibility fallback + `/health`
+1. `faq_ai_entry.ts` — AI multilingual FAQ generation and FAQ-authoring text interception before staff relay
+2. `cases_entry.ts` — `/cases` and Escalation Inbox navigation/context enforcement
+3. `staff_presence_entry.ts` — availability, `/noti`, returning-staff reminder, topic reply relay
+4. `clear_message_entry.ts` — best-effort Staff Inbox cleanup
+5. `manual_entry.ts` — manuals + command synchronization
+6. `deployment_notice_entry.ts` — production ops/deploy notice
+7. `latest_return_entry.ts` — latest Return-to-AI control
+8. `monitoring_message_entry.ts` — FAQ/AI/handoff and persisted escalation reason
+9. `staff_ux_entry.ts` — Staff Inbox UX + Sudo invite lifecycle
+10. `ux_entry.ts` — FAQ/AI/monitoring edit-in-place navigation + shared Close
+11. `secure_entry.ts` — secure AI setup + one-shot language selection
+12. `runtime_entry.ts`
+13. `index.ts`
 
 ## Current migrations
 
-`0001` through `0015`.
+`0001` through `0017`.
 
-Latest canonical migration: `migrations/0015_owner_manual_main_only_cleanup.sql`.
+Latest canonical migration: `migrations/0017_manual_escalation_knowledge_pipeline.sql`.
 
-## Next work
+## Validation / next exact step
 
-No additional feature slice is active after the language-selector cleanup. Continue from a new explicit product requirement or verified production defect.
+Source, schema, command-registry contract, design rules, and manuals are implemented on `main`. Do not declare this slice production-green until the latest single production workflow is verified successful, including typecheck, migrations, deploy, health, and exact 18-command Owner read-back.
 
-When new work begins, use live repository and verified production evidence as authority, implement on `main` in small bounded slices, and update this file plus `NEW_CHAT_BOOTSTRAP.md` after meaningful changes.
+After deployment verification, perform a short Telegram acceptance check:
 
-## Deferred validation / optional future work
+- `/cases` in Owner private chat
+- `/cases` in active Staff Inbox as Sudo
+- open a historical and a new escalation case
+- `＋ Add as FAQ` from a case
+- AI translation success path
+- manual fallback path (or simulated AI-unavailable path)
+- `✅ Approve & Save`, then confirm the FAQ appears in the public `/faq` library
+
+## Deferred optional work
 
 - multiuser simultaneous live stress test
 - same-user near-simultaneous first-message live race test
-- optional policy: automatically remove a revoked Sudo Admin from the Telegram Staff Inbox group
+- optional automatic removal of a revoked Sudo from the Telegram Staff Inbox group
