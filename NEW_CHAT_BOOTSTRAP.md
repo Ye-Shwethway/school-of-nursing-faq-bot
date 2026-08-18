@@ -6,254 +6,147 @@ Active branch: `main`
 Historical branch: `test` (dormant/reference-only)
 
 ## Startup sequence
-
 Read in order:
-
 1. `AGENTS.md`
 2. `NEW_CHAT_BOOTSTRAP.md`
 3. `ROADMAP.md`
 4. only task-relevant canonical docs/source
 
-Treat live repository plus verified Cloudflare/Telegram evidence as authoritative over remembered chat context.
+Live repository plus verified Cloudflare/Telegram evidence outranks remembered chat context.
 
 ## Current checkpoint
+The project is main-only and production-live. Owner private-chat `/cases` has already been live-accepted. The latest source slice on `main` adds **normal-user spam protection, progressive cooldowns, `/limits` Owner/Sudo controls, temporary testing exemption, and Owner-only permanent ban/unban**. Do not call this latest slice production-green until the single production workflow is verified.
 
-The project is main-only and production-live. Owner private-chat `/cases` list/detail has been live-accepted. The latest refinement adds **confirmed permanent deletion for typo/test/junk escalation cases** on `main`; final production workflow verification for this refinement is still required.
-
-Current implemented surfaces include:
-
+## Current product surfaces
 - multilingual deterministic/dynamic FAQ
-- public role-aware `/faq` with localized paginated read-only browsing for normal users
+- public role-aware `/faq`
+- localized paginated read-only FAQ library for normal users
 - Owner/Sudo FAQ management
-- one-language FAQ authoring with optional AI translation into the other two languages
-- multilingual draft preview and explicit `✅ Approve & Save`
-- manual translation fallback when AI is unavailable/fails
-- AI-assisted multilingual FAQ edit drafts that leave live FAQ data unchanged until approval
-- existing individual-field FAQ edits for precise corrections
-- `/cases` Owner/Sudo Escalation Inbox
-- Open / Claimed / Resolved / All case pager, 6 per page
-- privileged case details with user identity, question, status, timestamps, reason for new cases, claimant, and linked FAQ
-- confirmed `🗑 Delete Case` flow with explicit permanent-delete confirmation
-- escalation → Add as FAQ / Find Related FAQ workflows
-- persisted escalation reason and case-to-FAQ linkage
-- Staff Inbox Take Over / Resolve / Return-to-AI operational controls on original escalation messages
-- grounded configurable Primary/Fallback AI
-- Owner identity and Sudo Admin roles
-- one-shot `/language`: save → delete picker → send localized confirmation
-- Staff Inbox per-user topics, presence, notifications, reply relay, and returning-staff reminder
-- editable Owner/Admin manuals including escalation, deletion, and multilingual FAQ workflows
-- Owner `/clearmessage` best-effort only
+- one-language multilingual FAQ authoring with Primary→Fallback AI translation drafts
+- manual translation fallback and explicit `✅ Approve & Save`
+- `/cases` Owner/Sudo escalation archive, 6/page, Open/Claimed/Resolved/All
+- case → Add as FAQ / Find Related FAQ
+- persisted escalation reason + linked FAQ
+- confirmed permanent case deletion for typo/test/junk cases
+- Staff Inbox per-user topics, Take Over/Resolve/Return-to-AI, notifications/presence/reply relay
+- `/limits` Owner/Sudo user-limit management
+- Owner-only permanent ban/unban
+- editable Owner/Admin manuals covering current operations
 
-## Main-only operating model
+## Spam protection contract
+Applies only to **normal-user private free-text inquiries** before FAQ/AI/handoff processing.
 
-- `main` is the only active development, canonical, and production source branch.
-- historical `test` is dormant/reference-only.
-- no TEST deploy/build workflow is active.
-- `.github/workflows/deploy-production.yml` is the single production workflow.
-- relevant `main` pushes automatically validate and deploy production.
+Default window:
+- 10 free-text inquiries / 10 minutes
+- inquiry after the limit triggers cooldown
+- repeat limit hits within 24h: 30 minutes → 2 hours → 12 hours
+- no automatic permanent ban
 
-Do not revive a TEST→main promotion model unless the Owner explicitly redesigns the architecture.
+When blocked:
+- do not call AI
+- do not create a new escalation case
+- preserve previously accepted/logged questions
+- return neutral localized system copy with approximate remaining wait time
+- point the user to `/faq`
+- keep `/faq`, `/language`, `/start`, and other safe commands usable
 
-## Escalation Inbox contract
+Owner/Sudo traffic is not rate-limited by this normal-user gate.
 
-`/cases` is available to Bot Owner and Sudo Admins only.
+Migration `0019_user_rate_limits.sql` stores rolling-window state, cooldown, strike history, exemption, temporary restriction, and permanent-ban metadata.
 
-Allowed contexts:
-
+## `/limits` contract
+Owner/Sudo only. Allowed in:
 - private bot chat
 - configured active Staff Inbox group
 
-Unrelated groups must reject it.
+The pager shows users with limit history, active cooldown/restriction/exemption, or permanent ban. Detail shows immutable Telegram ID, status, current 10-minute window count, strikes, and relevant timestamps.
 
-Views:
+Owner + Sudo controls:
+- `🔓 Unlock Now` — clear cooldown/temporary restriction and immediate window
+- `🧪 Exempt 1h` — temporary QA/testing exemption
+- `⏳ Restrict 2h` — temporary manual restriction
+- `Reset Strikes` — reset progressive history/window counter
 
-- Open
-- Claimed
-- Resolved
-- All
+Owner-only:
+- `🚫 Permanently Ban` — confirmation-gated
+- `✅ Unban User`
 
-Lists are newest-first and paginated at 6 cases per page. Case details are privileged and may show Telegram identity, language, original question, status, created/resolved timestamps, claimant, stored reason, and linked FAQ.
+Permanent ban blocks free-text inquiries before FAQ/AI/escalation but keeps read-only `/faq` and safe commands available. Unban clears ban plus immediate cooldown/window state. All admin overrides and ban/unban actions are audited in `admin_audit`.
 
-The `/cases` UI is for archive/review/knowledge management. Live Take Over / Resolve controls remain on the original Staff Inbox escalation message so staff reply context remains correct.
+## Escalation Inbox contract
+`/cases` is Owner/Sudo only in private bot chat or the active Staff Inbox group. Lists are newest-first, 6/page.
 
-### Case deletion
+Case detail may show Telegram identity, language, question, status, timestamps, stored reason, claimant, and linked FAQ.
 
-Case detail includes `🗑 Delete Case` for Owner/Sudo. It must never delete immediately.
+`🗑 Delete Case` requires `🗑 Yes, Delete Permanently`. Delete only the case and its `escalation_messages`; preserve the user, original `questions` record, and any linked FAQ.
 
-Flow:
+## Multilingual FAQ authoring
+Owner/Sudo choose Burmese, English, or Simplified Chinese as the authoritative source language. They enter source question+answer, then either:
+- `✨ Generate other 2 languages` using configured Primary then Fallback AI, or
+- manual fill/edit.
 
-1. press `🗑 Delete Case`
-2. bot shows the case question plus a destructive-action warning
-3. `← Cancel` returns to the case unchanged
-4. `🗑 Yes, Delete Permanently` removes the `escalation_cases` row and its related `escalation_messages`
-5. return to the same filtered pager with refreshed counts/list
+AI is draft-only and may not invent/change policy facts. All three languages must be reviewed before `✅ Approve & Save`. AI failure must never block publication if admins can manually complete the translations.
 
-Deletion intentionally does **not** remove the Telegram user record, the original `questions` log, or an FAQ already created/linked from that case. No schema migration is required for deletion itself.
-
-Migration `0016_escalation_knowledge_pipeline.sql` adds `reason`, `linked_faq_key`, and a linked-FAQ index. Older cases may not have a stored reason.
-
-## Escalation → FAQ workflow
-
-From case detail:
-
-- `＋ Add as FAQ` starts a draft with the case language and original question prefilled.
-- admin supplies the approved answer in that source language.
-- `Find Related FAQ` checks current approved FAQ matching and allows review/edit or creation of a new FAQ.
-- after a case-derived FAQ is approved and saved, `linked_faq_key` is stored on the escalation case.
-
-## AI-assisted multilingual FAQ authoring
-
-FAQ Add/Edit is available to Owner + Sudo.
-
-Authoring flow:
-
-1. choose authoritative source language: `မြန်မာ`, `English`, or `简体中文`
-2. for new FAQ, supply stable English key
-3. write authoritative source question and answer
-4. choose `✨ Generate other 2 languages` or manual entry
-5. review all three languages
-6. press `✅ Approve & Save`
-
-AI generation:
-
-- reuses the configured FAQ-agent Primary binding
-- tries configured Fallback if Primary fails
-- uses stored encrypted credentials and `AI_CONFIG_MASTER_KEY`
-- treats the source-language text as authoritative
-- must not invent/add/remove policy facts, dates, fees, eligibility, accreditation, contacts, URLs, scholarship/loan/bond terms, or promises
-- returns draft text only
-
-AI failure is non-blocking. The source draft remains in `admin_sessions`; admin can retry AI or manually fill the other two languages. All three languages are still required before publication.
-
-AI-assisted editing is draft-first: the current live FAQ remains canonical until explicit approval. Existing field-by-field editing remains available.
-
-AI provider/key/model configuration remains Owner-only through `/ai`.
-
-## Language selector contract
-
-`/language` order: `မြန်မာ` · `English` · `简体中文`.
-
-On valid choice:
-
-1. persist language
-2. delete the selector message
-3. send one short localized confirmation message
-
-Never silently close after a successful choice. Users can reopen `/language` at any time.
-
-## Public FAQ library contract
-
-Normal users:
-
-- can browse active FAQs only
-- see saved-language human-readable labels
-- get 8-item pagination with two columns only for compact labels
-- see only selected-language question and answer in detail
-- never see Add/Edit/Disable/Restore, inactive FAQ, keys, revisions, case data, or admin controls
-
-Owner/Sudo retain FAQ management and multilingual authoring controls.
+## Language selector
+`/language`: `မြန်မာ` · `English` · `简体中文`.
+Successful selection: persist → delete picker → send one localized confirmation. Never silent-close.
 
 ## Command registry
-
 Public (4):
-
 `/start`, `/language`, `/faq`, `/whoami`
 
-Sudo Admin adds:
+Sudo adds:
+`/admin`, `/admins`, `/cases`, `/limits`, `/adminmanual`, `/noti`, `/available`, `/unavailable`
 
-`/admin`, `/admins`, `/cases`, `/adminmanual`, `/noti`, `/available`, `/unavailable`
-
-Owner additionally has:
-
+Owner additionally:
 `/sudo`, `/ai`, `/staff`, `/clearmessage`, `/ownermanual`, `/cancel`, `/reset`
 
-Command schema revision: `8`.
-Sudo total: **11**.
-Production exact Owner read-back target: **18 commands**.
+Command schema revision: **9**.
+Sudo total: **12**.
+Production exact Owner target: **19 commands**.
 
-Normal users inherit the global `all_private_chats` public registry. Older chat-specific normal-user scopes are deleted during registry synchronization so they cannot shadow new public commands.
-
-## Staff Inbox behavior
-
-Authorized staff operations remain:
-
-- `/noti on|off`
-- `/available`
-- `/unavailable`
-- Take Over / Return to AI
-- topic reply relay to original user
-- returning-unavailable pending-case reminder
-
-`/cases` does not replace the operational Staff Inbox message. It adds a durable reviewable knowledge-management view over stored escalation records.
-
-## Manuals
-
-Manual-related migrations:
-
-- `0009_manuals.sql`
-- `0010_manual_newline_cleanup.sql`
-- `0013_manual_staff_operations.sql`
-- `0014_manual_returning_staff_prompt.sql`
-- `0015_owner_manual_main_only_cleanup.sql`
+## Manuals / migrations
+Manual migrations include current case/FAQ/spam workflows. Latest:
 - `0017_manual_escalation_knowledge_pipeline.sql`
 - `0018_manual_case_delete.sql`
+- `0019_user_rate_limits.sql`
+- `0020_manual_spam_protection.sql`
 
-`0017` adds Owner/Admin instructions for `/cases`, Add as FAQ, Find Related FAQ, one-language authoring, Primary/Fallback AI translation, review/approval, manual fallback, and permissions. `0018` extends the same manual section with confirmed case deletion and explicitly documents what deletion preserves.
+Current migration range: `0001` through `0020`.
 
 ## Canonical Worker stack
+Wrangler entrypoint: `src/rate_limit_entry.ts`.
 
-Wrangler entrypoint: `src/faq_ai_entry.ts`.
-
-1. `faq_ai_entry.ts` — intercept FAQ-authoring text safely before staff relay + execute AI multilingual generation with production master key
-2. `cases_entry.ts` — `/cases`, cases callback navigation/context enforcement
-3. `staff_presence_entry.ts` — availability, `/noti`, returning-staff reminder, topic reply relay
-4. `clear_message_entry.ts` — best-effort Staff Inbox cleanup
-5. `manual_entry.ts` — manuals + command sync
-6. `deployment_notice_entry.ts` — production ops/deploy notice + command synchronization
-7. `latest_return_entry.ts` — latest Return-to-AI control
-8. `monitoring_message_entry.ts` — FAQ/AI/handoff and exact escalation-reason persistence
-9. `staff_ux_entry.ts` — Staff Inbox UX + Sudo invite lifecycle
-10. `ux_entry.ts` — FAQ/AI/monitoring navigation + shared Close
-11. `secure_entry.ts` — secure AI setup + language selector behavior
-12. `runtime_entry.ts`
-13. `index.ts`
+Top-to-bottom additions:
+1. `rate_limit_entry.ts` — `/limits` + normal-user free-text rate gate
+2. `faq_ai_entry.ts` — FAQ-authoring interception + AI translation
+3. `cases_entry.ts` — `/cases`
+4. existing Staff presence/manual/deploy/monitoring/staff UX/general UX/security/runtime/index stack
 
 ## Production workflow contract
-
-`.github/workflows/deploy-production.yml` validates:
-
-- production credentials/runtime bindings
-- install/typecheck
+`.github/workflows/deploy-production.yml` remains the only production workflow. It must validate:
+- credentials/bindings
+- install + typecheck
 - local migrations
-- production Worker dry run
-- remote D1 migrations
-- production Worker deploy
-- runtime-binding preservation
-- production `/health`
-- nonce-gated Owner command resync
-- exact Telegram Owner read-back
+- Worker dry-run
+- remote production migrations
+- deploy
+- post-deploy binding preservation
+- `/health`
+- nonce-gated command resync
+- exact 19-command Owner Telegram read-back including `/limits`
 
-Current exact read-back expects 18 commands including `/cases`.
-
-## Current migrations
-
-`0001` through `0018`.
-Latest: `migrations/0018_manual_case_delete.sql`.
-
-## Validation boundary / next exact sequence
-
-Do not state the delete refinement is production-green until the latest production workflow is verified successful.
-
-Live Telegram acceptance after deploy:
-
-1. open a disposable/typo case from `/cases`
-2. press `🗑 Delete Case`
-3. confirm the warning screen appears
-4. press `← Cancel` and verify the case remains
-5. reopen delete and press `🗑 Yes, Delete Permanently`
-6. verify the case disappears and pager/counts refresh
-7. verify unrelated user records, source question logs, and FAQs are untouched
+## Next exact validation
+After workflow green, live-test with a normal user:
+1. first 10 free-text inquiries inside 10 minutes are accepted
+2. next inquiry is blocked before AI/case creation
+3. `/faq` still works during cooldown
+4. Owner/Sudo `/limits` can unlock, exempt 1h, restrict 2h, reset strikes
+5. use `Exempt 1h` on the normal QA account and continue testing
+6. Owner permanent-ban confirmation blocks free text
+7. `/faq` still works while banned
+8. Owner unban restores free-text access
+9. verify blocked spam created no extra `/cases`
 
 ## Documentation rule
-
-After every meaningful behavior/architecture/schema/deployment slice, keep `ROADMAP.md` and this file synchronized with live repository reality.
+After each behavior/schema/deployment slice, keep `ROADMAP.md`, this file, manuals, and `docs/TELEGRAM_DESIGN_RULES.md` aligned with live repository reality.
