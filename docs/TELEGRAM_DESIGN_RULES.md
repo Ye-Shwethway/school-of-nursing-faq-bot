@@ -104,7 +104,12 @@ Order: `မြန်မာ` · `English` · `简体中文`.
 - Existing human claims at the moment this feature is deployed receive a fresh full 1-hour lease rather than being expired immediately.
 
 ### Staff availability timer and daily schedule
-- `/available` and `/unavailable` remain authorized-staff commands in the active Staff Inbox.
+- `/available` and `/unavailable` are authorized-staff commands that may be used either in the active Staff Inbox group or in the staff member's private bot chat **when an active Staff Inbox group is configured**.
+- Private invocation is convenience only; the Staff Inbox remains the shared operational coordination surface.
+- If no active Staff Inbox is configured, private `/available` and `/unavailable` must be rejected before any availability state mutation.
+- Every successful private availability/timer/schedule change must be mirrored to the active Staff Inbox group root with the staff identity (including immutable Telegram ID) and resulting state summary so staff can coordinate coverage.
+- Direct Staff Inbox invocation remains supported and does not require an extra duplicate mirror because the command/result is already team-visible.
+- `/noti` remains Staff-Inbox-only.
 - Plain `/available` means immediately available and clears any recurring availability schedule.
 - Plain `/unavailable` means unavailable indefinitely until the staff member explicitly changes state.
 - `/unavailable <hours>` creates a temporary unavailable override. Example: `/unavailable 3` means unavailable for three hours.
