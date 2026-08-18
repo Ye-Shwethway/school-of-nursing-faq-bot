@@ -7,6 +7,7 @@ type PresenceRow = {
   telegram_user_id: number;
   available: number;
   unavailable_until: string | null;
+  manual_override_until: string | null;
   schedule_start_minute: number | null;
   schedule_end_minute: number | null;
   schedule_enabled: number;
@@ -15,7 +16,13 @@ type PresenceRow = {
 export type StaffAvailabilityTransition = {
   telegramUserId: number;
   available: boolean;
-  reason: "timer_expired" | "schedule_started" | "schedule_ended";
+  reason: "timer_expired" | "manual_override_expired" | "schedule_started" | "schedule_ended";
+};
+
+export type ManualAvailabilityResult = {
+  available: boolean;
+  scheduled: boolean;
+  overrideUntil: string | null;
 };
 
 function sqliteUtc(value: Date): string {
@@ -40,20 +47,46 @@ function insideDailyWindow(minute: number, start: number, end: number): boolean 
     : minute >= start || minute < end;
 }
 
+function nextScheduleBoundary(now: Date, startMinute: number, endMinute: number): Date {
+  const shifted = new Date(now.getTime() + YANGON_OFFSET_MINUTES * 60_000);
+  const localMidnight = Date.UTC(
+    shifted.getUTCFullYear(),
+    shifted.getUTCMonth(),
+    shifted.getUTCDate(),
+  );
+  const offsetMs = YANGON_OFFSET_MINUTES * 60_000;
+  const candidates: number[] = [];
+  for (const dayOffset of [0, 1]) {
+    const day = localMidnight + dayOffset * 86_400_000;
+    for (const minute of [startMinute, endMinute]) {
+      const utc = day + minute * 60_000 - offsetMs;
+      if (utc > now.getTime()) candidates.push(utc);
+    }
+  }
+  const next = Math.min(...candidates);
+  return new Date(Number.isFinite(next) ? next : now.getTime() + 86_400_000);
+}
+
 function effectiveFromRow(row: PresenceRow | null, now = new Date()): boolean {
   if (!row) return true;
+
   const unavailableUntil = parseSqliteUtc(row.unavailable_until);
   if (unavailableUntil !== null && unavailableUntil > now.getTime()) return false;
+
+  const manualOverrideUntil = parseSqliteUtc(row.manual_override_until);
+  if (manualOverrideUntil !== null && manualOverrideUntil > now.getTime()) return row.available === 1;
+
   if (row.schedule_enabled === 1 && row.schedule_start_minute !== null && row.schedule_end_minute !== null) {
     return insideDailyWindow(yangonMinute(now), row.schedule_start_minute, row.schedule_end_minute);
   }
+
   if (unavailableUntil !== null) return true;
   return row.available === 1;
 }
 
 async function presenceRow(db: D1Database, userId: number): Promise<PresenceRow | null> {
   return db.prepare(
-    `SELECT telegram_user_id, available, unavailable_until,
+    `SELECT telegram_user_id, available, unavailable_until, manual_override_until,
             schedule_start_minute, schedule_end_minute, schedule_enabled
      FROM staff_presence WHERE telegram_user_id=?1`,
   ).bind(userId).first<PresenceRow>();
@@ -69,24 +102,56 @@ export async function canManageStaffState(
   return isStaffMember(db, userId);
 }
 
+export async function setManualAvailability(
+  db: D1Database | undefined,
+  userId: number,
+  available: boolean,
+): Promise<ManualAvailabilityResult> {
+  if (!db) return { available, scheduled: false, overrideUntil: null };
+  const row = await presenceRow(db, userId);
+  const scheduled = row?.schedule_enabled === 1
+    && row.schedule_start_minute !== null
+    && row.schedule_end_minute !== null;
+
+  if (!scheduled) {
+    await db.prepare(
+      `INSERT INTO staff_presence
+         (telegram_user_id, available, unavailable_until, manual_override_until, schedule_start_minute, schedule_end_minute, schedule_enabled, updated_at)
+       VALUES (?1, ?2, NULL, NULL, NULL, NULL, 0, CURRENT_TIMESTAMP)
+       ON CONFLICT(telegram_user_id) DO UPDATE SET
+         available=excluded.available,
+         unavailable_until=NULL,
+         manual_override_until=NULL,
+         schedule_start_minute=NULL,
+         schedule_end_minute=NULL,
+         schedule_enabled=0,
+         updated_at=CURRENT_TIMESTAMP`,
+    ).bind(userId, available ? 1 : 0).run();
+    return { available, scheduled: false, overrideUntil: null };
+  }
+
+  const overrideUntil = sqliteUtc(nextScheduleBoundary(
+    new Date(),
+    row.schedule_start_minute!,
+    row.schedule_end_minute!,
+  ));
+  await db.prepare(
+    `UPDATE staff_presence
+     SET available=?2,
+         unavailable_until=NULL,
+         manual_override_until=?3,
+         updated_at=CURRENT_TIMESTAMP
+     WHERE telegram_user_id=?1`,
+  ).bind(userId, available ? 1 : 0, overrideUntil).run();
+  return { available, scheduled: true, overrideUntil };
+}
+
 export async function setStaffAvailability(
   db: D1Database | undefined,
   userId: number,
   available: boolean,
 ): Promise<void> {
-  if (!db) return;
-  await db.prepare(
-    `INSERT INTO staff_presence
-       (telegram_user_id, available, unavailable_until, schedule_start_minute, schedule_end_minute, schedule_enabled, updated_at)
-     VALUES (?1, ?2, NULL, NULL, NULL, 0, CURRENT_TIMESTAMP)
-     ON CONFLICT(telegram_user_id) DO UPDATE SET
-       available=excluded.available,
-       unavailable_until=NULL,
-       schedule_start_minute=NULL,
-       schedule_end_minute=NULL,
-       schedule_enabled=0,
-       updated_at=CURRENT_TIMESTAMP`,
-  ).bind(userId, available ? 1 : 0).run();
+  await setManualAvailability(db, userId, available);
 }
 
 export async function setTemporaryUnavailable(
@@ -95,15 +160,15 @@ export async function setTemporaryUnavailable(
   hours: number,
 ): Promise<string | null> {
   if (!db) return null;
-  const expires = new Date(Date.now() + hours * 60 * 60 * 1000);
-  const expiresAt = sqliteUtc(expires);
+  const expiresAt = sqliteUtc(new Date(Date.now() + hours * 60 * 60 * 1000));
   await db.prepare(
     `INSERT INTO staff_presence
-       (telegram_user_id, available, unavailable_until, schedule_enabled, updated_at)
-     VALUES (?1, 0, ?2, 0, CURRENT_TIMESTAMP)
+       (telegram_user_id, available, unavailable_until, manual_override_until, schedule_enabled, updated_at)
+     VALUES (?1, 0, ?2, NULL, 0, CURRENT_TIMESTAMP)
      ON CONFLICT(telegram_user_id) DO UPDATE SET
        available=0,
        unavailable_until=excluded.unavailable_until,
+       manual_override_until=NULL,
        updated_at=CURRENT_TIMESTAMP`,
   ).bind(userId, expiresAt).run();
   return expiresAt;
@@ -133,15 +198,15 @@ export async function setDailyAvailabilitySchedule(
   endMinute: number,
 ): Promise<boolean> {
   if (!db) return false;
-  const now = new Date();
-  const available = insideDailyWindow(yangonMinute(now), startMinute, endMinute);
+  const available = insideDailyWindow(yangonMinute(), startMinute, endMinute);
   await db.prepare(
     `INSERT INTO staff_presence
-       (telegram_user_id, available, unavailable_until, schedule_start_minute, schedule_end_minute, schedule_enabled, updated_at)
-     VALUES (?1, ?2, NULL, ?3, ?4, 1, CURRENT_TIMESTAMP)
+       (telegram_user_id, available, unavailable_until, manual_override_until, schedule_start_minute, schedule_end_minute, schedule_enabled, updated_at)
+     VALUES (?1, ?2, NULL, NULL, ?3, ?4, 1, CURRENT_TIMESTAMP)
      ON CONFLICT(telegram_user_id) DO UPDATE SET
        available=excluded.available,
        unavailable_until=NULL,
+       manual_override_until=NULL,
        schedule_start_minute=excluded.schedule_start_minute,
        schedule_end_minute=excluded.schedule_end_minute,
        schedule_enabled=1,
@@ -161,6 +226,7 @@ export async function cancelDailyAvailabilitySchedule(
   await db.prepare(
     `UPDATE staff_presence
      SET available=?2,
+         manual_override_until=NULL,
          schedule_start_minute=NULL,
          schedule_end_minute=NULL,
          schedule_enabled=0,
@@ -185,17 +251,14 @@ export async function markStaffActiveNow(
   if (!db) return;
   const row = await presenceRow(db, userId);
   if (row?.schedule_enabled === 1) {
-    await db.prepare(
-      `UPDATE staff_presence SET unavailable_until=NULL, updated_at=CURRENT_TIMESTAMP
-       WHERE telegram_user_id=?1`,
-    ).bind(userId).run();
-    return;
+    const result = await setManualAvailability(db, userId, true);
+    if (result.scheduled) return;
   }
   await db.prepare(
-    `INSERT INTO staff_presence (telegram_user_id, available, unavailable_until, updated_at)
-     VALUES (?1, 1, NULL, CURRENT_TIMESTAMP)
+    `INSERT INTO staff_presence (telegram_user_id, available, unavailable_until, manual_override_until, updated_at)
+     VALUES (?1, 1, NULL, NULL, CURRENT_TIMESTAMP)
      ON CONFLICT(telegram_user_id) DO UPDATE SET
-       available=1, unavailable_until=NULL, updated_at=CURRENT_TIMESTAMP`,
+       available=1, unavailable_until=NULL, manual_override_until=NULL, updated_at=CURRENT_TIMESTAMP`,
   ).bind(userId).run();
 }
 
@@ -215,6 +278,7 @@ export async function countAvailableStaff(db: D1Database | undefined): Promise<n
     `SELECT s.telegram_user_id,
             COALESCE(p.available, 1) AS available,
             p.unavailable_until,
+            p.manual_override_until,
             p.schedule_start_minute,
             p.schedule_end_minute,
             COALESCE(p.schedule_enabled, 0) AS schedule_enabled
@@ -231,7 +295,7 @@ export async function sweepStaffAvailability(
 ): Promise<StaffAvailabilityTransition[]> {
   if (!db) return [];
   const rows = await db.prepare(
-    `SELECT telegram_user_id, available, unavailable_until,
+    `SELECT telegram_user_id, available, unavailable_until, manual_override_until,
             schedule_start_minute, schedule_end_minute, schedule_enabled
      FROM staff_presence`,
   ).all<PresenceRow>();
@@ -239,16 +303,19 @@ export async function sweepStaffAvailability(
   const transitions: StaffAvailabilityTransition[] = [];
 
   for (const row of rows.results ?? []) {
-    const expiresAt = parseSqliteUtc(row.unavailable_until);
-    const expired = expiresAt !== null && expiresAt <= now.getTime();
+    const timerAt = parseSqliteUtc(row.unavailable_until);
+    const overrideAt = parseSqliteUtc(row.manual_override_until);
+    const timerExpired = timerAt !== null && timerAt <= now.getTime();
+    const overrideExpired = overrideAt !== null && overrideAt <= now.getTime();
     const effective = effectiveFromRow(row, now);
     const changed = row.available !== (effective ? 1 : 0);
 
-    if (expired || changed) {
+    if (timerExpired || overrideExpired || changed) {
       await db.prepare(
         `UPDATE staff_presence
          SET available=?2,
              unavailable_until=CASE WHEN unavailable_until IS NOT NULL AND unavailable_until<=CURRENT_TIMESTAMP THEN NULL ELSE unavailable_until END,
+             manual_override_until=CASE WHEN manual_override_until IS NOT NULL AND manual_override_until<=CURRENT_TIMESTAMP THEN NULL ELSE manual_override_until END,
              updated_at=CURRENT_TIMESTAMP
          WHERE telegram_user_id=?1`,
       ).bind(row.telegram_user_id, effective ? 1 : 0).run();
@@ -256,7 +323,8 @@ export async function sweepStaffAvailability(
 
     if (!changed) continue;
     let reason: StaffAvailabilityTransition["reason"];
-    if (expired) reason = "timer_expired";
+    if (timerExpired) reason = "timer_expired";
+    else if (overrideExpired) reason = "manual_override_expired";
     else reason = effective ? "schedule_started" : "schedule_ended";
     transitions.push({ telegramUserId: row.telegram_user_id, available: effective, reason });
   }
