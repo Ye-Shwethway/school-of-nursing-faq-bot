@@ -12,7 +12,7 @@ Production Telegram FAQ assistant for a university School of Nursing in Burmese,
 - normal production deployment remains explicit and guarded
 
 ## Current foundation
-Status: PRODUCTION LIVE; OWNER COMMAND-MENU HOTFIX IN PROMOTION
+Status: PRODUCTION LIVE; OWNER COMMAND-MENU HOTFIX DEPLOYED; TEST CI RACE FIXED
 
 Implemented:
 - multilingual FAQ + dynamic CRUD/revisions
@@ -56,6 +56,23 @@ Hotfix:
 Expected Owner menu after resync:
 `/start`, `/whoami`, `/admin`, `/admins`, `/faq`, `/adminmanual`, `/sudo`, `/ai`, `/staff`, `/ownermanual`, `/cancel`, `/reset`.
 
+## TEST CI race fix
+Observed Test Build run `32123681126` / job `95669489898`:
+- typecheck passed
+- local D1 migration validation passed
+- Wrangler dry-run passed
+- failure occurred only in `Refresh deployment artifact`
+- the workflow committed generated `deploy/worker.mjs` and attempted to push back to `test`
+- the push lost a race with a newer `test` commit and was rejected as non-fast-forward
+- concurrency then cancelled the obsolete run in favor of the newer waiting run
+
+Fix in `.github/workflows/test-typecheck.yml`:
+- Test Build is now read-only (`contents: read`)
+- no generated artifact is committed or pushed back to `test`
+- validated Worker bundle/checksum are prepared only in the run workspace
+- artifact upload includes all current `migrations/*.sql` instead of the stale list ending at 0006
+- `cancel-in-progress: true` remains intentional so only the newest test checkpoint needs to finish
+
 ## Production operational-data bootstrap
 Workflow: `.github/workflows/bootstrap-production-data.yml`
 
@@ -95,11 +112,11 @@ Wrangler enters `src/manual_entry.ts`.
 9. compatibility fallback + `/health`
 
 ## Next exact work
-1. promote Owner command-menu hotfix from `test` to `main`
-2. auto-deploy current main through tagged production cutover workflow
-3. verify Owner Telegram menu shows the full Owner command set
-4. configure production AI provider/API key through `/ai`
-5. verify grounded AI, fallback and human handoff
+1. verify the latest Test Build finishes clean with the read-only artifact flow
+2. verify Owner Telegram menu shows the full Owner command set
+3. configure production AI provider/API key through `/ai`
+4. verify grounded AI, fallback and human handoff
+5. once stable, promote the CI workflow cleanup from `test` to `main`
 
 ## Current migrations
 - 0001 initial
