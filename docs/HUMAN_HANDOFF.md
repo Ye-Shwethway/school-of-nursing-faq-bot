@@ -3,168 +3,92 @@
 Last updated: 2026-08-18
 
 ## Goal
-Escalate unresolved School of Nursing questions to authorized human staff without exposing staff identities to end users and without allowing multiple staff members to answer the same case simultaneously.
+Escalate unresolved School of Nursing questions to authorized human staff without exposing staff identities to end users and without mixing different users' conversations in the Staff Inbox.
 
-## Supported routing modes
-Owner controls the human handoff route:
+## Routing modes
+Owner controls:
 
-- `auto` — prefer the private Staff Inbox group when configured; otherwise use the dedicated staff responder.
-- `group` — send handoff cases only to the Staff Inbox group.
-- `dedicated` — send handoff cases only to the assigned staff member's private bot chat.
+- `auto` — prefer Staff Inbox group when configured; otherwise dedicated responder
+- `group` — Staff Inbox group only
+- `dedicated` — assigned staff member's private bot chat only
 
-`auto` is the recommended default because it keeps the group workflow available while providing a no-group fallback.
+The `/staff` inline control panel is the preferred UX. Legacy commands such as `/staff status`, `/staff route ...`, `/staff inbox here`, `/staff dedicated <id>`, `/staff add <id>`, and `/staff remove <id>` remain supported.
 
-Owner commands:
+## Staff Inbox setup
+Recommended topology: private Telegram supergroup with Topics enabled.
 
-- `/staff status`
-- `/staff route auto|group|dedicated`
-- `/staff inbox here`
-- `/staff dedicated <telegram_user_id>`
-- `/staff add <telegram_user_id>`
-- `/staff remove <telegram_user_id>`
+Bot permissions needed for the current workflow:
+- bot is an administrator
+- Manage Topics
+- Delete Messages is recommended for UI cleanup
 
-## Staff Inbox workflow
-The recommended multi-staff topology is a **private Staff Inbox supergroup**, not a broadcast channel.
+Owner can open `/staff` inside the group and tap **Set this group as Staff Inbox**. The current Telegram group ID is captured automatically; manual ID copy/paste is not required. Binding also selects group routing and keeps Owner available as staff.
 
-Why:
-- each staff member has an immutable Telegram user ID available to the bot
-- inline Take Over / Resolve controls work naturally
-- staff can reply to the bot's case message
-- the bot can enforce server-side authorization and ownership of a case
-- a plain channel is optimized for broadcasting and is awkward for multi-staff reply ownership
+## Per-user topic rule
+Group handoff and monitoring are user-isolated.
 
-If a channel is required for organizational reasons, use a linked private discussion group for the actual claim/reply workflow.
+Canonical mapping:
 
-## Dedicated staff workflow
-A Telegram group is optional.
+`(telegram_user_id, staff_chat_id) -> message_thread_id`
 
-Owner may assign one staff member as the dedicated human responder with:
+A user's routine monitoring, escalation card, Take Over state, human-control follow-up, and Return to AI controls stay in that user's topic.
 
-`/staff dedicated <telegram_user_id>`
+Topic title example:
 
-Before the assignment is saved, the Worker sends a private probe message to that Telegram user ID. The assignment is accepted only when Telegram confirms the bot can reach the private chat.
+`Mg Mg · @username · ID 123456789`
 
-Telegram bots cannot initiate a private conversation with an arbitrary user who has never opened the bot. Therefore the staff member must first open the School of Nursing bot and send `/start`.
+Message headers also carry identity/model context so staff can recognize the actor without scrolling to the topic title.
 
-A successful dedicated assignment also enables that Telegram user ID in `staff_members`.
+## Same-user concurrent first-message protection
+Migration `0008_monitoring_topic_provision_lock.sql` prevents two near-simultaneous first messages from the same user from creating duplicate forum topics.
 
-When a case is routed to the dedicated staff member:
+Only one request may provision that user's topic. Other concurrent requests wait for the canonical D1 mapping. If topic provisioning fails, group delivery fails closed rather than falling back to the Staff Inbox main chat.
 
-1. Bot sends the case card directly to that staff member's private chat.
-2. Staff taps **Take Over**.
-3. The case is atomically claimed in D1.
-4. Staff replies directly to the case message.
-5. Worker relays the answer to the student as `School of Nursing Staff` without revealing staff identity.
-6. Staff resolves the case when complete.
+## Dedicated responder
+Owner may assign one staff member with `/staff dedicated <telegram_user_id>`.
 
-The same D1 case ownership and anonymous relay rules are used for group and dedicated routes.
+The Worker probes that private chat before saving the assignment. Telegram bots cannot initiate a private chat with a user who has never opened the bot, so staff must first open the bot and send `/start`.
 
-## User experience
+## Escalation flow
 When deterministic FAQ and grounded AI cannot answer safely:
+1. create an escalation case in D1
+2. tell the user the question has been forwarded for staff review without promising an SLA
+3. route according to `handoff_route`
+4. for group route, post the case card inside the user's isolated forum topic
+5. for dedicated route, post directly to the assigned responder
 
-1. Create an escalation case in D1.
-2. Tell the user that the question has been forwarded to authorized School of Nursing staff.
-3. Do not promise a response time.
-4. Route the case according to `handoff_route`.
+If no valid destination accepts delivery, the case remains queued in D1 rather than being silently lost.
 
-If no valid destination is configured or Telegram delivery fails, the case remains queued in D1 rather than being lost. The Worker also attempts to notify the configured Bot Owner that the queued case was not delivered to a staff destination.
+## Take Over and anonymous reply
+Claiming remains atomic in D1. First authorized claimant wins.
 
-The user never sees the staff member's Telegram identity.
+After Take Over:
+- automated FAQ/AI for that user pauses
+- user follow-up stays in that user's topic
+- claimant replies are relayed to the user as `School of Nursing Staff`
+- claimant Telegram identity is not exposed to the user
 
-A human response is relayed by the bot using the neutral sender label:
+## Return to AI
+Only the current claimant or Bot Owner can return the conversation to automation.
 
-`School of Nursing Staff`
-
-## Staff case card
-Case cards may include:
-
-- case ID
-- routing mode
-- user's language
-- Telegram user ID
-- username when available
-- user name when available
-- exact question
-- AI handoff reason when safe to expose internally
-- prior canonical FAQ match state if relevant
-
-Inline controls:
-
-- `Take Over`
-- `Resolve`
-- `Release` may be added later for operational reassignment
-
-## Single-responder rule
-Claiming is atomic in D1.
-
-Canonical pattern:
-
-```sql
-UPDATE escalation_cases
-SET status = 'claimed', claimed_by = ?1, claimed_at = CURRENT_TIMESTAMP
-WHERE id = ?2
-  AND status = 'open'
-  AND claimed_by IS NULL;
-```
-
-The Worker checks whether the update changed exactly one row.
-
-- first authorized staff member wins
-- later Take Over attempts return `Already claimed`
-- replies from staff other than the claimant are rejected
-- the same rule applies even if multiple staff members tap at nearly the same time
-
-## Anonymous staff reply
-A claimant replies directly to the bot's original case message, whether that message is in the Staff Inbox group or a dedicated private staff chat.
-
-Worker logic:
-
-1. map `staff_chat_id + reply_to_message.message_id` to the escalation case
-2. verify sender is an active staff member
-3. verify case is claimed by that sender
-4. relay response to the original user's private chat through the bot
-5. store the relay in `escalation_messages`
-6. do not expose sender name, username, or Telegram ID to the user
-
-## Busy staff behavior
-A staff member does not need to answer immediately.
-
-Cases remain `open` until someone takes ownership and remain `claimed` until explicitly resolved. The user receives no fabricated interim answer and no promised SLA.
-
-A later operations slice may add reminders, stale-case alerts, reassignment, or escalation windows without changing the core handoff model.
+While human control is active, only the latest mirrored USER message carries the `Return to AI` button. New user traffic moves the button to the newest message and removes it from the previous one. Returning to AI or `/reset` cleans up the latest button.
 
 ## Staff authorization
-Human-support membership is separate from Sudo Admin authority.
+Human responder membership and Sudo Admin authority are separate:
+- `staff_members` controls human claim/reply eligibility
+- `admin_roles` controls Sudo Admin authority
+- Owner manages both surfaces
 
-- `staff_members` controls case claim/reply eligibility
-- Sudo Admin remains a privileged administration role
-- a person does not need Sudo privileges merely to answer students
-- Owner manages staff membership and routing
-
-## Configuration
-Operational settings live in `bot_settings`:
-
-- `staff_inbox_chat_id`
-- `dedicated_staff_id`
-- `handoff_route` = `auto`, `group`, or `dedicated`
-- `agent_persona` = `male` or `female`
-
-These identifiers are not credentials, but settings remain Owner-controlled.
-
-## Data
-Migration `0003_handoff_persona.sql` adds:
-
-- `bot_settings`
-- `staff_members`
-- `escalation_cases`
-- `escalation_messages`
-- case indexes
-
-Dedicated routing requires no additional schema migration because it uses `bot_settings` and the existing case delivery fields.
+## Relevant data
+- `bot_settings`: Staff Inbox ID, dedicated responder ID, route, monitoring mode
+- `staff_members`: human responder allow-list
+- `escalation_cases` / `escalation_messages`: handoff lifecycle and relay log
+- `conversation_control`: per-user AI/human mode and claimant
+- `monitoring_topics`: per-user Staff Inbox topic mapping
+- `monitoring_topic_provision_locks`: first-topic concurrency guard
 
 ## Safety rules
-- never send provider API keys, Cloudflare secrets, hidden AI prompts, or internal security configuration to staff destinations
-- staff sees only information needed to answer the case
-- never let AI fabricate a human answer after a case is handed off
-- do not reopen automated AI answering for a claimed case unless the case lifecycle explicitly permits it
-- resolve/close events remain attributable in D1
+- never expose provider keys, Cloudflare secrets, hidden prompts, or security configuration to staff destinations
+- never allow AI to continue answering after a successful human Take Over
+- never mix different users into the Staff Inbox main chat as a topic-creation fallback
+- preserve immutable Telegram numeric IDs as the authority key
