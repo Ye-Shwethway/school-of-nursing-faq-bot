@@ -31,8 +31,8 @@ const ADMIN_COMMANDS: BotCommand[] = [
   LIMITS_COMMAND,
   { command: "adminmanual", description: "Read the Sudo Admin manual" },
   { command: "noti", description: "Turn Staff Inbox notifications on or off" },
-  { command: "available", description: "Set or schedule my staff availability" },
-  { command: "unavailable", description: "Set unavailable or timed auto-return" },
+  { command: "available", description: "Set, schedule or cancel staff availability" },
+  { command: "unavailable", description: "Set or cancel timed unavailability" },
 ];
 
 const OWNER_COMMANDS: BotCommand[] = [
@@ -46,7 +46,7 @@ const OWNER_COMMANDS: BotCommand[] = [
   { command: "reset", description: "Reset transient conversation state" },
 ];
 
-const COMMAND_SYNC_REVISION = 10;
+const COMMAND_SYNC_REVISION = 11;
 
 export const COMMAND_SCHEMA_VERSION = JSON.stringify({
   revision: COMMAND_SYNC_REVISION,
