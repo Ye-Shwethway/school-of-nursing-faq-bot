@@ -22,6 +22,8 @@ const OWNER_COMMANDS: BotCommand[] = [
   { command: "sudo", description: "Manage Sudo Admin access" },
   { command: "ai", description: "Configure AI agent" },
   { command: "staff", description: "Configure staff and monitoring" },
+  { command: "cancel", description: "Cancel the current setup flow" },
+  { command: "reset", description: "Reset transient conversation state" },
 ];
 
 export const COMMAND_SCHEMA_VERSION = JSON.stringify({
