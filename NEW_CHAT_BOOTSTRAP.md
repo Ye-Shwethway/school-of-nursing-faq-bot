@@ -36,17 +36,18 @@ Cloudflare/GitHub live evidence always wins if it differs from this file.
 ## Current canonical Worker stack
 Wrangler entrypoint:
 
-`src/deployment_notice_entry.ts`
+`src/manual_entry.ts`
 
 Layer order:
-1. `deployment_notice_entry.ts` — revision-aware `🟢 Bot is Online!` notification after successful health request
-2. `latest_return_entry.ts` — newest-message Return to AI control during human takeover
-3. `monitoring_message_entry.ts` — user/model-aware staff mirror headers and isolated group handoff
-4. `staff_ux_entry.ts` — group-native `/staff` inline control panel and topic identity updates
-5. `ux_entry.ts` — typing/reply-to/Close/Back, `/cancel`, `/reset`, stale-AI generation guard
-6. `secure_entry.ts` — Owner AI secret/setup interception and best-effort secret-message deletion
-7. `runtime_entry.ts` — dynamic FAQ/AI/command integration
-8. `index.ts` — retained fallback/compatibility runtime
+1. `manual_entry.ts` — `/ownermanual`, `/adminmanual`, Owner edit/preview/save/discard
+2. `deployment_notice_entry.ts` — revision-aware `🟢 Bot is Online!` notification after successful health request
+3. `latest_return_entry.ts` — newest-message Return to AI control during human takeover
+4. `monitoring_message_entry.ts` — user/model-aware staff mirror headers and isolated group handoff
+5. `staff_ux_entry.ts` — group-native `/staff` inline control panel and topic identity updates
+6. `ux_entry.ts` — typing/reply-to/Close/Back, `/cancel`, `/reset`, stale-AI generation guard
+7. `secure_entry.ts` — Owner AI secret/setup interception and best-effort secret-message deletion
+8. `runtime_entry.ts` — dynamic FAQ/AI/command integration
+9. `index.ts` — retained fallback/compatibility runtime
 
 Do not bypass this stack or reconstruct a separate Worker artifact by hand.
 
@@ -59,20 +60,69 @@ Sudo Admin adds:
 - `/admin`
 - `/admins`
 - `/faq`
+- `/adminmanual`
 
 Owner adds:
 - `/sudo`
 - `/ai`
 - `/staff`
+- `/ownermanual`
 - `/cancel`
 - `/reset`
+
+Owner also inherits `/adminmanual` from the Admin command set.
 
 `/language` remains supported but hidden.
 
 Command menus are synced by Worker `setMyCommands`; authorization is still enforced server-side by immutable Telegram numeric ID.
 
+## Editable Owner/Admin manuals — migration 0009
+Migration:
+`migrations/0009_manuals.sql`
+
+Tables:
+- `manual_sections`
+- `manual_revisions`
+
+Runtime files:
+- `src/manual_store.ts`
+- `src/manual_entry.ts`
+
+Manuals are intentionally separate from FAQ knowledge. Editing a manual must not change deterministic FAQ matching, FAQ revisions, or AI grounding context.
+
+`/ownermanual`:
+- Owner read + edit
+- unavailable to Sudo Admins/normal users
+
+`/adminmanual`:
+- Owner read + edit
+- Sudo Admin read-only
+- unavailable to normal users
+
+Manual content is section-based and written in plain operational language. Current coverage includes:
+- Bot / AI / Human Staff layers
+- normal question flow
+- role-specific commands
+- FAQ maintenance
+- AI settings
+- Staff Inbox / monitoring / Take Over / Return to AI
+- deployment-online notices
+- safety/authority boundaries
+
+Owner edit flow:
+1. open `/ownermanual` or `/adminmanual`
+2. choose `Edit a section`
+3. choose section
+4. send complete replacement section text
+5. review preview
+6. choose `Save` or `Discard`
+
+`/cancel` can stop an active manual-edit session before save. Section body is limited to 3,500 characters for clean Telegram rendering. Every save increments the section version and stores the previous version in `manual_revisions`.
+
+See `docs/OPERATOR_MANUALS.md`.
+
 ## `/cancel` and `/reset`
-- `/cancel` deletes only the current `admin_sessions` wizard/setup state
+- `/cancel` deletes only the current `admin_sessions` wizard/setup state, including a pending manual edit
 - `/reset` clears transient conversation/session state and returns that user to AI mode
 - `/reset` preserves language, FAQ knowledge, AI credentials, model bindings, persona, roles, Staff Inbox, routing and monitoring settings
 
@@ -173,6 +223,8 @@ Current staff mirror AI header reads the actual bound provider/model from D1 and
 
 Owner + Sudo Admin `/faq` supports active D1 knowledge management with revisions and change notifications.
 
+FAQ storage and manual storage are separate subsystems.
+
 ## Deployment pipeline
 Workflow:
 `.github/workflows/deploy-test.yml`
@@ -216,20 +268,25 @@ After a successful `/health` request for a new `DEPLOY_REVISION`:
 - `0006_conversation_control_version.sql`
 - `0007_latest_control_message.sql`
 - `0008_monitoring_topic_provision_lock.sql`
+- `0009_manuals.sql`
 
 ## Current live validation focus
-Before `main` promotion validate on TEST:
-1. two or more different users can ask simultaneously and remain in separate topics
-2. same user can send two near-simultaneous first messages without duplicate topics
-3. no monitoring/handoff fallback mixes users in the main Staff Inbox chat
-4. group handoff card stays inside the correct user's topic
-5. Take Over affects only that user
-6. latest-message Return to AI button moves correctly
-7. stale in-flight AI answer is suppressed after Take Over/reset
-8. online notification arrives once per deployed revision to Owner/Sudo Admins
-9. runtime secrets/config remain intact after automated deploy
+Before `main` promotion validate on TEST when practical:
+1. `/ownermanual` appears for Owner, renders all Owner sections, and rejects non-Owner access
+2. `/adminmanual` renders for Owner/Sudo Admin; Sudo Admin is read-only
+3. Owner manual edit preview/save/discard works and `/cancel` abandons pending edit
+4. editing manuals does not change FAQ/AI knowledge behavior
+5. two or more different users can ask simultaneously and remain in separate topics
+6. same user can send two near-simultaneous first messages without duplicate topics
+7. no monitoring/handoff fallback mixes users in the main Staff Inbox chat
+8. group handoff card stays inside the correct user's topic
+9. Take Over affects only that user
+10. latest-message Return to AI button moves correctly
+11. stale in-flight AI answer is suppressed after Take Over/reset
+12. online notification arrives once per deployed revision to Owner/Sudo Admins
+13. runtime secrets/config remain intact after automated deploy
 
-Do not merge `main` until these live checks are green.
+Do not merge `main` until the chosen TEST checks are green.
 
 ## Documentation rule
 After every meaningful runtime/deployment/architecture slice, update this file before stopping. `NEW_CHAT_BOOTSTRAP.md` must represent the actual live repository handoff, not an older planned state.
