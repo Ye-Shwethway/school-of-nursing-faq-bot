@@ -12,7 +12,7 @@ Production Telegram FAQ assistant for a university School of Nursing in Burmese,
 - relevant `main` pushes run the single production pipeline automatically.
 
 ## Current foundation
-Status: PRODUCTION LIVE; MAIN-ONLY PIPELINE ACTIVE
+Status: PRODUCTION LIVE; MAIN-ONLY PIPELINE ACTIVE; AI SETUP HARDENED
 
 Implemented:
 - multilingual dynamic FAQ
@@ -26,6 +26,8 @@ Implemented:
 - Owner command registry verified through Telegram read-back
 - TEST deployment notices suppressed at runtime
 - TEST/one-time workflow clutter retired
+- production runtime-binding preflight/postflight checks
+- AI API-key setup now catches encryption/configuration failures and returns an explicit Owner-visible error instead of silently stopping
 
 ## Verified production checkpoint
 - production D1 and Worker are healthy
@@ -33,23 +35,33 @@ Implemented:
 - production Telegram webhook cutover completed green
 - `/start` works through production
 - Owner menu shows the expected 12 commands after exact Telegram read-back verification
-- production uses a fresh `AI_CONFIG_MASTER_KEY`
-- production AI provider credential still needs `/ai` setup
+- `BOT_OWNER_TELEGRAM_ID` is required as a Cloudflare `secret_text` binding
+- `AI_CONFIG_MASTER_KEY` is required as a Cloudflare `secret_text` binding
+- production AI provider credential setup is the current active validation target
+
+## AI configuration contract
+`AI_CONFIG_MASTER_KEY` must be Base64 representing exactly 32 random bytes. It is used as the AES-GCM key for encrypting provider credentials in D1.
+
+Changing the master key invalidates credentials encrypted with an older master key; those provider credentials must be entered again through `/ai`.
+
+`secure_entry.ts` now catches AI setup encryption/configuration exceptions, best-effort deletes submitted secret input, and sends a clear recovery message to the Owner instead of allowing the webhook path to fail silently.
 
 ## Single production workflow
 Canonical workflow: `.github/workflows/deploy-production.yml`
 
 Relevant `main` pushes perform:
-1. dependency install
-2. typecheck
-3. isolated production Wrangler config generation
-4. local D1 migration validation
-5. production Worker dry-run bundle validation
-6. remote production D1 migrations
-7. production Worker deploy
-8. production `/health` verification requiring `environment=production`
-9. one-time nonce-gated Owner command resync
-10. exact Telegram `getMyCommands` read-back of all 12 Owner commands
+1. production credential and runtime-binding preflight
+2. dependency install
+3. typecheck
+4. isolated production Wrangler config generation
+5. local D1 migration validation
+6. production Worker dry-run bundle validation
+7. remote production D1 migrations
+8. production Worker deploy
+9. runtime-binding postflight
+10. production `/health` verification requiring `environment=production`
+11. one-time nonce-gated Owner command resync
+12. exact Telegram `getMyCommands` read-back of all 12 Owner commands
 
 Only this workflow remains active in `.github/workflows`.
 
@@ -84,11 +96,11 @@ Wrangler enters `src/manual_entry.ts`.
 9. compatibility fallback + `/health`
 
 ## Next exact work
-1. verify the consolidated main-only production pipeline completes green
-2. fix the remaining `/ai` Owner authorization inconsistency if still reproducible
-3. configure production AI provider/API key through `/ai`
-4. verify grounded AI, fallback and human handoff
-5. continue feature work directly on `main` in small validated slices
+1. replace production `AI_CONFIG_MASTER_KEY` with a valid 32-byte Base64 Cloudflare secret
+2. let the current main production pipeline deploy the hardened AI setup handler
+3. rerun `/ai` -> Google Gemini -> send the Gemini API key privately
+4. verify encrypted credential save, key-message deletion, model fetch and model binding
+5. verify grounded AI, fallback and human handoff
 
 ## Current migrations
 0001 through 0010. Canonical 0010: `migrations/0010_manual_newline_cleanup.sql`.
