@@ -16,7 +16,12 @@ Live repository plus verified Cloudflare/Telegram evidence outranks remembered c
 ## Current checkpoint
 The project is main-only and production-live. FAQ-first onboarding, false-escalation filtering, rotated Telegram token + automatic webhook cutover, rotated AI master-key credential save, Bot Owner takeover override, and deployment reboot `Change:` metadata are live-accepted.
 
-Newest implementation on `main` adds **AI outage operational alerts while preserving FAQ + human fallback continuity**. Do not call this newest slice production-green until production workflow and controlled outage/recovery acceptance are verified.
+Newest implementation on `main` changes AI outage visibility to **state-transition-only alerts** while preserving FAQ + human fallback continuity. Do not call this newest slice production-green until production workflow and controlled outage/recovery acceptance are verified.
+
+## Product priority contract
+- Deterministic FAQ and Human Staff response are the primary service continuity paths.
+- AI is a supplementary helper, not a dependency for user↔staff communication.
+- Free-tier/provider outages are expected operational conditions and must not create alert spam or break human handoff.
 
 ## AI outage / fallback contract
 - AI infrastructure/configuration failure must not reduce the bot to FAQ-only mode.
@@ -30,21 +35,17 @@ Newest implementation on `main` adds **AI outage operational alerts while preser
 ## Operational AI alerts
 `src/ai_outage_alert.ts` owns outage/recovery visibility.
 
-On AI infrastructure failure:
-1. persist/throttle outage state in existing `bot_settings`
-2. send `🚨 AI service unavailable` to Bot Owner private chat
-3. also send to the configured Staff Inbox when present
-4. show safe internal reason
-5. show `Human fallback: ACTIVE` when staff destination exists
-6. show `Human fallback: QUEUED ONLY` when cases can be logged but no staff destination is configured
-7. same reason alerts at most once per 30 minutes; a different reason may alert immediately
+Alert semantics are state-transition-only:
+1. healthy → outage: persist one outage marker and send one `🚨 AI service unavailable` notice to Bot Owner private chat and configured Staff Inbox
+2. while outage remains active: send no further outage notices, regardless of duration or changes in underlying error reason
+3. outage → recovered: clear outage marker and send one `🟢 AI service recovered` notice
+4. after recovery, a later new outage may again send one outage notice
 
-On the first later valid AI decision:
-- clear outage marker
-- send one `🟢 AI service recovered` operational notice
-- normal FAQ/AI/handoff behavior continues
+The outage alert shows a safe internal reason and:
+- `Human fallback: ACTIVE` when a staff destination exists
+- `Human fallback: QUEUED ONLY` when cases can be logged but no staff destination is configured
 
-Migration `0029_manual_ai_outage_fallback.sql` adds Owner/Admin manual guidance. No new table/schema is needed beyond the manual rows because outage state uses `bot_settings`.
+No time-based repeat throttle remains. Migration `0030_manual_ai_outage_transition_only.sql` updates Owner/Admin manual guidance. Outage state continues to use existing `bot_settings`; no new table is needed.
 
 ## Human-control lease contract
 - Every successful `Take Over` starts a 1-hour inactivity lease.
@@ -94,7 +95,7 @@ Top flow:
 
 Important ownership:
 - `ai_runtime.ts` — grounded AI execution + outage/recovery signaling
-- `ai_outage_alert.ts` — throttled operational AI outage/recovery notices
+- `ai_outage_alert.ts` — transition-only operational AI outage/recovery notices
 - `latest_return_entry.ts` — Return-to-AI button cleanup, `Extend 1h`, claimant renewal, Owner override
 - `deployment_notice_entry.ts` — production online notice with revision/change metadata
 
@@ -107,7 +108,7 @@ Important ownership:
 - Staff Inbox human takeover/resolve/return-to-AI
 - Owner override of stale Admin takeover
 - 1-hour human-control lease + auto-return
-- AI outage alert + human fallback continuity + recovery notice
+- transition-only AI outage/recovery alert + human fallback continuity
 - reboot notice with revision + deployed change summary
 - `/limits`, progressive inquiry limits, Interaction Flood Guard
 - Owner-only permanent ban/unban
@@ -121,22 +122,23 @@ Owner adds: `/sudo`, `/ai`, `/staff`, `/clearmessage`, `/ownermanual`, `/cancel`
 Command schema revision: **9**. Sudo total: **12**. Owner total: **19**.
 
 ## Migrations / manuals
-Current migration range: `0001` through `0029`.
-Newest migration: `0029_manual_ai_outage_fallback.sql`.
+Current migration range: `0001` through `0030`.
+Newest migration: `0030_manual_ai_outage_transition_only.sql`.
 
 ## Next exact validation
 After the triggered production workflow is green:
-1. verify migration 0029/deploy/health/webhook/commands pass
+1. verify migration 0030/deploy/health/webhook/commands pass
 2. controlled test: make AI unavailable while keeping FAQ/D1/Telegram intact
 3. FAQ match must still answer normally
 4. meaningful FAQ miss must still create/log human handoff
 5. Owner + configured Staff Inbox receive one outage alert
-6. same reason must not alert again within 30 minutes
+6. repeat AI failures during the same outage must produce no additional outage alert, even after a long interval or if the underlying reason changes
 7. alert must correctly show `ACTIVE` versus `QUEUED ONLY`
 8. user must not see provider/key details
 9. intentional knowledge-gap AI handoff must not emit outage alert
-10. restore AI and confirm one recovery notice + normal grounded answer
-11. existing human-control lease and Owner override remain operational
+10. restore AI and confirm exactly one recovery notice + normal grounded answer
+11. trigger a later new outage and confirm one new outage alert is allowed
+12. existing human-control lease and Owner override remain operational
 
 ## Documentation rule
 After every behavior/schema/deployment slice, keep `ROADMAP.md`, this file, manuals and `docs/TELEGRAM_DESIGN_RULES.md` synchronized with live repository reality.
