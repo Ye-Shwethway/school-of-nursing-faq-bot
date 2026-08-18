@@ -17,6 +17,7 @@ const PUBLIC_COMMANDS: BotCommand[] = [
   WHOAMI_COMMAND,
 ];
 
+// Keep privileged ordering stable because production verifies the exact Owner read-back order.
 const ADMIN_COMMANDS: BotCommand[] = [
   START_COMMAND,
   LANGUAGE_COMMAND,
@@ -41,7 +42,7 @@ const OWNER_COMMANDS: BotCommand[] = [
   { command: "reset", description: "Reset transient conversation state" },
 ];
 
-const COMMAND_SYNC_REVISION = 6;
+const COMMAND_SYNC_REVISION = 7;
 
 export const COMMAND_SCHEMA_VERSION = JSON.stringify({
   revision: COMMAND_SYNC_REVISION,
