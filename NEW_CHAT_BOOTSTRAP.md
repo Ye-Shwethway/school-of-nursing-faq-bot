@@ -15,7 +15,7 @@ Read in order:
 Treat live repository plus verified Cloudflare/Telegram evidence as authoritative over remembered chat context.
 
 ## Current checkpoint
-Production infrastructure, operational data and Telegram webhook cutover are green. `/start` works on production. The Owner command-menu sync bug has been fixed and promoted; TEST CI has also been cleaned up after a self-push race caused failed/cancelled validation noise.
+Production infrastructure, operational data and Telegram webhook cutover are green. `/start` works on production. The Owner command-menu sync bug has been fixed and promoted. TEST CI has also been cleaned up after self-push and cancellation noise.
 
 Verified production evidence:
 - isolated production D1 `school-of-nursing-faq-bot-prod-db` exists
@@ -43,22 +43,17 @@ Expected Owner command menu:
 `/start`, `/whoami`, `/admin`, `/admins`, `/faq`, `/adminmanual`, `/sudo`, `/ai`, `/staff`, `/ownermanual`, `/cancel`, `/reset`.
 
 ## TEST Build workflow cleanup
-Failed/cancelled evidence:
-- run `32123681126`
-- job `95669489898`
-- typecheck PASS
-- local D1 migration validation PASS
-- Wrangler dry-run PASS
-- failure only at generated artifact refresh push-back to `test`
-- push was rejected as non-fast-forward because a newer commit had reached `test`
-- concurrency then cancelled the stale run in favor of the newer waiting request
+Observed failed/cancelled evidence:
+- run `32123681126` / job `95669489898`: typecheck, local D1 migrations and Wrangler dry-run passed; generated artifact self-push lost a non-fast-forward race
+- run `32124026795` / job `95670512070`: typecheck passed; D1 validation was cancelled only because a newer `test` push arrived while `cancel-in-progress: true` was enabled
 
-Fix in `.github/workflows/test-typecheck.yml`:
+Current `.github/workflows/test-typecheck.yml` contract:
 - `contents: read`
-- Test Build no longer commits/pushes generated artifacts into `test`
+- no generated artifact commits or pushes back to `test`
 - generated Worker/checksum exist only in the runner workspace and uploaded handoff artifact
-- handoff bundle now includes all `migrations/*.sql`, eliminating the stale list that ended at migration 0006
-- `cancel-in-progress: true` remains intentional for obsolete test checkpoints
+- handoff bundle includes all `migrations/*.sql`
+- push trigger is path-scoped to source/config/migrations/workflow files; ROADMAP/BOOTSTRAP-only commits do not run Test Build
+- `cancel-in-progress: false`, so closely spaced relevant pushes queue instead of producing cancelled runs
 
 ## Canonical Worker stack
 Wrangler entrypoint: `src/manual_entry.ts`
@@ -110,7 +105,7 @@ Workflow: `.github/workflows/production-telegram-cutover-once.yml`
 The workflow deploys current main, verifies production health, uses a one-time D1 nonce to authorize the Worker cutover endpoint, calls Telegram `setWebhook`, verifies exact production URL through `getWebhookInfo`, refreshes command scopes and performs final health verification.
 
 ## Next exact sequence
-1. verify latest Test Build is green with the read-only artifact flow
+1. verify latest path-scoped Test Build finishes green without cancellation noise
 2. verify Owner Telegram menu shows all Owner commands
 3. configure production AI provider/API key through `/ai`
 4. verify grounded AI + fallback/handoff
