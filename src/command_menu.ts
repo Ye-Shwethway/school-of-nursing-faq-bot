@@ -8,6 +8,7 @@ export type BotCommand = {
 const PUBLIC_COMMANDS: BotCommand[] = [
   { command: "start", description: "Start School of Nursing assistant" },
   { command: "language", description: "Change language" },
+  { command: "faq", description: "Browse School of Nursing FAQs" },
   { command: "whoami", description: "Show my Telegram identity" },
 ];
 
@@ -15,7 +16,6 @@ const ADMIN_COMMANDS: BotCommand[] = [
   ...PUBLIC_COMMANDS,
   { command: "admin", description: "Open administrator tools" },
   { command: "admins", description: "List authorized administrators" },
-  { command: "faq", description: "Manage FAQ knowledge" },
   { command: "adminmanual", description: "Read the Sudo Admin manual" },
   { command: "noti", description: "Turn Staff Inbox notifications on or off" },
   { command: "available", description: "Mark myself available for staff replies" },
@@ -33,7 +33,7 @@ const OWNER_COMMANDS: BotCommand[] = [
   { command: "reset", description: "Reset transient conversation state" },
 ];
 
-const COMMAND_SYNC_REVISION = 5;
+const COMMAND_SYNC_REVISION = 6;
 
 export const COMMAND_SCHEMA_VERSION = JSON.stringify({
   revision: COMMAND_SYNC_REVISION,
