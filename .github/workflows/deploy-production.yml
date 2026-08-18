@@ -97,6 +97,7 @@ jobs:
             workers_dev: true,
             preview_urls: false,
             vars: { APP_ENV: 'production' },
+            triggers: source.triggers,
             d1_databases: [{binding:'DB',database_name:process.env.PRODUCTION_D1_DATABASE_NAME,database_id:process.env.PRODUCTION_D1_DATABASE_ID,migrations_dir:'migrations'}]
           }, null, 2));
           NODE
@@ -215,5 +216,6 @@ jobs:
             echo "- Telegram webhook cutover/read-back: PASS"
             echo "- Owner command setMyCommands: PASS"
             echo "- Owner command getMyCommands read-back: PASS (19/19)"
+            echo "- Cron triggers copied from canonical Wrangler config: PASS"
             echo "- TEST pipeline: none"
           } >> "$GITHUB_STEP_SUMMARY"
