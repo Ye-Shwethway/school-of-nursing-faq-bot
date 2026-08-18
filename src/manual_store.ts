@@ -73,6 +73,39 @@ export async function getManualSection(
   return row ? mapSection(row) : null;
 }
 
+export async function createManualSection(
+  db: D1Database,
+  manualKey: ManualKey,
+  title: string,
+  body: string,
+  actorId: number,
+): Promise<ManualSection> {
+  const maxRow = await db.prepare(
+    `SELECT COALESCE(MAX(sort_order), 0) AS max_sort
+     FROM manual_sections WHERE manual_key=?1`,
+  ).bind(manualKey).first<{ max_sort: number }>();
+
+  const sortOrder = Number(maxRow?.max_sort ?? 0) + 10;
+  const sectionKey = `custom-${crypto.randomUUID()}`;
+  const normalizedTitle = normalizeManualText(title).trim();
+  const normalizedBody = normalizeManualText(body).trim();
+
+  await db.prepare(
+    `INSERT INTO manual_sections
+      (manual_key, section_key, title, body, sort_order, version, updated_by, updated_at)
+     VALUES (?1, ?2, ?3, ?4, ?5, 1, ?6, CURRENT_TIMESTAMP)`,
+  ).bind(manualKey, sectionKey, normalizedTitle, normalizedBody, sortOrder, actorId).run();
+
+  return {
+    manualKey,
+    sectionKey,
+    title: normalizedTitle,
+    body: normalizedBody,
+    sortOrder,
+    version: 1,
+  };
+}
+
 export async function updateManualSection(
   db: D1Database,
   manualKey: ManualKey,
