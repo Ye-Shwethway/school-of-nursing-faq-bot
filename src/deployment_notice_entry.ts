@@ -161,6 +161,10 @@ async function claimRevisionNotice(env: Env, revision: string): Promise<boolean>
 }
 
 async function notifyDeploymentOnline(env: Env): Promise<void> {
+  // TEST and PRODUCTION share the same Telegram bot token. TEST deployments must
+  // never inject operational status messages into the live Owner chat.
+  if (env.APP_ENV !== "production") return;
+
   const revision = env.DEPLOY_REVISION?.trim();
   if (!revision || !env.DB || !env.TELEGRAM_BOT_TOKEN) return;
   if (!await claimRevisionNotice(env, revision)) return;
