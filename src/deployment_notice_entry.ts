@@ -167,7 +167,7 @@ async function releaseRevisionNotice(env: Env, revision: string): Promise<void> 
       `DELETE FROM bot_settings WHERE setting_key=?1`,
     ).bind(`deploy_online:${revision}`).run();
   } catch {
-    // A later health request can still retry if cleanup succeeds then.
+    // Retry release is best-effort and must not affect health.
   }
 }
 
@@ -179,6 +179,12 @@ async function notifyDeploymentOnline(env: Env): Promise<void> {
   const revision = env.DEPLOY_REVISION?.trim();
   if (!revision || !env.DB || !env.TELEGRAM_BOT_TOKEN) return;
   if (!await claimRevisionNotice(env, revision)) return;
+
+  const owner = ownerId(env);
+  if (owner === null) {
+    await releaseRevisionNotice(env, revision);
+    return;
+  }
 
   const shortRevision = revision.slice(0, 8);
   const text = [
@@ -193,21 +199,18 @@ async function notifyDeploymentOnline(env: Env): Promise<void> {
     "Telegram webhook, FAQ, AI, staff handoff, monitoring, and manuals are ready.",
   ].join("\n");
 
-  const targets = await notificationTargets(env);
-  const deliveries = await Promise.allSettled(
-    targets.map((chatId) => telegramApi(env, "sendMessage", { chat_id: chatId, text })),
-  );
-  const delivered = deliveries.some(
-    (result) => result.status === "fulfilled" && result.value !== null,
-  );
-
-  // The revision claim is only durable when at least one operational recipient
-  // actually received the notice. If Telegram delivery fails completely, release
-  // the claim so the next successful /health request can retry the same revision.
-  if (!delivered) {
+  // The Owner is the authoritative recipient for operational deploy notices.
+  // Sudo delivery is best-effort and must never suppress a retry when Owner delivery fails.
+  const ownerDelivery = await telegramApi(env, "sendMessage", { chat_id: owner, text });
+  if (!ownerDelivery) {
     await releaseRevisionNotice(env, revision);
     return;
   }
+
+  const targets = (await notificationTargets(env)).filter((chatId) => chatId !== owner);
+  await Promise.allSettled(
+    targets.map((chatId) => telegramApi(env, "sendMessage", { chat_id: chatId, text })),
+  );
 
   try {
     await env.DB.prepare(
