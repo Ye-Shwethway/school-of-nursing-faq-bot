@@ -15,24 +15,24 @@ Read in order:
 Treat live repository plus verified Cloudflare/Telegram evidence as authoritative over remembered chat context.
 
 ## Current checkpoint
-First repository promotion to `main` is complete. Production provisioning is active.
+Production infrastructure and approved operational data are green. Telegram production cutover is armed as a one-time automated main-push operation.
 
-Verified production evidence:
-- isolated D1 `school-of-nursing-faq-bot-prod-db` exists
+Verified evidence:
+- isolated production D1 `school-of-nursing-faq-bot-prod-db` exists
 - its UUID is stored as GitHub secret `CLOUDFLARE_PRODUCTION_D1_DATABASE_ID`
 - guarded production deploy from `main` is green
 - production Worker `school-of-nursing-faq-bot` is deployed
 - production `/health` passes with `environment=production`
-- production Worker runtime secrets have been added: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET`, `BOT_OWNER_TELEGRAM_ID`, `AI_CONFIG_MASTER_KEY`
-- production uses a fresh `AI_CONFIG_MASTER_KEY`; encrypted TEST AI credentials must not be copied
-
-Telegram webhook has NOT been moved to production yet. Current user traffic remains on TEST until production operational data is bootstrapped and smoke-tested.
+- production Worker runtime secrets exist: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET`, `BOT_OWNER_TELEGRAM_ID`, `AI_CONFIG_MASTER_KEY`
+- production uses a fresh `AI_CONFIG_MASTER_KEY`; encrypted TEST AI credentials were intentionally not copied
+- `Bootstrap PRODUCTION operational data` completed green
+- approved FAQ/manual/admin/staff/settings state is initialized in production
 
 ## Canonical Worker stack
 Wrangler entrypoint: `src/manual_entry.ts`
 
 1. `manual_entry.ts` — Owner/Admin manual pager/edit/add + command sync
-2. `deployment_notice_entry.ts` — deploy-health command sync + online notice
+2. `deployment_notice_entry.ts` — deploy-health command sync + online notice + production-only nonce-gated Telegram cutover endpoint
 3. `latest_return_entry.ts` — latest Return-to-AI control
 4. `monitoring_message_entry.ts` — monitoring presentation + isolated handoff
 5. `staff_ux_entry.ts` — Staff Inbox UX
@@ -41,6 +41,11 @@ Wrangler entrypoint: `src/manual_entry.ts`
 8. `runtime_entry.ts` — dynamic FAQ / AI / commands
 9. `index.ts` — compatibility fallback + `/health`
 
+## Runtime contract
+`Dynamic FAQ -> Primary AI -> Fallback AI -> Human Handoff`
+
+Approved active FAQ data is the grounding source. AI/config failure fails closed to human review.
+
 ## Commands
 Normal user: `/start`, `/whoami`
 
@@ -48,72 +53,64 @@ Sudo Admin adds: `/admin`, `/admins`, `/faq`, `/adminmanual`
 
 Owner adds: `/sudo`, `/ai`, `/staff`, `/ownermanual`, `/cancel`, `/reset`; Owner inherits `/adminmanual`.
 
-## Manuals
-`/ownermanual`: Owner read/edit/add.
+## Production operational data
+Workflow: `.github/workflows/bootstrap-production-data.yml`
 
-`/adminmanual`: Owner read/edit/add; Sudo Admin read-only.
-
-Manual UX uses a single-message pager with Previous/Next, Owner-only Edit/Add controls and Close. Manual storage remains isolated from FAQ/AI knowledge.
-
-## AI / FAQ / human runtime
-Runtime contract:
-`Dynamic FAQ -> Primary AI -> Fallback AI -> Human Handoff`
-
-Approved active FAQ data is the grounding source. AI/config failure fails closed to human review.
-
-## Multiuser / Staff Inbox
-Each Telegram user has independent profile/language, logs, control state, claimant, monitoring topic and AI/human lifecycle. Migration 0008 guards same-user first-message topic provisioning. Staff-side delivery fails closed instead of mixing users.
-
-## TEST deployment
-`.github/workflows/deploy-test.yml` remains the normal development deployment path for `test`.
-
-## PRODUCTION deployment
-`.github/workflows/deploy-production.yml` is manual-only, main-only and guarded by confirmation `DEPLOY_PRODUCTION`.
-
-Production health endpoint resolution is dynamic through Cloudflare API; do not hard-code the account workers.dev subdomain.
-
-## Production operational-data bootstrap
-Workflow:
-`.github/workflows/bootstrap-production-data.yml`
-
-Purpose: copy only approved operational state from TEST D1 to isolated PRODUCTION D1.
-
-Manual trigger contract:
-- run from `main`
-- confirmation `BOOTSTRAP_PRODUCTION_DATA`
-
-Copied:
+Copied from TEST allow-list:
 - current `faq_entries`
 - current `manual_sections`
 - `admin_roles`
 - `staff_members`
-- operator identity rows needed for Admin/Staff labels
-- allow-listed `bot_settings`: `agent_persona`, `monitoring_mode`, `staff_inbox_chat_id`, `handoff_route`, `dedicated_staff_id`
+- operator identity rows required for labels
+- `agent_persona`, `monitoring_mode`, `staff_inbox_chat_id`, `handoff_route`, `dedicated_staff_id`
 
-Intentionally NOT copied:
-- user question/history data
+Intentionally not copied:
+- ordinary user/question history
 - escalation/case history
 - conversation-control state
 - monitoring-topic mappings
 - admin sessions
-- AI provider credentials, model cache/tests/bindings
-- deployment markers and command-sync fingerprints
+- AI provider credentials/cache/tests/bindings
+- deployment markers / command-sync fingerprint
 
-The workflow verifies source/destination content counts, deletes the production command-schema fingerprint, then calls production `/health` so role-scoped Telegram command menus rebuild against copied production roles.
+## One-time Telegram production cutover
+Runtime endpoint:
+`POST /ops/telegram/cutover`
 
-Because production uses a fresh `AI_CONFIG_MASTER_KEY`, AI provider credentials must be configured again through production `/ai` after webhook cutover (or through a later purpose-built secret migration flow; never raw-copy encrypted TEST credentials).
+Workflow:
+`.github/workflows/production-telegram-cutover-once.yml`
 
-## Telegram go-live boundary
-One Telegram bot token has one active webhook destination. Do not move the webhook until production operational-data bootstrap is green.
+Trigger:
+- push to `main`
+- job runs only when the head commit message contains `[production-cutover]`
 
-Next exact sequence:
-1. promote this bootstrap workflow/docs from `test` to `main`
-2. manually run `Bootstrap PRODUCTION operational data` with `BOOTSTRAP_PRODUCTION_DATA`
-3. verify green bootstrap + production health
-4. move Telegram webhook to production
-5. smoke-test `/start`, FAQ, Owner/Admin commands, manuals and Staff Inbox
-6. configure production AI provider/API key with `/ai`
-7. verify grounded AI + fallback/handoff path
+Flow:
+1. typecheck current main
+2. generate isolated production Wrangler config
+3. apply production migrations
+4. deploy current main to production
+5. resolve real workers.dev production origin through Cloudflare API
+6. verify production health
+7. generate a high-entropy one-time nonce and mask it in GitHub Actions
+8. store nonce in production D1
+9. call production `/ops/telegram/cutover` with the nonce
+10. Worker atomically consumes the nonce
+11. Worker uses its own runtime `TELEGRAM_BOT_TOKEN` + `TELEGRAM_WEBHOOK_SECRET` to call Telegram `setWebhook`
+12. Worker calls `getWebhookInfo` and requires exact production URL read-back
+13. refresh role-scoped command menus
+14. final production health check
+
+The bot token is never copied into GitHub Actions. The cutover endpoint is production-only and unusable without the current one-time D1 nonce.
+
+Normal future `main` promotions do not retrigger cutover because they will not carry the `[production-cutover]` head-commit tag.
+
+## Post-cutover next work
+After cutover workflow is verified green:
+1. smoke-test `/start`, FAQ, Owner/Admin commands, manuals and Staff Inbox on production
+2. configure production AI provider/API key through `/ai` because production uses a fresh master key
+3. verify grounded AI + fallback/handoff
+4. remove the one-time cutover workflow from the repository
+5. continue future development through `test -> validate -> main`; user should not need to manage branches manually
 
 ## Current migrations
 - 0001 initial
