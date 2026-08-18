@@ -14,12 +14,17 @@ Read in order:
 
 Treat live repository plus verified Cloudflare/Telegram evidence as authoritative over remembered chat context.
 
-## Branch contract
-- work on `test`
-- do not implement directly on `main`
-- TEST Worker: `school-of-nursing-faq-bot-test`
-- production Worker: `school-of-nursing-faq-bot`
-- `main` is not promoted yet
+## Current checkpoint
+The TEST bot is functionally mature enough for the first repository promotion to `main`.
+
+Do not add more feature slices before that promotion unless a blocking regression is found.
+
+Important branch state at this checkpoint:
+- `main` still represents the original bootstrap-era source and has never received the developed bot stack
+- `test` contains the full current implementation
+- the first `test` -> `main` promotion is now the next repository milestone
+
+Merging to `main` does NOT automatically deploy Cloudflare production.
 
 ## Current canonical Worker stack
 Wrangler entrypoint: `src/manual_entry.ts`
@@ -34,8 +39,6 @@ Layer order:
 7. `secure_entry.ts` — Owner AI secret/setup interception
 8. `runtime_entry.ts` — dynamic FAQ/AI/command integration
 9. `index.ts` — compatibility fallback
-
-Do not bypass this stack or hand-build a separate Worker artifact.
 
 ## Commands
 Normal user:
@@ -58,66 +61,38 @@ Owner adds:
 
 Owner also inherits `/adminmanual`. `/language` remains supported but hidden.
 
-Role-scoped command menus use Telegram `setMyCommands`. Deploy health runs command registry sync before the online notice; `manual_entry.ts` also syncs before intercepting manual commands. Lower `runtime_entry.ts` remains a self-heal path.
+Role-scoped menus use Telegram `setMyCommands`. Command registry synchronization occurs during deploy health, before outer manual interception, and through the lower runtime self-heal path.
 
 ## Editable Owner/Admin manuals
-Manual storage is completely separate from FAQ knowledge and AI grounding.
+Manual storage is separate from FAQ knowledge and AI grounding.
 
-Commands:
-- `/ownermanual` — Owner read/edit/add only
-- `/adminmanual` — Owner read/edit/add, Sudo Admin read-only
+`/ownermanual`:
+- Owner read/edit/add
 
-Schema:
-- `migrations/0009_manuals.sql`
-- `manual_sections`
-- `manual_revisions`
+`/adminmanual`:
+- Owner read/edit/add
+- Sudo Admin read-only
 
-### Current manual UX — single-message pager
-Opening a manual sends one section in one Telegram message only.
-
-Controls:
-- `◀ Previous`
-- page indicator such as `2/8`
-- `Next ▶`
+Manual UX:
+- one Telegram message per open manual view
+- `◀ Previous` / page indicator / `Next ▶`
 - Owner-only `✎ Edit this section`
 - Owner-only `＋ Add new section`
 - `✕ Close`
+- page navigation uses edit-in-place
 
-Page navigation uses `editMessageText`, so browsing reuses the same Telegram message instead of flooding chat. Sudo Admins can navigate `/adminmanual` pages but cannot edit or add.
+Edit flow:
+`Open -> navigate -> Edit -> replacement body -> Preview -> Save/Discard`
 
-### Edit existing section
-Owner flow:
-1. open manual
-2. navigate to section
-3. tap `Edit this section`
-4. send complete replacement text
-5. review Preview
-6. choose `Save` or `Discard`
+Add flow:
+`Open -> Add new section -> title -> body -> Preview -> Add/Discard`
 
-Each save increments the section version and archives the previous text.
-
-### Add new section
-Owner flow:
-1. open `/ownermanual` or `/adminmanual`
-2. tap `＋ Add new section`
-3. send the section title
-4. send the section body
-5. review Preview
-6. choose `✓ Add section` or `Discard`
-
-The bot creates the internal section key automatically and appends the new section to the end of that manual. No schema migration is required because this uses the existing `manual_sections` table.
-
-`/cancel` abandons a pending edit or add flow. Section title limit: 120 characters. Section body limit: 3,500 characters.
-
-### Manual line-break cleanup — migration 0010
-`migrations/0010_manual_newline_cleanup.sql` converts legacy literal `\\n` sequences from the initial manual seed into real line breaks in D1.
-
-`src/manual_store.ts` also normalizes `\\n` at read/save time, and manual preview normalizes pasted legacy sequences as an extra compatibility guard.
+The bot generates internal section keys/order. `/cancel` abandons an active manual edit/add session. Migration 0010 and runtime normalization convert legacy literal `\\n` sequences to real line breaks.
 
 See `docs/OPERATOR_MANUALS.md`.
 
 ## Staff group / multiuser contract
-Preferred Staff Inbox: private Telegram supergroup with Topics enabled. Bot should have Manage Topics; Delete Messages is recommended.
+Preferred Staff Inbox: private Telegram supergroup with Topics enabled.
 
 Each user maps to a separate topic:
 `(telegram_user_id, staff_chat_id) -> message_thread_id`
@@ -131,38 +106,80 @@ Mirror headers:
 - `AI · provider/model`
 - human-control USER messages add `Human control`
 
-Different users have independent language, question history, conversation control, claimant, topic, and AI/human lifecycle.
+Different users have independent profile/language, question history, control state, claimant, topic, and AI/human lifecycle.
 
-Migration 0008 + `src/monitoring_target.ts` prevent same-user concurrent first-message duplicate topic creation. Topic provisioning is D1-locked; concurrent requests wait for the canonical mapping. Staff-side delivery fails closed rather than mixing users into the main Staff Inbox chat.
+Migration 0008 + `src/monitoring_target.ts` guard same-user concurrent first-message topic provisioning. Staff-side delivery fails closed if an isolated topic cannot be established; never mix different users into the Staff Inbox main chat as fallback.
 
 ## Take Over / Return to AI
 Migration 0006 adds conversation `control_version`; Take Over, Return to AI and `/reset` increment it so stale in-flight AI output is discarded.
 
-Migration 0007 stores `latest_control_message_id`. During human control only the newest USER mirror carries `Return to AI`; when a newer user message arrives, the control moves down and the previous keyboard is removed.
+Migration 0007 stores `latest_control_message_id`. During human control only the newest USER mirror carries `Return to AI`; newer user traffic moves the button to the latest message and removes it from the old one.
 
 ## AI / FAQ runtime
 Runtime contract:
 `Dynamic FAQ -> Primary AI -> Fallback AI -> Human Handoff`
 
-Approved active FAQ data is the grounding source. AI/config failure fails closed to human review. Current AI mirror header reads the actual bound provider/model from D1.
+Approved active FAQ data is the grounding source. AI/config failure fails closed to human review. AI monitoring headers show the actual bound provider/model.
 
 22 multilingual FAQ seeds remain the baseline. `/faq` is Owner/Sudo Admin knowledge management with revisions and notifications.
 
-## Deployment pipeline
-`.github/workflows/deploy-test.yml` runs on deploy-relevant `test` pushes and manual dispatch.
+## TEST deployment
+Workflow:
+`.github/workflows/deploy-test.yml`
 
-Pipeline:
-1. dependencies
-2. strict TypeScript typecheck
-3. local migrations
-4. Wrangler dry run
-5. remote migrations
-6. deploy TEST with `DEPLOY_REVISION=${GITHUB_SHA}`
-7. `/health`
-8. refresh role-scoped command menus
-9. send `🟢 Bot is Online!` once per new revision to Owner + current Sudo Admins
+Deploy-relevant `test` pushes validate/typecheck, validate local migrations, dry-run Wrangler, apply remote TEST migrations, deploy `school-of-nursing-faq-bot-test`, verify `/health`, refresh command menus and trigger the revision-scoped online notice.
 
-Telegram runtime secrets remain Cloudflare Worker secrets, not GitHub secrets.
+TEST runtime remains the known-good validation environment.
+
+## Production Promotion Foundation v1
+Repository-side foundation now exists on `test`.
+
+Workflow:
+`.github/workflows/deploy-production.yml`
+
+Production deployment contract:
+- manual `workflow_dispatch` only
+- must run from `main`
+- confirmation input must be exactly `DEPLOY_PRODUCTION`
+- requires existing `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`
+- additionally requires GitHub secret `CLOUDFLARE_PRODUCTION_D1_DATABASE_ID`
+- generates a temporary production Wrangler config during the job
+- uses a production D1 database separate from TEST
+- validates locally, dry-runs, applies production migrations, deploys Worker, verifies `environment=production`
+- temporary production config is deleted at job end
+
+Production Worker name:
+`school-of-nursing-faq-bot`
+
+Expected production D1 name:
+`school-of-nursing-faq-bot-prod-db`
+
+See `docs/PRODUCTION_PROMOTION.md`.
+
+## Cloudflare production resources are NOT provisioned yet
+Do not run the production workflow until these are ready:
+- separate production D1 database
+- its UUID stored as GitHub secret `CLOUDFLARE_PRODUCTION_D1_DATABASE_ID`
+- production Worker runtime secrets: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET`, `BOT_OWNER_TELEGRAM_ID`, `AI_CONFIG_MASTER_KEY`
+- required production FAQ/AI/manual/admin/staff configuration initialized deliberately
+
+The existing TEST D1 must not be reused as production storage.
+
+## Telegram go-live boundary
+A Telegram bot token has one active webhook destination at a time.
+
+The webhook must remain on the current known-good endpoint until production Worker health and production data/config are ready. Moving the webhook to `school-of-nursing-faq-bot` is the actual Telegram go-live boundary.
+
+## First promotion sequence
+1. finish/review this production-foundation checkpoint on `test`
+2. verify current TEST build is green
+3. promote `test` to `main`
+4. verify `main` equals the approved TEST checkpoint
+5. create/configure separate production Cloudflare resources
+6. manually deploy production from `main`
+7. verify production health
+8. move Telegram webhook to production
+9. smoke-test `/start`, FAQ, grounded AI, Owner/Admin commands, manuals, Staff Inbox, Take Over/Return to AI
 
 ## Current migrations
 - 0001 initial
@@ -176,23 +193,10 @@ Telegram runtime secrets remain Cloudflare Worker secrets, not GitHub secrets.
 - 0009 editable operating manuals
 - 0010 manual newline cleanup
 
-## Current live validation focus
-Before promoting `main`, validate when practical:
-1. command additions appear after successful deploy without `/start`
-2. `/ownermanual` opens as a single-message pager
-3. `/adminmanual` pager works for Sudo Admin read-only
-4. manual pages display real blank lines, not literal `\\n`
-5. Previous/Next edits the same Telegram message
-6. Owner edit Preview/Save/Discard and `/cancel` work
-7. Owner `＋ Add new section` title/body/Preview/Add/Discard and `/cancel` work
-8. newly added section appears as the final pager page
-9. manual edits/additions do not alter FAQ/AI knowledge
-10. multiuser topics remain isolated
-11. same-user near-simultaneous first messages do not create duplicate topics
-12. Take Over only affects that user and latest Return-to-AI control moves correctly
-13. online notice reaches Owner/Sudo Admins once per revision
-
-Do not merge `main` until selected TEST checks are green.
+## Known deferred validation debt
+Useful after promotion, but not a reason to keep expanding TEST before first `main` checkpoint:
+- simultaneous multiuser live stress test
+- same-user near-simultaneous first-message race test
 
 ## Documentation rule
 After every meaningful runtime/deployment/architecture slice, update this file before stopping. `NEW_CHAT_BOOTSTRAP.md` must reflect repository reality, not an older planned state.
