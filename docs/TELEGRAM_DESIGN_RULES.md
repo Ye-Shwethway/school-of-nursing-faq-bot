@@ -59,6 +59,21 @@ Order: `မြန်မာ` · `English` · `简体中文`.
 - Prefer replying to the original user question. If Telegram rejects the reply-target form, retry immediately as a plain private message so the user is not left silent.
 - Staff Inbox forwarding, topic mirroring, or notification failure must not suppress the user-facing handoff acknowledgement once the escalation path has been accepted.
 
+### AI outage and human fallback continuity
+- AI infrastructure/configuration failure must **never reduce the bot to FAQ-only mode**.
+- Deterministic FAQ matching remains available independently of AI provider health.
+- If a meaningful question does not match FAQ and AI is unavailable, the normal human-handoff path remains active.
+- Never expose provider/API-key/master-key/runtime error details to the normal user.
+- Operational AI outage details are for Owner/Staff only.
+- Send `🚨 AI service unavailable` to Bot Owner private chat and the configured Staff Inbox when AI infrastructure fails.
+- The operational notice must state whether `Human fallback: ACTIVE` or `Human fallback: QUEUED ONLY`.
+- `ACTIVE` means a staff destination is configured and unresolved questions continue routing to staff.
+- `QUEUED ONLY` means the question/case is persisted but no active staff destination is configured; this state needs operator attention.
+- Throttle the same outage reason to at most one alert per 30 minutes. A materially different failure reason may alert immediately.
+- A valid AI answer **or valid policy handoff decision** means the AI path is responding; intentional knowledge-gap handoff must not be mislabeled as an outage.
+- When an outage marker exists and a later valid AI decision succeeds, clear the marker and emit one `🟢 AI service recovered` operational notice.
+- Outage/recovery alert failure must never block FAQ answering, human handoff, or the user-facing response.
+
 ### Human takeover authority
 - A Sudo/Admin who presses `Take Over` becomes the active human-control claimant for that user conversation.
 - The active claimant may return the conversation to AI normally.
