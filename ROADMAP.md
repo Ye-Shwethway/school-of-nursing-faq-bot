@@ -23,14 +23,14 @@ Implemented:
 - Take Over / Return to AI and stale-AI suppression
 - direct GitHub Actions -> Cloudflare TEST deployment
 - deployment-online notification to Owner/Sudo Admins
-- editable Owner/Admin operating manuals separate from FAQ knowledge
+- editable/addable Owner/Admin operating manuals separate from FAQ knowledge
 
 `main` and production remain unpromoted.
 
 ## Canonical Worker stack
 Wrangler enters `src/manual_entry.ts`.
 
-1. manual pager/edit + command sync
+1. manual pager/edit/add + command sync
 2. deployment online notice
 3. latest Return-to-AI control
 4. monitoring message presentation / isolated handoff
@@ -48,28 +48,34 @@ New command schemas are synchronized during successful deploy health before the 
 Expected result: command additions appear after deploy without requiring `/start`.
 
 ## Editable operating manuals
-Status: IMPLEMENTED; PAGER POLISH IMPLEMENTED; LIVE TEST PENDING
+Status: IMPLEMENTED; PAGER + ADD-SECTION UX IMPLEMENTED; LIVE TEST PENDING
 
 Commands:
-- `/ownermanual` — Owner read/edit
-- `/adminmanual` — Owner read/edit, Sudo Admin read-only
+- `/ownermanual` — Owner read/edit/add
+- `/adminmanual` — Owner read/edit/add, Sudo Admin read-only
 
 Manuals explain Bot / AI / Human Staff layers, normal question flow, role commands, FAQ/AI management, Staff Inbox/monitoring, Take Over/Return to AI, deployment notices, and authority boundaries in plain operational language.
 
 ### Single-message pager
-Manual browsing now uses one Telegram message instead of one message per section.
+Manual browsing uses one Telegram message instead of one message per section.
 
 Controls:
 - Previous
 - page indicator
 - Next
 - Owner-only Edit this section
+- Owner-only Add new section
 - Close
 
 Navigation edits the same message with `editMessageText`, preventing chat clutter.
 
-Owner edit workflow:
+### Edit workflow
 `Open -> navigate -> Edit this section -> replacement text -> Preview -> Save/Discard`
+
+### Add-section workflow
+`Open -> Add new section -> title -> body -> Preview -> Add section/Discard`
+
+The bot generates the internal key and appends the new section to the end of the selected manual. Existing `manual_sections` storage is reused; no new migration is required.
 
 ### Line-break correction
 Migration 0010 normalizes legacy literal `\\n` seed sequences to real line breaks. `manual_store.ts` also normalizes on read/save for backward compatibility.
@@ -109,7 +115,9 @@ Before `main` promotion:
 - blank lines render correctly with no literal `\\n`
 - Previous/Next reuse the same Telegram message
 - Owner manual edit Preview/Save/Discard works
-- manual edits do not alter FAQ/AI knowledge
+- Owner Add new section title/body/Preview/Add/Discard works
+- new section becomes the final pager page
+- manual edits/additions do not alter FAQ/AI knowledge
 - multiple users remain in distinct topics
 - same-user near-simultaneous first messages do not duplicate topics
 - Take Over only affects one user and latest Return-to-AI control moves correctly
