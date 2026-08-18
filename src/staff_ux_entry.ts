@@ -1,6 +1,11 @@
 import uxRuntime from "./ux_entry";
+import { handleAdminCommand } from "./admin";
+import { syncUserCommandScope } from "./command_sync";
 import {
+  addStaffMember,
+  getStaffInboxChatId,
   handoffStatus,
+  removeStaffMember,
   setHandoffRoute,
   setStaffInbox,
 } from "./handoff";
@@ -8,7 +13,6 @@ import {
   getMonitoringTopic,
   monitoringStatus,
 } from "./monitoring";
-import { getStaffInboxChatId } from "./handoff";
 
 interface Env {
   APP_ENV: string;
@@ -45,8 +49,9 @@ type TelegramUpdate = {
   callback_query?: TelegramCallbackQuery;
 };
 
+type InlineButton = { text: string; callback_data?: string; url?: string };
 type InlineKeyboard = {
-  inline_keyboard: Array<Array<{ text: string; callback_data: string }>>;
+  inline_keyboard: Array<Array<InlineButton>>;
 };
 
 function json(body: unknown, status = 200) {
@@ -65,6 +70,14 @@ function ownerId(env: Env): number | null {
 
 function commandName(text: string): string {
   return text.trim().split(/\s+/, 1)[0].toLowerCase().replace(/@[^\s]+$/, "");
+}
+
+function sudoMutation(text: string): { action: "grant" | "revoke"; targetId: number } | null {
+  const match = text.trim().match(/^\/sudo(?:@[^\s]+)?\s+(grant|revoke)\s+(\d+)$/i);
+  if (!match) return null;
+  const targetId = Number(match[2]);
+  if (!Number.isSafeInteger(targetId)) return null;
+  return { action: match[1].toLowerCase() as "grant" | "revoke", targetId };
 }
 
 function isGroup(message: TelegramMessage): boolean {
@@ -103,8 +116,8 @@ async function telegramApi(env: Env, method: string, body: unknown): Promise<any
   }
 }
 
-async function sendMessage(env: Env, chatId: number, text: string, keyboard?: InlineKeyboard): Promise<void> {
-  await telegramApi(env, "sendMessage", {
+async function sendMessage(env: Env, chatId: number, text: string, keyboard?: InlineKeyboard): Promise<any | null> {
+  return telegramApi(env, "sendMessage", {
     chat_id: chatId,
     text,
     reply_markup: keyboard,
@@ -128,10 +141,113 @@ async function answerCallback(env: Env, callbackId: string, text?: string): Prom
   });
 }
 
+async function provisionSudoStaffAccess(env: Env, targetId: number, configuredOwner: number): Promise<void> {
+  await addStaffMember(env.DB, configuredOwner, targetId);
+  const staffChatId = await getStaffInboxChatId(env.DB);
+  if (!staffChatId) {
+    await sendMessage(
+      env,
+      targetId,
+      "Sudo Admin access has been granted. The Staff Inbox group is not configured yet; the Bot Owner will provide access after it is configured.",
+    );
+    return;
+  }
+
+  const member = await telegramApi(env, "getChatMember", { chat_id: staffChatId, user_id: targetId });
+  const status = String(member?.status ?? "");
+  if (["creator", "administrator", "member", "restricted"].includes(status)) {
+    await sendMessage(
+      env,
+      targetId,
+      "Sudo Admin access has been granted. You already have access to the School of Nursing Staff Inbox group.",
+    );
+    return;
+  }
+
+  const invite = await telegramApi(env, "createChatInviteLink", {
+    chat_id: staffChatId,
+    name: `Sudo ${targetId}`.slice(0, 32),
+    member_limit: 1,
+  });
+  const inviteLink = typeof invite?.invite_link === "string" ? invite.invite_link : null;
+  if (!inviteLink) {
+    await sendMessage(
+      env,
+      configuredOwner,
+      `Sudo Admin ${targetId} was granted successfully, but the bot could not create a Staff Inbox invite. Ensure the bot is an administrator with permission to invite users.`,
+    );
+    return;
+  }
+
+  const delivered = await sendMessage(
+    env,
+    targetId,
+    [
+      "School of Nursing — Sudo Admin Access",
+      "",
+      "The Bot Owner has granted you Sudo Admin access.",
+      "Use the button below to join the private Staff Inbox group. This invite is limited to one successful join.",
+    ].join("\n"),
+    { inline_keyboard: [[{ text: "Join Staff Inbox", url: inviteLink }]] },
+  );
+
+  if (!delivered) {
+    await sendMessage(
+      env,
+      configuredOwner,
+      [
+        `Sudo Admin ${targetId} was granted successfully, but Telegram would not allow the bot to message that user privately.`,
+        "Send this one-use Staff Inbox invite to the user:",
+        inviteLink,
+      ].join("\n"),
+    );
+  }
+}
+
+async function handleSudoLifecycle(env: Env, message: TelegramMessage): Promise<boolean> {
+  if (!message.from || commandName(message.text ?? "") !== "/sudo") return false;
+  const configuredOwner = ownerId(env);
+  const result = await handleAdminCommand(
+    env.DB,
+    message.from.id,
+    env.BOT_OWNER_TELEGRAM_ID,
+    message.text ?? "",
+  );
+  if (!result.handled) return false;
+
+  if (result.response) await sendMessage(env, message.chat.id, result.response);
+
+  const mutation = sudoMutation(message.text ?? "");
+  if (!mutation || message.from.id !== configuredOwner) return true;
+
+  const api = (method: string, body: unknown) => telegramApi(env, method, body);
+  try {
+    await syncUserCommandScope(env.DB, api, mutation.targetId, env.BOT_OWNER_TELEGRAM_ID);
+  } catch {
+    // Role mutation is authoritative even if Telegram command-scope refresh is temporarily unavailable.
+  }
+
+  if (mutation.action === "grant" && configuredOwner !== null) {
+    try {
+      await provisionSudoStaffAccess(env, mutation.targetId, configuredOwner);
+    } catch {
+      await sendMessage(
+        env,
+        configuredOwner,
+        `Sudo Admin ${mutation.targetId} was granted, but Staff Inbox access setup encountered an error. The role itself is active.`,
+      );
+    }
+  } else if (mutation.action === "revoke") {
+    try { await removeStaffMember(env.DB, mutation.targetId); } catch { /* role revocation remains authoritative */ }
+  }
+
+  return true;
+}
+
 function staffMenuKeyboard(groupContext: boolean): InlineKeyboard {
   const rows: InlineKeyboard["inline_keyboard"] = [];
   if (groupContext) {
-    rows.push([{ text: "✓ Set this group as Staff Inbox", callback_data: "ux:staff:bind_here" }]);
+    rows.push([{ text: "✓ Use / Switch to this Staff Inbox", callback_data: "ux:staff:bind_here" }]);
   }
   rows.push([
     { text: "Status", callback_data: "ux:staff:status" },
@@ -163,9 +279,18 @@ function monitoringKeyboard(): InlineKeyboard {
 }
 
 async function staffPanelText(env: Env, message: TelegramMessage): Promise<string> {
+  const boundChatId = await getStaffInboxChatId(env.DB);
   const where = isGroup(message)
-    ? `Current group: ${message.chat.title ?? "Telegram group"}\nChat ID: ${message.chat.id}`
-    : "Open /staff inside the staff group to bind that group automatically.";
+    ? [
+        `Current group: ${message.chat.title ?? "Telegram group"}`,
+        `Chat ID: ${message.chat.id}`,
+        boundChatId === message.chat.id
+          ? "Status: This group is the active Staff Inbox."
+          : boundChatId
+            ? `Status: Another Staff Inbox is active (${boundChatId}). Choosing Switch will move new staff traffic here.`
+            : "Status: No Staff Inbox is configured yet.",
+      ].join("\n")
+    : `Active Staff Inbox: ${boundChatId ?? "not configured"}\nOpen /staff inside a group to bind or switch the Staff Inbox.`;
   return [
     "School of Nursing Staff Control",
     "",
@@ -178,6 +303,8 @@ async function staffPanelText(env: Env, message: TelegramMessage): Promise<strin
 async function handleStaffUi(env: Env, update: TelegramUpdate): Promise<boolean> {
   const configuredOwner = ownerId(env);
   const message = update.message;
+
+  if (message && await handleSudoLifecycle(env, message)) return true;
 
   if (message?.from && commandName(message.text ?? "") === "/staff" && message.text?.trim().split(/\s+/).length === 1) {
     if (message.from.id !== configuredOwner) {
@@ -214,19 +341,24 @@ async function handleStaffUi(env: Env, update: TelegramUpdate): Promise<boolean>
       await editOrSend(
         env,
         menuMessage,
-        "Open /staff inside the Telegram staff group, then choose Set this group as Staff Inbox.",
+        "Open /staff inside the Telegram staff group, then choose Use / Switch to this Staff Inbox.",
         staffMenuKeyboard(false),
       );
       return true;
     }
+    const previousChatId = await getStaffInboxChatId(env.DB);
     const bindResult = await setStaffInbox(env.DB, callback.from.id, menuMessage.chat.id);
     const routeResult = await setHandoffRoute(env.DB, callback.from.id, "group");
+    const switchNote = previousChatId && previousChatId !== menuMessage.chat.id
+      ? `Staff Inbox switched from ${previousChatId} to ${menuMessage.chat.id}. New inquiries and monitoring will use this group.`
+      : "This group is now the active Staff Inbox.";
     await editOrSend(
       env,
       menuMessage,
       [
         "Staff Inbox configured",
         "",
+        switchNote,
         bindResult,
         routeResult,
         "",
