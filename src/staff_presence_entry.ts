@@ -24,7 +24,12 @@ interface Env {
   DEPLOY_REVISION?: string;
 }
 
-type TelegramUser = { id: number };
+type TelegramUser = {
+  id: number;
+  username?: string;
+  first_name?: string;
+  last_name?: string;
+};
 type TelegramMessage = {
   message_id: number;
   message_thread_id?: number;
@@ -96,6 +101,12 @@ function isPrivate(message: TelegramMessage): boolean {
   return message.chat.type === "private" || message.chat.id === message.from?.id;
 }
 
+function staffLabel(user: TelegramUser): string {
+  if (user.username) return `@${user.username} (${user.id})`;
+  const name = [user.first_name, user.last_name].filter(Boolean).join(" ").trim();
+  return name ? `${name} (${user.id})` : `Telegram ID ${user.id}`;
+}
+
 async function telegramApi(env: Env, method: string, body: unknown): Promise<any | null> {
   if (!env.TELEGRAM_BOT_TOKEN) return null;
   try {
@@ -135,6 +146,35 @@ async function activeGroup(env: Env, message: TelegramMessage): Promise<boolean>
   if (!env.DB || !isGroup(message)) return false;
   const active = await getStaffInboxChatId(env.DB);
   return active === message.chat.id;
+}
+
+async function availabilityInboxId(env: Env): Promise<number | null> {
+  if (!env.DB) return null;
+  return getStaffInboxChatId(env.DB);
+}
+
+async function publishAvailabilityResult(
+  env: Env,
+  message: TelegramMessage,
+  text: string,
+): Promise<void> {
+  await sendMessage(env, message.chat.id, text, {
+    silent: true,
+    threadId: message.message_thread_id,
+  });
+
+  if (!message.from || !isPrivate(message)) return;
+  const staffInboxId = await availabilityInboxId(env);
+  if (staffInboxId === null) return;
+  await sendMessage(
+    env,
+    staffInboxId,
+    [
+      "🕒 Staff availability update",
+      `Staff: ${staffLabel(message.from)}`,
+      text,
+    ].join("\n"),
+  );
 }
 
 async function pendingSummary(db: D1Database | undefined): Promise<PendingSummary> {
@@ -257,7 +297,11 @@ async function handleAvailabilityCommand(env: Env, message: TelegramMessage, com
     if (args.length === 0) {
       await setStaffAvailability(env.DB, message.from.id, false);
       const count = await countAvailableStaff(env.DB);
-      await sendMessage(env, message.chat.id, `You are marked unavailable until you use /available. Available staff: ${count}`, { silent: true, threadId: message.message_thread_id });
+      await publishAvailabilityResult(
+        env,
+        message,
+        `You are marked unavailable until you use /available. Available staff: ${count}`,
+      );
       return true;
     }
     if (args.length === 1) {
@@ -265,23 +309,31 @@ async function handleAvailabilityCommand(env: Env, message: TelegramMessage, com
       if (Number.isFinite(hours) && hours > 0 && hours <= 168) {
         const expiresAt = await setTemporaryUnavailable(env.DB, message.from.id, hours);
         const count = await countAvailableStaff(env.DB);
-        await sendMessage(
+        await publishAvailabilityResult(
           env,
-          message.chat.id,
+          message,
           `You are unavailable for ${hours} hour${hours === 1 ? "" : "s"}.\nAuto-return: ${expiresAt ? yangonDateTimeLabel(expiresAt) : "scheduled"} Asia/Yangon (UTC+06:30).\nAvailable staff: ${count}`,
-          { silent: true, threadId: message.message_thread_id },
         );
         return true;
       }
     }
-    await sendMessage(env, message.chat.id, "Usage: /unavailable | /unavailable <hours>\nExample: /unavailable 3", { silent: true, threadId: message.message_thread_id });
+    await sendMessage(
+      env,
+      message.chat.id,
+      "Usage: /unavailable | /unavailable <hours>\nExample: /unavailable 3",
+      { silent: true, threadId: message.message_thread_id },
+    );
     return true;
   }
 
   if (args.length === 0) {
     await setStaffAvailability(env.DB, message.from.id, true);
     const count = await countAvailableStaff(env.DB);
-    await sendMessage(env, message.chat.id, `You are marked available. Any recurring availability schedule was cleared. Available staff: ${count}`, { silent: true, threadId: message.message_thread_id });
+    await publishAvailabilityResult(
+      env,
+      message,
+      `You are marked available. Any recurring availability schedule was cleared. Available staff: ${count}`,
+    );
     return true;
   }
 
@@ -291,11 +343,10 @@ async function handleAvailabilityCommand(env: Env, message: TelegramMessage, com
     if (start !== null && end !== null && start !== end) {
       const availableNow = await setDailyAvailabilitySchedule(env.DB, message.from.id, start, end);
       const count = await countAvailableStaff(env.DB);
-      await sendMessage(
+      await publishAvailabilityResult(
         env,
-        message.chat.id,
+        message,
         `Daily availability scheduled: ${minuteLabel(start)}–${minuteLabel(end)} Asia/Yangon (UTC+06:30).\nCurrent state: ${availableNow ? "AVAILABLE" : "UNAVAILABLE"}.\nAvailable staff: ${count}`,
-        { silent: true, threadId: message.message_thread_id },
       );
       return true;
     }
@@ -315,23 +366,47 @@ async function handleStaffCommand(env: Env, message: TelegramMessage): Promise<b
   const command = commandName(message.text);
   if (command !== "/noti" && command !== "/available" && command !== "/unavailable") return false;
 
-  if (!await activeGroup(env, message)) {
-    await sendMessage(env, message.chat.id, "Use this command inside the active Staff Inbox group.");
-    return true;
-  }
   if (!await canManageStaffState(env.DB, message.from.id, env.BOT_OWNER_TELEGRAM_ID)) {
     await sendMessage(env, message.chat.id, "This command is available to authorized staff only.");
     return true;
   }
 
   if (command === "/available" || command === "/unavailable") {
+    const staffInboxId = await availabilityInboxId(env);
+    if (staffInboxId === null) {
+      await sendMessage(
+        env,
+        message.chat.id,
+        "Staff availability commands require an active Staff Inbox group. Ask the Bot Owner to configure the Staff Inbox first.",
+      );
+      return true;
+    }
+    const allowedLocation = isPrivate(message) || (isGroup(message) && message.chat.id === staffInboxId);
+    if (!allowedLocation) {
+      await sendMessage(
+        env,
+        message.chat.id,
+        "Use this command in your private bot chat or inside the active Staff Inbox group.",
+      );
+      return true;
+    }
     return handleAvailabilityCommand(env, message, command);
+  }
+
+  if (!await activeGroup(env, message)) {
+    await sendMessage(env, message.chat.id, "Use /noti inside the active Staff Inbox group.");
+    return true;
   }
 
   const action = commandArgs(message.text)[0]?.toLowerCase();
   if (action !== "on" && action !== "off") {
     const enabled = await staffNotificationsEnabled(env.DB);
-    await sendMessage(env, message.chat.id, `Staff notifications are ${enabled ? "ON" : "OFF"}.\nUsage: /noti on | /noti off`, { silent: true, threadId: message.message_thread_id });
+    await sendMessage(
+      env,
+      message.chat.id,
+      `Staff notifications are ${enabled ? "ON" : "OFF"}.\nUsage: /noti on | /noti off`,
+      { silent: true, threadId: message.message_thread_id },
+    );
     return true;
   }
 
@@ -367,7 +442,12 @@ async function relayStaffTopicReply(env: Env, message: TelegramMessage): Promise
 
   const sent = await sendMessage(env, userId, `School of Nursing staff:\n${text}`);
   if (!sent) {
-    await sendMessage(env, message.chat.id, "Could not deliver this reply to the user. The user may have blocked the bot or Telegram may not allow the private message.", { silent: true, threadId: message.message_thread_id });
+    await sendMessage(
+      env,
+      message.chat.id,
+      "Could not deliver this reply to the user. The user may have blocked the bot or Telegram may not allow the private message.",
+      { silent: true, threadId: message.message_thread_id },
+    );
   }
   return true;
 }
