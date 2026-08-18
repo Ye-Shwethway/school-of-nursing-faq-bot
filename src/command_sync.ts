@@ -25,6 +25,18 @@ async function setCommands(
   }
 }
 
+async function deleteCommands(
+  telegramApi: TelegramCommandApi,
+  scope: unknown,
+): Promise<boolean> {
+  try {
+    const result = await telegramApi("deleteMyCommands", { scope });
+    return result === true;
+  } catch {
+    return false;
+  }
+}
+
 export async function syncUserCommandScope(
   db: D1Database | undefined,
   telegramApi: TelegramCommandApi,
@@ -33,10 +45,17 @@ export async function syncUserCommandScope(
 ): Promise<boolean> {
   try {
     const role = await getAdminRole(db, telegramUserId, ownerIdValue);
+    const scope = commandScopeForPrivateChat(telegramUserId);
+
+    // Normal users inherit the global all-private-chats command list. Clearing any
+    // stale per-chat override prevents an old command menu from shadowing new
+    // public commands such as /faq.
+    if (role === "user") return await deleteCommands(telegramApi, scope);
+
     return await setCommands(
       telegramApi,
       commandsForRole(role),
-      commandScopeForPrivateChat(telegramUserId),
+      scope,
     );
   } catch {
     // Command-menu sync must never break the bot's primary reply path.
@@ -78,10 +97,28 @@ export async function syncCommandRegistryIfNeeded(
       `SELECT telegram_user_id FROM admin_roles
        WHERE role='sudo_admin' ORDER BY telegram_user_id`,
     ).all<{ telegram_user_id: number }>();
+    const adminIds = new Set<number>();
 
     for (const row of admins.results ?? []) {
+      adminIds.add(row.telegram_user_id);
       const adminOk = await syncUserCommandScope(db, telegramApi, row.telegram_user_id, ownerIdValue);
       if (!adminOk) return;
+    }
+
+    // Existing normal users may still have a chat-specific scope created by an
+    // older runtime. Remove those overrides so the updated public command list
+    // becomes visible immediately after deployment/health sync.
+    const users = await db.prepare(
+      `SELECT telegram_user_id FROM users ORDER BY telegram_user_id`,
+    ).all<{ telegram_user_id: number }>();
+
+    for (const row of users.results ?? []) {
+      const userId = row.telegram_user_id;
+      if (!Number.isSafeInteger(userId)) continue;
+      if (ownerId !== null && userId === ownerId) continue;
+      if (adminIds.has(userId)) continue;
+      const cleared = await deleteCommands(telegramApi, commandScopeForPrivateChat(userId));
+      if (!cleared) return;
     }
 
     await db.prepare(
