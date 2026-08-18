@@ -15,6 +15,30 @@ The bot represents a university School of Nursing. Interactions should feel form
 - Confirm consequential admin actions such as role removal.
 - Never hide important policy text behind ambiguous buttons.
 
+## Navigation grammar
+Use these meanings consistently across privileged/configuration UI:
+- `← Back` = return to the parent screen.
+- `✕ Close` = dismiss the current menu completely.
+- `Cancel` = abandon an active wizard/setup operation; do not use it as a synonym for Back or Close.
+- Prefer editing the existing menu message for callback navigation. Send a new menu message only when edit-in-place is unavailable.
+- `ui:close` is the shared dismiss callback for bot-owned menu messages.
+
+## Response progress
+- Do not send persistent “Please wait” clutter messages for normal AI generation.
+- While a grounded AI request is in flight, use Telegram's native `typing` chat action and refresh it while necessary.
+- Stop progress signaling when an answer, handoff, reset, or control transition completes.
+- Deterministic FAQ answers remain the fast path and do not require an artificial delay.
+
+## Reply presentation
+- AI answers and AI-triggered handoff notices should reply to the originating user question when possible.
+- Keep answers concise-first and split only when policy detail requires it.
+- Do not add unnecessary greetings to every answer.
+
+## Reset / cancel semantics
+- `/cancel` cancels the current interactive setup/wizard only.
+- `/reset` clears transient conversation/session state and returns the user to automated mode.
+- `/reset` must not erase saved language, FAQ knowledge, AI credentials, model bindings, persona, Owner/Sudo roles, or monitoring configuration.
+
 ## Language selector
 Recommended order: `မြန်မာ` · `English` · `简体中文`. Persist the choice until `/language` changes it.
 
@@ -44,6 +68,7 @@ Tell the user their question has been recorded for authorized staff follow-up. D
 - Show privileged-action outcomes clearly.
 - Owner-only controls must not appear available to Sudo Admins.
 - Paginate long user/question lists instead of flooding chat.
+- Privileged/configuration menus should expose `✕ Close` unless they are a one-shot confirmation with no persistent menu.
 
 ## Accessibility
 - Do not rely on color.
