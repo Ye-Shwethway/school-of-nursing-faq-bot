@@ -9,78 +9,63 @@ Production Telegram FAQ assistant for a university School of Nursing in Burmese,
 - `test` = active development / live TEST validation
 - `main` = canonical production source
 - no direct feature implementation on `main`
-- normal production deployment remains explicit and guarded
+- production deployment remains guarded
 
 ## Current foundation
-Status: PRODUCTION LIVE; OWNER COMMAND REGISTRY UNDER VERIFIED RESYNC
+Status: PRODUCTION LIVE; OWNER COMMANDS VERIFIED; TEST TELEGRAM DEPLOYMENT NOTICES SUPPRESSED
 
 Implemented:
-- multilingual FAQ + dynamic CRUD/revisions
+- multilingual dynamic FAQ
 - Owner/Sudo roles and scoped commands
-- configurable encrypted AI Primary/Fallback
+- encrypted configurable AI Primary/Fallback
 - grounded AI + human handoff
-- Staff Inbox per-user topics and monitoring
-- Take Over / Return to AI + stale-AI suppression
-- TEST deployment automation
-- guarded PRODUCTION deployment automation
-- deployment-online notice
+- Staff Inbox monitoring and Take Over / Return to AI
+- TEST + guarded PRODUCTION deployment automation
 - editable/addable Owner/Admin manuals
-- same-user first-message topic provisioning lock
-- approved operational-data bootstrap from TEST D1 to isolated PRODUCTION D1
-- nonce-gated Telegram production cutover automation
+- production D1 bootstrap and Telegram webhook cutover
+- verified Owner command resync with Telegram read-back
 
 ## Verified production checkpoint
-Verified by live workflow/user evidence:
-- isolated production D1 `school-of-nursing-faq-bot-prod-db` exists
-- production Worker `school-of-nursing-faq-bot` is deployed and healthy
+- production D1 and Worker are healthy
 - production operational-data bootstrap completed green
-- Telegram webhook cutover workflow completed green
+- production Telegram webhook cutover completed green
 - `/start` works through production
-- deterministic FAQ/runtime paths work
-- production uses a fresh `AI_CONFIG_MASTER_KEY`; AI provider credentials still need production `/ai` configuration
+- Owner command resync completed green and the Owner menu now shows the expected commands
+- production uses a fresh `AI_CONFIG_MASTER_KEY`; production AI provider credentials still need `/ai` setup
 
-## Owner command-menu issue
-Observed after cutover: Owner account displayed only the two public commands (`/start`, `/whoami`) and later no expanded Owner menu appeared.
-
-First hotfix in `src/command_sync.ts`:
-- per-user `setMyCommands` failures now return failure
-- Owner/Sudo failure prevents command-schema fingerprint persistence
-- later request/health sync can retry
-- command sync revision was bumped
-
-Remaining gap discovered:
-- ordinary health/cutover command synchronization was still best-effort
-- production workflows could be green without proving Telegram actually stored the Owner-specific command scope
-
-Verified resync slice:
-- production-only nonce-gated endpoint `POST /ops/telegram/owner-command-resync`
-- validates `BOT_OWNER_TELEGRAM_ID`
-- directly calls Telegram `setMyCommands` for the Owner private-chat scope
-- immediately calls Telegram `getMyCommands` for the same scope
-- requires exact ordered read-back of all 12 Owner commands
-- mismatch returns failure instead of reporting green
-- `.github/workflows/production-owner-command-resync.yml` deploys current main, arms a one-time D1 nonce, calls the endpoint, and fails unless command count/read-back is exactly 12
-
-Expected Owner menu:
+## Owner command registry
+Expected Owner commands:
 `/start`, `/whoami`, `/admin`, `/admins`, `/faq`, `/adminmanual`, `/sudo`, `/ai`, `/staff`, `/ownermanual`, `/cancel`, `/reset`.
 
+Verified resync contract:
+- `POST /ops/telegram/owner-command-resync`
+- production-only, one-time D1 nonce gated
+- calls Telegram `setMyCommands`
+- immediately calls `getMyCommands`
+- requires exact ordered read-back of all 12 commands
+- `.github/workflows/production-owner-command-resync.yml` fails unless read-back is exact
+
+## TEST deployment-notice pollution fix
+Observed live symptom after production was already working:
+- Telegram showed `Environment: test` / revision `69f1434d`
+- that revision is a TEST-side command-resync commit, not the production revision
+
+Root cause:
+- TEST and PRODUCTION Workers use the same Telegram bot token
+- TEST `/health` invoked `notifyDeploymentOnline()` and could call Telegram `sendMessage` directly even though the bot webhook already pointed to PRODUCTION
+- therefore TEST deployment status messages polluted the live Owner chat and looked like production state
+
+Fix:
+- `notifyDeploymentOnline()` now returns immediately unless `APP_ENV === "production"`
+- TEST deployment still performs typecheck, migrations, deploy and `/health` verification
+- TEST no longer sends Owner/Admin online notices
+- `.github/workflows/deploy-test.yml` explicitly documents that Telegram online notices are suppressed in TEST
+- the next production deployment should emit a fresh `Environment: production` notice for its own revision
+
 ## TEST CI cleanup
-Observed run `32123681126` / job `95669489898`: validation passed through Wrangler dry-run; generated artifact self-push lost a non-fast-forward race.
-
-Observed run `32124026795` / job `95670512070`: typecheck passed; D1 validation was cancelled only because a newer `test` push arrived while cancellation was enabled.
-
-Current `.github/workflows/test-typecheck.yml`:
-- read-only repository permission
-- no CI write-back to `test`
-- generated Worker/checksum only in runner artifact
-- all `migrations/*.sql` included
-- push trigger path-scoped to source/config/migrations/workflow files
-- docs-only continuity commits do not trigger Test Build
-- `cancel-in-progress: false`
+`.github/workflows/test-typecheck.yml` is read-only, path-scoped, does not push generated artifacts back to `test`, includes all migrations in the handoff artifact, and uses `cancel-in-progress: false`.
 
 ## Production operational-data bootstrap
-Workflow: `.github/workflows/bootstrap-production-data.yml`
-
 Copied allow-list: current FAQ entries, manuals, Sudo roles, staff membership, operator identity metadata, persona/monitoring/Staff Inbox/handoff settings.
 
 Not copied: ordinary user history, escalation history, conversation-control state, monitoring-topic mappings, setup sessions, encrypted AI credentials, AI cache/tests/model bindings.
@@ -89,7 +74,7 @@ Not copied: ordinary user history, escalation history, conversation-control stat
 Wrangler enters `src/manual_entry.ts`.
 
 1. manual pager/edit/add + command sync
-2. deployment online notice + production ops endpoints
+2. deployment notice + production ops endpoints
 3. latest Return-to-AI control
 4. monitoring presentation / isolated handoff
 5. Staff Inbox UX
@@ -99,24 +84,14 @@ Wrangler enters `src/manual_entry.ts`.
 9. compatibility fallback + `/health`
 
 ## Next exact work
-1. promote the verified Owner-command resync slice to `main`
-2. automation must prove Telegram read-back has exactly 12 Owner commands
-3. only after that, continue with production `/ai` provider credential setup
-4. verify grounded AI, fallback and human handoff
+1. promote the production-only notice fix to `main`
+2. production resync workflow redeploys current main and verifies all 12 Owner commands again
+3. confirm the new online notice is `Environment: production`
+4. configure production AI provider/API key through `/ai`
+5. verify grounded AI, fallback and human handoff
 
 ## Current migrations
-- 0001 initial
-- 0002 AI settings
-- 0003 handoff/persona
-- 0004 shadow monitoring
-- 0005 dynamic FAQ
-- 0006 conversation control version
-- 0007 latest control message
-- 0008 monitoring topic provision lock
-- 0009 editable manuals
-- 0010 manual newline cleanup
-
-Canonical 0010: `migrations/0010_manual_newline_cleanup.sql`.
+0001 through 0010. Canonical 0010: `migrations/0010_manual_newline_cleanup.sql`.
 
 ## Deferred validation debt
 - multiuser simultaneous live stress test
