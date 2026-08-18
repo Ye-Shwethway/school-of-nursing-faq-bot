@@ -59,6 +59,17 @@ Order: `မြန်မာ` · `English` · `简体中文`.
 - Prefer replying to the original user question. If Telegram rejects the reply-target form, retry immediately as a plain private message so the user is not left silent.
 - Staff Inbox forwarding, topic mirroring, or notification failure must not suppress the user-facing handoff acknowledgement once the escalation path has been accepted.
 
+### Human takeover authority
+- A Sudo/Admin who presses `Take Over` becomes the active human-control claimant for that user conversation.
+- The active claimant may return the conversation to AI normally.
+- **Bot Owner authority is higher than any claimant.** The Owner may force `Return to AI` even when another Admin currently owns the human-control claim.
+- Owner override must clear the active human-control claim and restore AI mode without deleting case history, question logs, or user history.
+- After an Owner override, send the user the localized AI-returned notice.
+- Notify the previous claimant Admin that the Owner returned the conversation to AI and that the old claim is no longer active.
+- Prefer direct private notification to the claimant. If direct delivery fails, place an operational fallback note in the relevant Staff Inbox topic.
+- Staff Inbox should also show a concise Owner-override note so the control transition is visible to the team.
+- A previous claimant must Take Over again before resuming direct staff control after an Owner override.
+
 ## Input quality and false escalation
 - Before normal FAQ/AI/handoff processing, obvious low-information private text must pass an Input Quality Gate.
 - Obvious low-information examples include numbers-only input, punctuation/symbol-only input, single-character noise, URL-only input, username-only input, phone-number-only input, repeated-character garbage, and acknowledgement-only text such as `ok`/`yes` when no usable question is present.
