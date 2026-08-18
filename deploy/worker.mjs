@@ -4969,6 +4969,15 @@ async function telegramApi8(env, method, body) {
   }
 }
 __name(telegramApi8, "telegramApi");
+async function syncDeploymentCommandMenus(env) {
+  if (!env.DB || !env.TELEGRAM_BOT_TOKEN) return;
+  const api = /* @__PURE__ */ __name((method, body) => telegramApi8(env, method, body), "api");
+  try {
+    await syncCommandRegistryIfNeeded(env.DB, api, env.BOT_OWNER_TELEGRAM_ID);
+  } catch {
+  }
+}
+__name(syncDeploymentCommandMenus, "syncDeploymentCommandMenus");
 async function notificationTargets(env) {
   const targets = /* @__PURE__ */ new Set();
   const owner = ownerId4(env);
@@ -5014,8 +5023,9 @@ async function notifyDeploymentOnline(env) {
     `Environment: ${env.APP_ENV || "unknown"}`,
     `Revision: ${shortRevision}`,
     "Health check: PASS",
+    "Command menus: synced",
     "",
-    "Telegram webhook, FAQ, AI, staff handoff, and monitoring runtime are ready."
+    "Telegram webhook, FAQ, AI, staff handoff, monitoring, and manuals are ready."
   ].join("\n");
   const targets = await notificationTargets(env);
   await Promise.allSettled(
@@ -5035,6 +5045,7 @@ var deployment_notice_entry_default = {
     const url = new URL(request.url);
     const response = await latest_return_entry_default.fetch(request, env);
     if (request.method === "GET" && url.pathname === "/health" && response.ok) {
+      await syncDeploymentCommandMenus(env);
       await notifyDeploymentOnline(env);
     }
     return response;
