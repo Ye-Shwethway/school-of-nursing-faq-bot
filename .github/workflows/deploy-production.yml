@@ -51,6 +51,39 @@ jobs:
           test -n "$CLOUDFLARE_ACCOUNT_ID" || { echo "Missing GitHub secret: CLOUDFLARE_ACCOUNT_ID"; exit 1; }
           test -n "$PRODUCTION_D1_DATABASE_ID" || { echo "Missing GitHub secret: CLOUDFLARE_PRODUCTION_D1_DATABASE_ID"; exit 1; }
 
+      - name: Preflight production runtime bindings
+        shell: bash
+        run: |
+          api="https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}"
+          auth="Authorization: Bearer ${CLOUDFLARE_API_TOKEN}"
+          settings="$(curl --fail --silent --show-error --connect-timeout 10 --max-time 20 \
+            "${api}/workers/scripts/${PRODUCTION_WORKER_NAME}/settings" -H "$auth")"
+          node -e '
+            const p=JSON.parse(process.argv[1]);
+            if(p.success!==true) process.exit(1);
+            const bindings=Array.isArray(p.result?.bindings)?p.result.bindings:[];
+            const rows=bindings.map(b=>({name:b.name,type:b.type}));
+            console.log("Pre-deploy production bindings:", JSON.stringify(rows));
+            const byName=new Map(rows.map(r=>[r.name,r.type]));
+            const requirements={
+              DB:"d1",
+              TELEGRAM_BOT_TOKEN:"secret_text",
+              TELEGRAM_WEBHOOK_SECRET:"secret_text",
+              AI_CONFIG_MASTER_KEY:"secret_text",
+              BOT_OWNER_TELEGRAM_ID:"secret_text"
+            };
+            const problems=[];
+            for(const [name,type] of Object.entries(requirements)){
+              if(!byName.has(name)) problems.push(`${name} is missing`);
+              else if(byName.get(name)!==type) problems.push(`${name} must be ${type}, found ${byName.get(name)}`);
+            }
+            if(problems.length){
+              console.error("Production runtime binding preflight failed:", problems.join("; "));
+              console.error("BOT_OWNER_TELEGRAM_ID must be stored as a Cloudflare Secret, not a plain Variable.");
+              process.exit(1);
+            }
+          ' "$settings"
+
       - name: Install dependencies
         run: npm install --no-audit --no-fund
 
@@ -92,7 +125,7 @@ jobs:
       - name: Deploy production Worker
         run: npx wrangler deploy --config .wrangler.production.generated.json --var "APP_ENV:production" --var "DEPLOY_REVISION:${GITHUB_SHA}"
 
-      - name: Inspect production binding names
+      - name: Verify production bindings after deploy
         shell: bash
         run: |
           api="https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}"
@@ -104,12 +137,16 @@ jobs:
             if(p.success!==true) process.exit(1);
             const bindings=Array.isArray(p.result?.bindings)?p.result.bindings:[];
             const rows=bindings.map(b=>({name:b.name,type:b.type}));
-            console.log("Production binding names/types:", JSON.stringify(rows));
-            const names=new Set(rows.map(r=>r.name));
-            const required=["DB","TELEGRAM_BOT_TOKEN","BOT_OWNER_TELEGRAM_ID"];
-            const missing=required.filter(x=>!names.has(x));
+            console.log("Post-deploy production bindings:", JSON.stringify(rows));
+            const byName=new Map(rows.map(r=>[r.name,r.type]));
+            const required=["DB","TELEGRAM_BOT_TOKEN","TELEGRAM_WEBHOOK_SECRET","AI_CONFIG_MASTER_KEY","BOT_OWNER_TELEGRAM_ID"];
+            const missing=required.filter(x=>!byName.has(x));
             if(missing.length){
-              console.error("Missing required production bindings:", missing.join(", "));
+              console.error("Deployment removed required production bindings:", missing.join(", "));
+              process.exit(1);
+            }
+            if(byName.get("BOT_OWNER_TELEGRAM_ID")!=="secret_text"){
+              console.error("BOT_OWNER_TELEGRAM_ID must remain a secret_text binding after deploy.");
               process.exit(1);
             }
           ' "$settings"
@@ -191,7 +228,7 @@ jobs:
             echo "- Production D1 migrations: PASS"
             echo "- Worker deploy: PASS"
             echo "- Production health: PASS"
-            echo "- Required runtime bindings: PASS"
+            echo "- Runtime secrets preserved: PASS"
             echo "- Owner command setMyCommands: PASS"
             echo "- Owner command getMyCommands read-back: PASS (12/12)"
             echo "- TEST pipeline: none"
