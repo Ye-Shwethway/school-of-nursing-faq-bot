@@ -71,6 +71,7 @@ async function languageFor(db: D1Database | undefined, userId: number): Promise<
 
 function transitionReason(transition: StaffAvailabilityTransition): string {
   if (transition.reason === "timer_expired") return "Temporary unavailable timer ended.";
+  if (transition.reason === "manual_override_expired") return "Temporary manual override ended; recurring schedule resumed.";
   if (transition.reason === "schedule_started") return "Daily availability window started.";
   return "Daily availability window ended.";
 }
