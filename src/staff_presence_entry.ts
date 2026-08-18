@@ -4,6 +4,7 @@ import { getUserForMonitoringTopic, takeOverConversation } from "./monitoring";
 import {
   canManageStaffState,
   countAvailableStaff,
+  isStaffAvailable,
   setStaffAvailability,
   setStaffNotificationsEnabled,
   staffNotificationsEnabled,
@@ -27,7 +28,15 @@ type TelegramMessage = {
   chat: { id: number; type?: string; title?: string };
   from?: TelegramUser;
 };
-type TelegramUpdate = { message?: TelegramMessage };
+type TelegramCallbackQuery = {
+  id: string;
+  from: TelegramUser;
+  data?: string;
+  message?: TelegramMessage;
+};
+type TelegramUpdate = { message?: TelegramMessage; callback_query?: TelegramCallbackQuery };
+
+type PendingSummary = { count: number; newestId: number };
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -42,6 +51,10 @@ function commandName(text: string): string {
 
 function isGroup(message: TelegramMessage): boolean {
   return message.chat.type === "group" || message.chat.type === "supergroup";
+}
+
+function isPrivate(message: TelegramMessage): boolean {
+  return message.chat.type === "private" || message.chat.id === message.from?.id;
 }
 
 async function telegramApi(env: Env, method: string, body: unknown): Promise<any | null> {
@@ -60,19 +73,143 @@ async function telegramApi(env: Env, method: string, body: unknown): Promise<any
   }
 }
 
-async function sendMessage(env: Env, chatId: number, text: string, options?: { silent?: boolean; threadId?: number }): Promise<any | null> {
+async function sendMessage(
+  env: Env,
+  chatId: number,
+  text: string,
+  options?: { silent?: boolean; threadId?: number; keyboard?: unknown },
+): Promise<any | null> {
   return telegramApi(env, "sendMessage", {
     chat_id: chatId,
     text,
     disable_notification: options?.silent,
     message_thread_id: options?.threadId,
+    reply_markup: options?.keyboard,
   });
+}
+
+async function answerCallback(env: Env, callbackId: string, text?: string): Promise<void> {
+  await telegramApi(env, "answerCallbackQuery", { callback_query_id: callbackId, text });
 }
 
 async function activeGroup(env: Env, message: TelegramMessage): Promise<boolean> {
   if (!env.DB || !isGroup(message)) return false;
   const active = await getStaffInboxChatId(env.DB);
   return active === message.chat.id;
+}
+
+async function pendingSummary(db: D1Database | undefined): Promise<PendingSummary> {
+  if (!db) return { count: 0, newestId: 0 };
+  const row = await db.prepare(
+    `SELECT COUNT(*) AS count, COALESCE(MAX(id), 0) AS newest_id
+     FROM escalation_cases
+     WHERE status='open'`,
+  ).first<{ count: number; newest_id: number }>();
+  return {
+    count: Number(row?.count ?? 0),
+    newestId: Number(row?.newest_id ?? 0),
+  };
+}
+
+function pendingAckKey(userId: number): string {
+  return `staff_pending_prompt_seen:${userId}`;
+}
+
+async function lastPromptedCaseId(db: D1Database | undefined, userId: number): Promise<number> {
+  if (!db) return 0;
+  const row = await db.prepare(
+    `SELECT setting_value FROM bot_settings WHERE setting_key=?1`,
+  ).bind(pendingAckKey(userId)).first<{ setting_value: string }>();
+  const value = Number(row?.setting_value ?? 0);
+  return Number.isSafeInteger(value) ? value : 0;
+}
+
+async function acknowledgePendingPrompt(db: D1Database | undefined, userId: number, newestId: number): Promise<void> {
+  if (!db) return;
+  await db.prepare(
+    `INSERT INTO bot_settings (setting_key, setting_value, updated_by, updated_at)
+     VALUES (?1, ?2, ?3, CURRENT_TIMESTAMP)
+     ON CONFLICT(setting_key) DO UPDATE SET
+       setting_value=excluded.setting_value,
+       updated_by=excluded.updated_by,
+       updated_at=CURRENT_TIMESTAMP`,
+  ).bind(pendingAckKey(userId), String(newestId), userId).run();
+}
+
+async function maybePromptReturningStaff(env: Env, message: TelegramMessage): Promise<void> {
+  if (!env.DB || !message.from || !isPrivate(message)) return;
+  if (!await canManageStaffState(env.DB, message.from.id, env.BOT_OWNER_TELEGRAM_ID)) return;
+  if (await isStaffAvailable(env.DB, message.from.id)) return;
+
+  const pending = await pendingSummary(env.DB);
+  if (pending.count < 1 || pending.newestId < 1) return;
+  const seen = await lastPromptedCaseId(env.DB, message.from.id);
+  if (seen >= pending.newestId) return;
+
+  await sendMessage(
+    env,
+    message.chat.id,
+    [
+      "Pending Staff Inbox inquiries",
+      "",
+      `${pending.count} unanswered inquiry${pending.count === 1 ? " is" : "ies are"} waiting for staff review.`,
+      "You are currently marked unavailable.",
+      "",
+      "Would you like to become available now?",
+    ].join("\n"),
+    {
+      keyboard: {
+        inline_keyboard: [
+          [{ text: "✅ Mark me Available & Review", callback_data: `staffreturn:available:${pending.newestId}` }],
+          [{ text: "⏸ Stay Unavailable", callback_data: `staffreturn:stay:${pending.newestId}` }],
+        ],
+      },
+    },
+  );
+}
+
+async function handleReturnPromptCallback(env: Env, callback: TelegramCallbackQuery): Promise<boolean> {
+  const match = callback.data?.match(/^staffreturn:(available|stay):(\d+)$/);
+  if (!match) return false;
+  if (!env.DB || !callback.message) {
+    await answerCallback(env, callback.id, "Session unavailable");
+    return true;
+  }
+  if (!await canManageStaffState(env.DB, callback.from.id, env.BOT_OWNER_TELEGRAM_ID)) {
+    await answerCallback(env, callback.id, "Authorized staff only");
+    return true;
+  }
+
+  const newestId = Number(match[2]);
+  if (!Number.isSafeInteger(newestId)) {
+    await answerCallback(env, callback.id, "Invalid request");
+    return true;
+  }
+
+  await acknowledgePendingPrompt(env.DB, callback.from.id, newestId);
+  if (match[1] === "available") {
+    await setStaffAvailability(env.DB, callback.from.id, true);
+    const pending = await pendingSummary(env.DB);
+    await answerCallback(env, callback.id, "Marked available");
+    await telegramApi(env, "editMessageText", {
+      chat_id: callback.message.chat.id,
+      message_id: callback.message.message_id,
+      text: [
+        "You are now marked available.",
+        `Pending unanswered inquiries: ${pending.count}`,
+        "Open the Staff Inbox and review the waiting user topics. Reply inside a user topic to reconnect with that user.",
+      ].join("\n"),
+    });
+    return true;
+  }
+
+  await answerCallback(env, callback.id, "Staying unavailable");
+  await telegramApi(env, "editMessageText", {
+    chat_id: callback.message.chat.id,
+    message_id: callback.message.message_id,
+    text: "You remain marked unavailable. The pending inquiries will stay queued for another available staff member or for your later review.",
+  });
+  return true;
 }
 
 async function handleStaffCommand(env: Env, message: TelegramMessage): Promise<boolean> {
@@ -146,11 +283,7 @@ async function relayStaffTopicReply(env: Env, message: TelegramMessage): Promise
     return true;
   }
 
-  const sent = await sendMessage(
-    env,
-    userId,
-    `School of Nursing staff:\n${text}`,
-  );
+  const sent = await sendMessage(env, userId, `School of Nursing staff:\n${text}`);
   if (!sent) {
     await sendMessage(
       env,
@@ -175,8 +308,11 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
     return app.fetch(request, env);
   }
 
+  if (update.callback_query && await handleReturnPromptCallback(env, update.callback_query)) return json({ ok: true });
   if (update.message && await handleStaffCommand(env, update.message)) return json({ ok: true });
   if (update.message && await relayStaffTopicReply(env, update.message)) return json({ ok: true });
+
+  if (update.message) await maybePromptReturningStaff(env, update.message);
   return app.fetch(request, env);
 }
 
