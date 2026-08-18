@@ -1,0 +1,11 @@
+UPDATE manual_sections
+SET body='AI provider/API key/model binding/master-key/runtime ပြဿနာကြောင့် grounded AI မသုံးနိုင်ပါက normal user ကို provider error မပြဘဲ FAQ match ကို ဆက်အသုံးပြုနိုင်ပြီး FAQ မကိုက်သော meaningful question ကို Human Handoff သို့ ပြောင်းပေးပါတယ်။ AI infrastructure failure စတင်ဖြစ်သည့် healthy → outage transition မှာ Owner private chat နှင့် configured Staff Inbox သို့ AI service unavailable operational alert တစ်ကြိမ်သာ ပို့ပါတယ်။ Outage ဆက်ရှိနေသရွေ့ မည်မျှကြာကြာ သို့မဟုတ် underlying error reason ပြောင်းသွားသော်လည်း alert ထပ်မပို့ပါ။\n\nAlert ထဲ Human fallback: ACTIVE ဆိုရင် unresolved questions ကို staff destination ဆီ ဆက်ပို့နေပါတယ်။ QUEUED ONLY ဆိုရင် question/case ကို D1 တွင် မှတ်တမ်းတင်ထားသော်လည်း staff destination မရှိသေးတာကို ဆိုလိုပါတယ်။ AI provider က valid answer သို့ valid policy handoff decision ပြန်ပေးနိုင်လာသည့် outage → recovered transition မှာ outage marker clear လုပ်ပြီး AI service recovered notice တစ်ကြိမ်ပို့ပါတယ်။ Recovery ပြီးနောက် outage အသစ်ဖြစ်မှ outage alert အသစ်တစ်ကြိမ် ပြန်ပို့ပါမယ်။ Knowledge မလုံလောက်လို့ AI က intentional handoff လုပ်တာကို outage အဖြစ်မသတ်မှတ်ပါ။ FAQ နှင့် Human Staff response သည် primary service continuity ဖြစ်ပြီး AI သည် supplementary helper ဖြစ်ပါသည်။',
+    version=version+1,
+    updated_at=CURRENT_TIMESTAMP
+WHERE manual_key='owner' AND section_key='ai-outage-human-fallback';
+
+UPDATE manual_sections
+SET body='AI API/provider/configuration failure ဖြစ်လျှင် FAQ answers ဆက်အလုပ်လုပ်ပြီး FAQ မဖြေနိုင်သော meaningful questions ကို Human Handoff သို့ ဆက်ပို့ပါတယ်။ AI outage စတင်ဖြစ်ချိန် Staff Inbox တွင် AI service unavailable operational alert တစ်ကြိမ်သာ ရပါမယ်။ Outage ဆက်ရှိနေသရွေ့ alert ထပ်မပို့ပါ။ Human fallback: ACTIVE ဆိုလျှင် staff routing active ဖြစ်ပြီး QUEUED ONLY ဆိုလျှင် case ကို မှတ်တမ်းတင်ထားသော်လည်း active staff destination မရှိသေးပါ။ AI service ပြန်ကောင်းလာချိန် recovery notice တစ်ကြိမ်ပို့ပြီး နောက် outage အသစ်ဖြစ်မှ alert အသစ်ပို့ပါမယ်။ Knowledge-gap handoff သာဖြစ်ပြီး AI service healthy ဖြစ်နေလျှင် outage alert မတက်ပါ။ FAQ နှင့် Human Staff response သည် primary service continuity ဖြစ်ပြီး AI သည် supplementary helper ဖြစ်ပါသည်။',
+    version=version+1,
+    updated_at=CURRENT_TIMESTAMP
+WHERE manual_key='admin' AND section_key='ai-outage-human-fallback';
