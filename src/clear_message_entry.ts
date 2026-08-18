@@ -76,7 +76,19 @@ async function recordGroupMessage(db: D1Database | undefined, message?: Telegram
        VALUES (?1, ?2, CURRENT_TIMESTAMP)`,
     ).bind(message.chat.id, message.message_id).run();
   } catch {
-    // Migration rollout must never block normal Telegram traffic.
+    // Cleanup telemetry must never block normal Telegram traffic.
+  }
+}
+
+async function recordMessageId(db: D1Database | undefined, chatId: number, messageId: number): Promise<void> {
+  if (!db || !Number.isSafeInteger(messageId)) return;
+  try {
+    await db.prepare(
+      `INSERT OR IGNORE INTO group_message_ledger (chat_id, message_id, observed_at)
+       VALUES (?1, ?2, CURRENT_TIMESTAMP)`,
+    ).bind(chatId, messageId).run();
+  } catch {
+    // Cleanup telemetry is best-effort.
   }
 }
 
@@ -100,6 +112,9 @@ async function sendMessage(env: Env, chatId: number, text: string, keyboard?: un
     text,
     reply_markup: keyboard,
   });
+  if (result.ok && Number.isSafeInteger(Number(result.result?.message_id))) {
+    await recordMessageId(env.DB, chatId, Number(result.result.message_id));
+  }
   return result.ok ? result.result ?? null : null;
 }
 
@@ -110,19 +125,58 @@ async function answerCallback(env: Env, callbackId: string, text?: string): Prom
   });
 }
 
-async function deleteIds(env: Env, chatId: number, ids: number[]): Promise<{ attempted: number; skipped: number }> {
-  if (!ids.length) return { attempted: 0, skipped: 0 };
+async function verifyDeletePermission(env: Env, chatId: number): Promise<{ ok: boolean; reason?: string }> {
+  const me = await telegramApi(env, "getMe", {});
+  const botId = Number(me.result?.id);
+  if (!me.ok || !Number.isSafeInteger(botId)) {
+    return { ok: false, reason: me.description ?? "Could not resolve bot identity." };
+  }
+  const member = await telegramApi(env, "getChatMember", { chat_id: chatId, user_id: botId });
+  if (!member.ok) return { ok: false, reason: member.description ?? "Could not read bot group permissions." };
+  const status = String(member.result?.status ?? "");
+  if (status === "creator") return { ok: true };
+  if (status !== "administrator") {
+    return { ok: false, reason: `Bot status is ${status || "unknown"}; make the bot a group administrator.` };
+  }
+  if (member.result?.can_delete_messages !== true) {
+    return { ok: false, reason: "Bot administrator is missing the Delete messages permission." };
+  }
+  return { ok: true };
+}
+
+async function deleteIds(
+  env: Env,
+  chatId: number,
+  ids: number[],
+): Promise<{ deleted: number[]; failed: Array<{ id: number; reason: string }> }> {
+  if (!ids.length) return { deleted: [], failed: [] };
   const bulk = await telegramApi(env, "deleteMessages", { chat_id: chatId, message_ids: ids });
-  if (bulk.ok) return { attempted: ids.length, skipped: 0 };
-  if (ids.length === 1) return { attempted: 1, skipped: 1 };
+  if (bulk.ok) return { deleted: ids, failed: [] };
+  if (ids.length === 1) {
+    const single = await telegramApi(env, "deleteMessage", { chat_id: chatId, message_id: ids[0] });
+    return single.ok
+      ? { deleted: ids, failed: [] }
+      : { deleted: [], failed: [{ id: ids[0], reason: single.description ?? bulk.description ?? "delete failed" }] };
+  }
 
   const middle = Math.floor(ids.length / 2);
   const left = await deleteIds(env, chatId, ids.slice(0, middle));
   const right = await deleteIds(env, chatId, ids.slice(middle));
   return {
-    attempted: left.attempted + right.attempted,
-    skipped: left.skipped + right.skipped,
+    deleted: [...left.deleted, ...right.deleted],
+    failed: [...left.failed, ...right.failed],
   };
+}
+
+async function removeDeletedLedgerRows(db: D1Database, chatId: number, ids: number[]): Promise<void> {
+  for (let start = 0; start < ids.length; start += 100) {
+    const batch = ids.slice(start, start + 100);
+    if (!batch.length) continue;
+    const placeholders = batch.map((_, index) => `?${index + 2}`).join(",");
+    await db.prepare(
+      `DELETE FROM group_message_ledger WHERE chat_id=?1 AND message_id IN (${placeholders})`,
+    ).bind(chatId, ...batch).run();
+  }
 }
 
 async function handleClearCommand(env: Env, message: TelegramMessage): Promise<boolean> {
@@ -148,13 +202,23 @@ async function handleClearCommand(env: Env, message: TelegramMessage): Promise<b
     return true;
   }
 
+  const permission = await verifyDeletePermission(env, message.chat.id);
+  if (!permission.ok) {
+    await sendMessage(
+      env,
+      message.chat.id,
+      `Cannot clear messages yet. ${permission.reason ?? "Telegram delete permission check failed."}`,
+    );
+    return true;
+  }
+
   await sendMessage(
     env,
     message.chat.id,
     [
       "Clear Staff Inbox messages?",
       "",
-      "This removes recent deletable messages that the bot has observed in this group. Telegram only allows bot deletion for messages younger than 48 hours.",
+      "This removes recent deletable messages that the bot has observed in this group.",
       "",
       "This action cannot be undone.",
     ].join("\n"),
@@ -208,41 +272,58 @@ async function handleClearCallback(env: Env, callback: TelegramCallbackQuery): P
     return true;
   }
 
-  await answerCallback(env, callback.id, "Clearing recent messages…");
-
-  const bounds = await env.DB.prepare(
-    `SELECT MIN(message_id) AS min_id, MAX(message_id) AS max_id
-     FROM group_message_ledger
-     WHERE chat_id=?1 AND observed_at >= datetime('now', '-47 hours', '-50 minutes')`,
-  ).bind(chatId).first<{ min_id: number | null; max_id: number | null }>();
-
-  const high = Math.max(message.message_id, Number(bounds?.max_id ?? message.message_id));
-  const rawLow = Number(bounds?.min_id ?? message.message_id);
-  const low = Math.max(rawLow, high - 4999);
-  const truncated = low > rawLow;
-
-  let skipped = 0;
-  for (let start = low; start <= high; start += 100) {
-    const end = Math.min(high, start + 99);
-    const ids = Array.from({ length: end - start + 1 }, (_, index) => start + index);
-    const result = await deleteIds(env, chatId, ids);
-    skipped += result.skipped;
+  const permission = await verifyDeletePermission(env, chatId);
+  if (!permission.ok) {
+    await answerCallback(env, callback.id, "Delete permission missing");
+    if (owner !== null) {
+      await sendMessage(env, owner, `Staff Inbox cleanup blocked: ${permission.reason ?? "Telegram permission check failed."}`);
+    }
+    return true;
   }
 
-  await env.DB.prepare(
-    `DELETE FROM group_message_ledger WHERE chat_id=?1 AND message_id<=?2`,
-  ).bind(chatId, high).run();
+  await answerCallback(env, callback.id, "Clearing recent messages…");
+
+  const rows = await env.DB.prepare(
+    `SELECT message_id
+     FROM group_message_ledger
+     WHERE chat_id=?1 AND observed_at >= datetime('now', '-47 hours', '-50 minutes')
+     ORDER BY message_id DESC
+     LIMIT 5000`,
+  ).bind(chatId).all<{ message_id: number }>();
+
+  const ids = (rows.results ?? [])
+    .map((row) => Number(row.message_id))
+    .filter((id) => Number.isSafeInteger(id));
+
+  if (!ids.includes(message.message_id)) ids.unshift(message.message_id);
+
+  const deleted: number[] = [];
+  const failed: Array<{ id: number; reason: string }> = [];
+  for (let start = 0; start < ids.length; start += 100) {
+    const batch = ids.slice(start, start + 100);
+    const result = await deleteIds(env, chatId, batch);
+    deleted.push(...result.deleted);
+    failed.push(...result.failed);
+  }
+
+  if (deleted.length) await removeDeletedLedgerRows(env.DB, chatId, deleted);
   await env.DB.prepare(
     `DELETE FROM group_message_ledger WHERE observed_at < datetime('now', '-3 days')`,
   ).run();
 
-  if (truncated || skipped > 0) {
-    const notes = [
-      "Staff Inbox cleanup completed with limitations.",
-      truncated ? "Only the newest 5,000 message IDs were attempted in this cleanup." : null,
-      skipped > 0 ? `${skipped} message ID(s) could not be deleted, usually because Telegram does not permit deletion of those messages.` : null,
-    ].filter(Boolean).join("\n");
-    if (owner !== null) await sendMessage(env, owner, notes);
+  if (owner !== null) {
+    const firstFailure = failed[0]?.reason;
+    await sendMessage(
+      env,
+      owner,
+      [
+        "Staff Inbox cleanup result",
+        `Deleted: ${deleted.length}`,
+        `Could not delete: ${failed.length}`,
+        ids.length === 5000 ? "Note: cleanup was limited to the newest 5,000 tracked messages." : null,
+        firstFailure ? `First Telegram error: ${firstFailure}` : null,
+      ].filter(Boolean).join("\n"),
+    );
   }
 
   return true;
