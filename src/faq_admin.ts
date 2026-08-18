@@ -1,5 +1,6 @@
 import { getAdminRole, type AdminRole } from "./admin";
 import type { FaqEntry, Language } from "./faq";
+import { generateFaqTranslations, type FaqAuthoringEnv } from "./faq_authoring_ai";
 import {
   createFaq,
   getFaq,
@@ -23,9 +24,28 @@ type EditField =
   | "keywords_my" | "keywords_en" | "keywords_zh";
 
 type FaqListMode = "active" | "inactive";
+type DraftMode = "create" | "edit";
+
+type DraftPayload = {
+  mode: DraftMode;
+  key?: string;
+  caseId?: number;
+  sourceLanguage: Language;
+  question?: Partial<Record<Language, string>>;
+  answer?: Partial<Record<Language, string>>;
+  manualLanguages?: Language[];
+  manualIndex?: number;
+  aiSource?: "primary" | "fallback";
+};
 
 const FAQ_PAGE_SIZE = 8;
 const COMPACT_LABEL_LENGTH = 26;
+const LANGUAGES: Language[] = ["my", "en", "zh"];
+const LANGUAGE_LABEL: Record<Language, string> = {
+  my: "မြန်မာ",
+  en: "English",
+  zh: "简体中文",
+};
 
 const EDIT_FIELDS: Array<{ id: EditField; label: string }> = [
   { id: "question_my", label: "MY Question" },
@@ -85,7 +105,8 @@ function adminMenuKeyboard() {
 function faqKeyboard(key: string, active: boolean, page = 0, mode: FaqListMode = "active") {
   return {
     inline_keyboard: [
-      [{ text: "Edit", callback_data: `faq:edit:${key}` }],
+      [{ text: "✨ Edit from one language", callback_data: `faq:editai:${key}` }],
+      [{ text: "Edit individual fields", callback_data: `faq:edit:${key}` }],
       [active
         ? { text: "Disable", callback_data: `faq:disable:${key}` }
         : { text: "Restore", callback_data: `faq:restore:${key}` }],
@@ -101,6 +122,30 @@ function editKeyboard(key: string) {
       [{ text: "← Back", callback_data: `faq:view:${key}:active:0` }],
     ],
   };
+}
+
+function sourceLanguageKeyboard(prefix: "add" | "edit", key?: string) {
+  return {
+    inline_keyboard: [
+      LANGUAGES.map((language) => ({
+        text: LANGUAGE_LABEL[language],
+        callback_data: prefix === "add"
+          ? `faq:addlang:${language}`
+          : `faq:editlang:${key}:${language}`,
+      })),
+      [{ text: "← FAQ Management", callback_data: "faq:menu" }],
+    ],
+  };
+}
+
+function draftActionKeyboard(canApprove: boolean) {
+  const rows: Array<Array<{ text: string; callback_data: string }>> = [
+    [{ text: "✨ Generate other 2 languages", callback_data: "faq:draft:generate" }],
+    [{ text: "✍ Fill/Edit translations manually", callback_data: "faq:draft:manual" }],
+  ];
+  if (canApprove) rows.unshift([{ text: "✅ Approve & Save", callback_data: "faq:draft:approve" }]);
+  rows.push([{ text: "✕ Discard Draft", callback_data: "faq:draft:discard" }]);
+  return { inline_keyboard: rows };
 }
 
 function slugify(value: string): string {
@@ -154,6 +199,32 @@ function publicEntryText(
   return `${entry.question[language]}\n\n${entry.answer[language]}`;
 }
 
+function draftPreview(payload: DraftPayload): string {
+  const question = payload.question ?? {};
+  const answer = payload.answer ?? {};
+  return [
+    payload.mode === "create" ? "FAQ Draft — Review before publishing" : `FAQ Edit Draft — ${payload.key}`,
+    payload.caseId ? `Source escalation: #${payload.caseId}` : null,
+    `Authoritative source language: ${LANGUAGE_LABEL[payload.sourceLanguage]}`,
+    payload.aiSource ? `Translation draft: AI ${payload.aiSource}` : null,
+    "",
+    `MY Q: ${question.my ?? "—"}`,
+    `MY A: ${answer.my ?? "—"}`,
+    "",
+    `EN Q: ${question.en ?? "—"}`,
+    `EN A: ${answer.en ?? "—"}`,
+    "",
+    `ZH Q: ${question.zh ?? "—"}`,
+    `ZH A: ${answer.zh ?? "—"}`,
+    "",
+    "Nothing becomes canonical until Approve & Save is pressed.",
+  ].filter((line) => line !== null).join("\n");
+}
+
+function draftComplete(payload: DraftPayload): boolean {
+  return LANGUAGES.every((language) => Boolean(payload.question?.[language]?.trim() && payload.answer?.[language]?.trim()));
+}
+
 async function roleFor(
   db: D1Database | undefined,
   userId: number,
@@ -196,9 +267,7 @@ async function buildFaqListUi(
     : entries.filter((entry) => entry.active);
   const admin = isAdminRole(role);
 
-  if (includeInactive && !admin) {
-    return buildFaqListUi(db, userId, role, "active", 0);
-  }
+  if (includeInactive && !admin) return buildFaqListUi(db, userId, role, "active", 0);
 
   const pageCount = Math.max(1, Math.ceil(visible.length / FAQ_PAGE_SIZE));
   const page = Math.max(0, Math.min(requestedPage, pageCount - 1));
@@ -211,7 +280,6 @@ async function buildFaqListUi(
     const currentLabel = cleanButtonLabel(current.question[language] || current.question.en || current.key);
     const next = pageEntries[index + 1];
     const nextLabel = next ? cleanButtonLabel(next.question[language] || next.question.en || next.key) : "";
-
     if (next && currentLabel.length <= COMPACT_LABEL_LENGTH && nextLabel.length <= COMPACT_LABEL_LENGTH) {
       rows.push([
         { text: currentLabel, callback_data: `faq:view:${current.key}:${mode}:${page}` },
@@ -273,6 +341,26 @@ async function clearSession(db: D1Database, userId: number) {
   await db.prepare(`DELETE FROM admin_sessions WHERE telegram_user_id=?1`).bind(userId).run();
 }
 
+async function loadDraftSession(db: D1Database, userId: number): Promise<{ state: string; payload: DraftPayload } | null> {
+  const row = await db.prepare(
+    `SELECT state, payload FROM admin_sessions WHERE telegram_user_id=?1`,
+  ).bind(userId).first<{ state: string; payload: string | null }>();
+  if (!row?.payload) return null;
+  try { return { state: row.state, payload: JSON.parse(row.payload) as DraftPayload }; } catch { return null; }
+}
+
+async function uniqueCaseKey(db: D1Database, caseId: number): Promise<string> {
+  for (let i = 0; i < 20; i += 1) {
+    const key = i === 0 ? `case-${caseId}` : `case-${caseId}-${i + 1}`;
+    if (!await getFaq(db, key)) return key;
+  }
+  return `case-${caseId}-${Date.now()}`.slice(0, 64);
+}
+
+function promptForManualLanguage(language: Language, kind: "question" | "answer"): string {
+  return `Manual FAQ translation\nSend the ${LANGUAGE_LABEL[language]} ${kind}.\nThe source-language meaning must not be changed.`;
+}
+
 export async function handleFaqCommand(
   db: D1Database | undefined,
   userId: number,
@@ -281,13 +369,11 @@ export async function handleFaqCommand(
 ): Promise<FaqUiResponse> {
   if (!text.trim().toLowerCase().startsWith("/faq")) return { handled: false };
   if (!db) return { handled: true, text: "FAQ storage is temporarily unavailable." };
-
   const role = await roleFor(db, userId, ownerIdValue);
   if (!isAdminRole(role)) return buildFaqListUi(db, userId, role, "active", 0);
-
   return {
     handled: true,
-    text: "FAQ Knowledge Management\nBrowse the public FAQ library or manage approved knowledge.",
+    text: "FAQ Knowledge Management\nBrowse approved knowledge or create/edit multilingual FAQs. AI translation is optional; approval is always manual.",
     keyboard: adminMenuKeyboard(),
   };
 }
@@ -297,6 +383,7 @@ export async function handleFaqCallback(
   userId: number,
   ownerIdValue: string | undefined,
   data: string,
+  aiEnv?: FaqAuthoringEnv,
 ): Promise<FaqUiResponse> {
   if (!data.startsWith("faq:")) return { handled: false };
   if (!db) return { handled: true, text: "FAQ storage is temporarily unavailable." };
@@ -316,20 +403,19 @@ export async function handleFaqCallback(
       text: [
         "FAQ Management",
         "• Browse reviews the live public FAQ library.",
-        "• Add creates a new live FAQ after the multilingual wizard completes.",
-        "• Edit changes one field at a time.",
+        "• Add/Edit from one language creates a draft first; nothing is canonical until Approve & Save.",
+        "• AI can translate the authoritative source question/answer into the other two languages.",
+        "• AI translation is optional. If unavailable, keep the draft and fill the other languages manually.",
+        "• Individual-field editing remains available for precise corrections.",
         "• Disable is a soft delete; Restore reactivates it.",
-        "• Every mutation creates a revision and notifies Owner/Admins plus Staff Inbox when configured.",
-        "• Active D1 FAQs are the runtime knowledge source for deterministic matching and AI grounding.",
+        "• Every saved mutation creates a revision and notifies Owner/Admins plus Staff Inbox when configured.",
       ].join("\n"),
       keyboard: adminMenuKeyboard(),
     };
   }
 
   const listMatch = data.match(/^faq:list(?::(\d+))?$/);
-  if (listMatch) {
-    return buildFaqListUi(db, userId, role, "active", Number(listMatch[1] ?? "0"));
-  }
+  if (listMatch) return buildFaqListUi(db, userId, role, "active", Number(listMatch[1] ?? "0"));
 
   const inactiveMatch = data.match(/^faq:inactive(?::(\d+))?$/);
   if (inactiveMatch) {
@@ -342,40 +428,192 @@ export async function handleFaqCallback(
     const entry = await getFaq(db, view[1]);
     const mode = (view[2] ?? "active") as FaqListMode;
     const page = Number(view[3] ?? "0");
-    if (!entry || (!admin && !entry.active)) {
-      return buildFaqListUi(db, userId, role, "active", page);
-    }
-
+    if (!entry || (!admin && !entry.active)) return buildFaqListUi(db, userId, role, "active", page);
     if (!admin) {
       const language = await uiLanguage(db, userId);
       return {
         handled: true,
         text: publicEntryText(entry, language),
-        keyboard: {
-          inline_keyboard: [[{
-            text: PUBLIC_COPY[language].back,
-            callback_data: `faq:list:${page}`,
-          }]],
-        },
+        keyboard: { inline_keyboard: [[{ text: PUBLIC_COPY[language].back, callback_data: `faq:list:${page}` }]] },
       };
     }
+    return { handled: true, text: adminEntryText(entry), keyboard: faqKeyboard(entry.key, entry.active, page, mode) };
+  }
 
+  if (!admin) return buildFaqListUi(db, userId, role, "active", 0);
+
+  if (data === "faq:add") {
+    await clearSession(db, userId);
     return {
       handled: true,
-      text: adminEntryText(entry),
-      keyboard: faqKeyboard(entry.key, entry.active, page, mode),
+      text: "Add FAQ\nChoose the language you can author confidently. You only need to write the authoritative question and answer in that language.",
+      keyboard: sourceLanguageKeyboard("add"),
     };
   }
 
-  if (!admin) {
-    return buildFaqListUi(db, userId, role, "active", 0);
-  }
-
-  if (data === "faq:add") {
-    await saveSession(db, userId, "awaiting_faq_add_key", null, {});
+  const addLang = data.match(/^faq:addlang:(my|en|zh)$/);
+  if (addLang) {
+    const sourceLanguage = addLang[1] as Language;
+    await saveSession(db, userId, "awaiting_faq_draft_key", null, { mode: "create", sourceLanguage } satisfies DraftPayload);
     return {
       handled: true,
-      text: "Add FAQ — step 1/7\nSend a short stable key in English, for example: entrance-exam-dates\nOr send a short English title and I will normalize it into a key.",
+      text: `Add FAQ · Source: ${LANGUAGE_LABEL[sourceLanguage]}\nStep 1/3 — Send a short stable English key, for example: student-medical-costs.`,
+    };
+  }
+
+  const addCase = data.match(/^faq:addcase:(\d+)$/);
+  if (addCase) {
+    const caseId = Number(addCase[1]);
+    const row = await db.prepare(
+      `SELECT id, language, user_question, linked_faq_key FROM escalation_cases WHERE id=?1`,
+    ).bind(caseId).first<{ id: number; language: string | null; user_question: string; linked_faq_key: string | null }>();
+    if (!row) return { handled: true, text: `Escalation #${caseId} was not found.` };
+    if (row.linked_faq_key) {
+      const linked = await getFaq(db, row.linked_faq_key);
+      if (linked) return { handled: true, text: `Case #${caseId} is already linked to FAQ ${linked.key}.`, keyboard: faqKeyboard(linked.key, linked.active) };
+    }
+    const sourceLanguage: Language = row.language === "my" || row.language === "zh" ? row.language : "en";
+    const key = await uniqueCaseKey(db, caseId);
+    const payload: DraftPayload = {
+      mode: "create",
+      key,
+      caseId,
+      sourceLanguage,
+      question: { [sourceLanguage]: row.user_question },
+      answer: {},
+    };
+    await saveSession(db, userId, "awaiting_faq_draft_answer", null, payload);
+    return {
+      handled: true,
+      text: [
+        `Add FAQ from Escalation #${caseId}`,
+        `Source: ${LANGUAGE_LABEL[sourceLanguage]}`,
+        `Draft key: ${key}`,
+        "",
+        `Question prefilled: ${row.user_question}`,
+        "",
+        `Send the approved ${LANGUAGE_LABEL[sourceLanguage]} answer. Nothing will be published yet.`,
+      ].join("\n"),
+    };
+  }
+
+  const editAi = data.match(/^faq:editai:([a-z0-9-]+)$/);
+  if (editAi) {
+    const entry = await getFaq(db, editAi[1]);
+    if (!entry) return { handled: true, text: "FAQ not found." };
+    await clearSession(db, userId);
+    return {
+      handled: true,
+      text: `AI-assisted multilingual edit\n${entry.key}\n\nChoose the language you will rewrite as the authoritative source. The current FAQ stays live until you approve the finished draft.`,
+      keyboard: sourceLanguageKeyboard("edit", entry.key),
+    };
+  }
+
+  const editLang = data.match(/^faq:editlang:([a-z0-9-]+):(my|en|zh)$/);
+  if (editLang) {
+    const entry = await getFaq(db, editLang[1]);
+    if (!entry) return { handled: true, text: "FAQ not found." };
+    const sourceLanguage = editLang[2] as Language;
+    const payload: DraftPayload = { mode: "edit", key: entry.key, sourceLanguage, question: {}, answer: {} };
+    await saveSession(db, userId, "awaiting_faq_editdraft_question", null, payload);
+    return {
+      handled: true,
+      text: `Edit ${entry.key} · Source: ${LANGUAGE_LABEL[sourceLanguage]}\nStep 1/2 — Send the complete new ${LANGUAGE_LABEL[sourceLanguage]} question.`,
+    };
+  }
+
+  if (data === "faq:draft:discard") {
+    await clearSession(db, userId);
+    return { handled: true, text: "FAQ draft discarded. No canonical FAQ data was changed.", keyboard: adminMenuKeyboard() };
+  }
+
+  if (data === "faq:draft:generate") {
+    const session = await loadDraftSession(db, userId);
+    if (!session || (session.state !== "faq_draft_ready" && session.state !== "faq_draft_complete")) {
+      return { handled: true, text: "FAQ draft session expired. Open /faq and start again.", keyboard: adminMenuKeyboard() };
+    }
+    const payload = session.payload;
+    const sourceQuestion = payload.question?.[payload.sourceLanguage]?.trim();
+    const sourceAnswer = payload.answer?.[payload.sourceLanguage]?.trim();
+    if (!sourceQuestion || !sourceAnswer) {
+      return { handled: true, text: "The source question/answer is incomplete. Restart the draft from /faq." };
+    }
+    const result = await generateFaqTranslations(aiEnv ?? { DB: db }, {
+      sourceLanguage: payload.sourceLanguage,
+      question: sourceQuestion,
+      answer: sourceAnswer,
+    });
+    if (!result.ok) {
+      await saveSession(db, userId, "faq_draft_ready", null, payload);
+      return {
+        handled: true,
+        text: [
+          "AI translation is unavailable right now.",
+          result.reason,
+          "",
+          "Your source-language draft is still safe. Retry AI or fill the other two languages manually.",
+        ].join("\n"),
+        keyboard: draftActionKeyboard(false),
+      };
+    }
+    const completed: DraftPayload = {
+      ...payload,
+      question: result.draft.question,
+      answer: result.draft.answer,
+      aiSource: result.source,
+    };
+    await saveSession(db, userId, "faq_draft_complete", null, completed);
+    return { handled: true, text: draftPreview(completed), keyboard: draftActionKeyboard(true) };
+  }
+
+  if (data === "faq:draft:manual") {
+    const session = await loadDraftSession(db, userId);
+    if (!session || (session.state !== "faq_draft_ready" && session.state !== "faq_draft_complete")) {
+      return { handled: true, text: "FAQ draft session expired. Open /faq and start again." };
+    }
+    const payload = session.payload;
+    const manualLanguages = LANGUAGES.filter((language) => language !== payload.sourceLanguage);
+    const next: DraftPayload = { ...payload, manualLanguages, manualIndex: 0, aiSource: undefined };
+    await saveSession(db, userId, "awaiting_faq_draft_manual_question", null, next);
+    return { handled: true, text: promptForManualLanguage(manualLanguages[0], "question") };
+  }
+
+  if (data === "faq:draft:approve") {
+    const session = await loadDraftSession(db, userId);
+    if (!session || session.state !== "faq_draft_complete" || !draftComplete(session.payload)) {
+      return { handled: true, text: "The multilingual draft is incomplete or expired. Complete all three languages before saving." };
+    }
+    const payload = session.payload;
+    const question = payload.question as Record<Language, string>;
+    const answer = payload.answer as Record<Language, string>;
+    const key = String(payload.key ?? "").trim();
+    if (!/^[a-z0-9][a-z0-9-]{1,63}$/.test(key)) {
+      return { handled: true, text: "FAQ key is invalid. Discard this draft and restart with a short English key." };
+    }
+    const entry: FaqEntry = {
+      key,
+      question,
+      answer,
+      keywords: {
+        my: deriveKeywords(question.my),
+        en: deriveKeywords(question.en),
+        zh: deriveKeywords(question.zh),
+      },
+    };
+    const mutation = payload.mode === "edit"
+      ? await updateFaq(db, userId, key, { question: entry.question, answer: entry.answer, keywords: entry.keywords })
+      : await createFaq(db, userId, entry);
+    if (payload.caseId) {
+      await db.prepare(`UPDATE escalation_cases SET linked_faq_key=?2 WHERE id=?1`).bind(payload.caseId, key).run();
+    }
+    await clearSession(db, userId);
+    return {
+      handled: true,
+      text: payload.mode === "edit"
+        ? `FAQ updated and approved: ${key}\nVersion ${mutation.entry.version}\nAll three languages are now canonical.`
+        : `FAQ approved and published: ${key}\nVersion ${mutation.entry.version}\nAll three languages are now canonical.${payload.caseId ? `\nLinked to Escalation #${payload.caseId}.` : ""}`,
+      keyboard: faqKeyboard(key, mutation.entry.active),
+      mutation,
     };
   }
 
@@ -391,32 +629,20 @@ export async function handleFaqCallback(
     await saveSession(db, userId, "awaiting_faq_edit_value", field[1], { field: field[2] });
     return {
       handled: true,
-      text: field[2].startsWith("keywords_")
-        ? "Send comma-separated keywords for this language."
-        : `Send the new value for ${field[2]}.`,
+      text: field[2].startsWith("keywords_") ? "Send comma-separated keywords for this language." : `Send the new value for ${field[2]}.`,
     };
   }
 
   const disable = data.match(/^faq:disable:([a-z0-9-]+)$/);
   if (disable) {
     const mutation = await setFaqActive(db, userId, disable[1], false);
-    return {
-      handled: true,
-      text: `FAQ disabled: ${mutation.entry.key}\nVersion ${mutation.entry.version}`,
-      keyboard: faqKeyboard(mutation.entry.key, false, 0, "inactive"),
-      mutation,
-    };
+    return { handled: true, text: `FAQ disabled: ${mutation.entry.key}\nVersion ${mutation.entry.version}`, keyboard: faqKeyboard(mutation.entry.key, false, 0, "inactive"), mutation };
   }
 
   const restore = data.match(/^faq:restore:([a-z0-9-]+)$/);
   if (restore) {
     const mutation = await setFaqActive(db, userId, restore[1], true);
-    return {
-      handled: true,
-      text: `FAQ restored: ${mutation.entry.key}\nVersion ${mutation.entry.version}`,
-      keyboard: faqKeyboard(mutation.entry.key, true),
-      mutation,
-    };
+    return { handled: true, text: `FAQ restored: ${mutation.entry.key}\nVersion ${mutation.entry.version}`, keyboard: faqKeyboard(mutation.entry.key, true), mutation };
   }
 
   return { handled: true, text: "Unknown FAQ action.", keyboard: adminMenuKeyboard() };
@@ -443,84 +669,85 @@ export async function consumeFaqAdminText(
       await clearSession(db, userId);
       return { handled: true, text: "Edit session expired. Open /faq and try again." };
     }
-
     const payload = JSON.parse(session.payload) as { field: EditField };
     const entry = await getFaq(db, session.provider);
     if (!entry) {
       await clearSession(db, userId);
       return { handled: true, text: "FAQ no longer exists." };
     }
-
     const question = { ...entry.question };
     const answer = { ...entry.answer };
-    const keywords = {
-      my: [...entry.keywords.my],
-      en: [...entry.keywords.en],
-      zh: [...entry.keywords.zh],
-    };
-
+    const keywords = { my: [...entry.keywords.my], en: [...entry.keywords.en], zh: [...entry.keywords.zh] };
     const [kind, langRaw] = payload.field.split("_") as ["question" | "answer" | "keywords", Language];
     if (kind === "question") question[langRaw] = value;
     if (kind === "answer") answer[langRaw] = value;
-    if (kind === "keywords") {
-      keywords[langRaw] = value.split(",").map((item) => item.trim()).filter(Boolean).slice(0, 20);
-    }
-
+    if (kind === "keywords") keywords[langRaw] = value.split(",").map((item) => item.trim()).filter(Boolean).slice(0, 20);
     const mutation = await updateFaq(db, userId, entry.key, { question, answer, keywords });
     await clearSession(db, userId);
-    return {
-      handled: true,
-      text: `FAQ updated: ${entry.key}\nVersion ${mutation.entry.version}`,
-      keyboard: faqKeyboard(entry.key, mutation.entry.active),
-      mutation,
-    };
+    return { handled: true, text: `FAQ updated: ${entry.key}\nVersion ${mutation.entry.version}`, keyboard: faqKeyboard(entry.key, mutation.entry.active), mutation };
   }
 
-  let payload: any = session.payload ? JSON.parse(session.payload) : {};
-
-  const steps: Record<string, { next: string; field: string; prompt: string }> = {
-    awaiting_faq_add_key: { next: "awaiting_faq_add_q_my", field: "key", prompt: "Add FAQ — step 2/7\nSend the Burmese question." },
-    awaiting_faq_add_q_my: { next: "awaiting_faq_add_a_my", field: "q_my", prompt: "Add FAQ — step 3/7\nSend the Burmese answer." },
-    awaiting_faq_add_a_my: { next: "awaiting_faq_add_q_en", field: "a_my", prompt: "Add FAQ — step 4/7\nSend the English question." },
-    awaiting_faq_add_q_en: { next: "awaiting_faq_add_a_en", field: "q_en", prompt: "Add FAQ — step 5/7\nSend the English answer." },
-    awaiting_faq_add_a_en: { next: "awaiting_faq_add_q_zh", field: "a_en", prompt: "Add FAQ — step 6/7\nSend the Simplified Chinese question." },
-    awaiting_faq_add_q_zh: { next: "awaiting_faq_add_a_zh", field: "q_zh", prompt: "Add FAQ — step 7/7\nSend the Simplified Chinese answer." },
-  };
-
-  const step = steps[session.state];
-  if (step) {
-    payload[step.field] = step.field === "key" ? (slugify(value) || value) : value;
-    await saveSession(db, userId, step.next, null, payload);
-    return { handled: true, text: step.prompt };
-  }
-
-  if (session.state === "awaiting_faq_add_a_zh") {
-    payload.a_zh = value;
-    const key = String(payload.key ?? "").trim();
-    if (!/^[a-z0-9][a-z0-9-]{1,63}$/.test(key)) {
-      await clearSession(db, userId);
-      return { handled: true, text: "FAQ key is invalid. Restart with /faq and use a short English key." };
-    }
-
-    const entry: FaqEntry = {
-      key,
-      question: { my: payload.q_my, en: payload.q_en, zh: payload.q_zh },
-      answer: { my: payload.a_my, en: payload.a_en, zh: payload.a_zh },
-      keywords: {
-        my: deriveKeywords(payload.q_my),
-        en: deriveKeywords(payload.q_en),
-        zh: deriveKeywords(payload.q_zh),
-      },
-    };
-
-    const mutation = await createFaq(db, userId, entry);
+  let payload: DraftPayload;
+  try { payload = session.payload ? JSON.parse(session.payload) as DraftPayload : {} as DraftPayload; } catch {
     await clearSession(db, userId);
+    return { handled: true, text: "FAQ draft session expired. Open /faq and try again." };
+  }
+
+  if (session.state === "awaiting_faq_draft_key") {
+    const key = slugify(value) || value;
+    if (!/^[a-z0-9][a-z0-9-]{1,63}$/.test(key)) {
+      return { handled: true, text: "Use a short stable English key containing letters, numbers, and hyphens only." };
+    }
+    if (await getFaq(db, key)) return { handled: true, text: `FAQ key '${key}' already exists. Send a different key.` };
+    payload.key = key;
+    payload.question = {};
+    payload.answer = {};
+    await saveSession(db, userId, "awaiting_faq_draft_question", null, payload);
+    return { handled: true, text: `Add FAQ · Source: ${LANGUAGE_LABEL[payload.sourceLanguage]}\nStep 2/3 — Send the authoritative ${LANGUAGE_LABEL[payload.sourceLanguage]} question.` };
+  }
+
+  if (session.state === "awaiting_faq_draft_question" || session.state === "awaiting_faq_editdraft_question") {
+    payload.question = { ...(payload.question ?? {}), [payload.sourceLanguage]: value };
+    await saveSession(db, userId, "awaiting_faq_draft_answer", null, payload);
+    return { handled: true, text: `Step ${payload.mode === "create" ? "3/3" : "2/2"} — Send the authoritative ${LANGUAGE_LABEL[payload.sourceLanguage]} answer.` };
+  }
+
+  if (session.state === "awaiting_faq_draft_answer") {
+    payload.answer = { ...(payload.answer ?? {}), [payload.sourceLanguage]: value };
+    await saveSession(db, userId, "faq_draft_ready", null, payload);
     return {
       handled: true,
-      text: `FAQ created: ${key}\nVersion 1\nIt is active immediately and is now part of deterministic matching and AI grounding.`,
-      keyboard: faqKeyboard(key, true),
-      mutation,
+      text: draftPreview(payload),
+      keyboard: draftActionKeyboard(false),
     };
+  }
+
+  if (session.state === "awaiting_faq_draft_manual_question") {
+    const languages = payload.manualLanguages ?? LANGUAGES.filter((language) => language !== payload.sourceLanguage);
+    const index = Math.max(0, Math.min(payload.manualIndex ?? 0, languages.length - 1));
+    const language = languages[index];
+    payload.question = { ...(payload.question ?? {}), [language]: value };
+    payload.manualLanguages = languages;
+    payload.manualIndex = index;
+    await saveSession(db, userId, "awaiting_faq_draft_manual_answer", null, payload);
+    return { handled: true, text: promptForManualLanguage(language, "answer") };
+  }
+
+  if (session.state === "awaiting_faq_draft_manual_answer") {
+    const languages = payload.manualLanguages ?? LANGUAGES.filter((language) => language !== payload.sourceLanguage);
+    const index = Math.max(0, Math.min(payload.manualIndex ?? 0, languages.length - 1));
+    const language = languages[index];
+    payload.answer = { ...(payload.answer ?? {}), [language]: value };
+    const nextIndex = index + 1;
+    if (nextIndex < languages.length) {
+      payload.manualIndex = nextIndex;
+      await saveSession(db, userId, "awaiting_faq_draft_manual_question", null, payload);
+      return { handled: true, text: promptForManualLanguage(languages[nextIndex], "question") };
+    }
+    payload.manualIndex = undefined;
+    payload.manualLanguages = undefined;
+    await saveSession(db, userId, "faq_draft_complete", null, payload);
+    return { handled: true, text: draftPreview(payload), keyboard: draftActionKeyboard(true) };
   }
 
   await clearSession(db, userId);
