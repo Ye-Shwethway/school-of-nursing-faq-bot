@@ -14,55 +14,80 @@ Historical branch: `test` (dormant/reference-only)
 Live repository plus verified Cloudflare/Telegram evidence outranks remembered chat context.
 
 ## Current checkpoint
-The project is main-only and production-live. FAQ-first onboarding, false-escalation filtering, rotated Telegram token + automatic webhook cutover, rotated AI master-key credential save, Bot Owner takeover override, and deployment reboot `Change:` metadata are live-accepted.
+The project is main-only and production-live. FAQ-first onboarding, false-escalation filtering, rotated Telegram token + automatic webhook cutover, rotated AI master-key credential save, Bot Owner takeover override, deployment reboot `Change:` metadata, and the latest pre-existing production workflow are live-accepted.
 
-Newest implementation on `main` changes AI outage visibility to **state-transition-only alerts** while preserving FAQ + human fallback continuity. Do not call this newest slice production-green until production workflow and controlled outage/recovery acceptance are verified.
+Newest implementation on `main` adds **timed staff unavailability and recurring daily staff availability schedules** using Asia/Yangon time. Do not call this newest slice production/live accepted until workflow + Telegram command acceptance is verified.
 
 ## Product priority contract
 - Deterministic FAQ and Human Staff response are the primary service continuity paths.
 - AI is a supplementary helper, not a dependency for user↔staff communication.
 - Free-tier/provider outages are expected operational conditions and must not create alert spam or break human handoff.
 
+## Staff availability timer + daily schedule
+Existing staff commands retain backward compatibility and add optional timing arguments.
+
+### Commands
+- `/available` → immediate available; clears recurring schedule
+- `/unavailable` → unavailable indefinitely
+- `/unavailable 3` → unavailable for 3 hours
+- positive fractional hours are accepted up to 168 hours
+- `/available 09:00 17:00` → daily recurring 09:00–17:00 availability
+- `/available 9am 5pm` → alias for the same schedule
+- `/available 9:30am 5:30pm` → minute-resolution 12-hour alias
+- `/available 20:00 08:00` → valid overnight schedule
+
+Timezone is fixed to **Asia/Yangon / UTC+06:30**.
+
+### State precedence
+1. active temporary unavailable timer overrides everything
+2. after timer expiry, a recurring schedule resumes if configured
+3. without a recurring schedule, timer expiry returns the staff member to available
+4. daily schedule determines availability by the configured Yangon-time window
+5. plain `/available` or plain `/unavailable` intentionally clears the recurring schedule to preserve old manual-toggle semantics
+
+### Runtime ownership
+Migration `0031_staff_availability_schedule.sql` adds `unavailable_until`, `schedule_start_minute`, `schedule_end_minute`, `schedule_enabled` and an expiry index to `staff_presence`, plus manual guidance.
+
+`src/staff_presence.ts` owns:
+- effective availability calculation
+- temporary-unavailable state
+- recurring daily schedule state
+- available-staff counting
+- staff-active reply behavior
+- scheduled sweep/materialization
+
+`src/staff_presence_entry.ts` owns:
+- `/available` / `/unavailable` parsing
+- 24-hour and am/pm aliases
+- command confirmations in Asia/Yangon time
+- suppression of the legacy “become available now?” prompt during scheduled off-hours
+
+`src/interaction_guard_entry.ts` reuses the existing Cloudflare `*/5 * * * *` Cron and runs both:
+- human-control lease expiry sweep
+- staff-availability timer/schedule sweep
+
+Availability queries calculate effective state directly, so staff counts do not need to wait for the Cron. Persisted `available` state is reconciled by Cron within 0–5 minutes of a boundary.
+
+A staff topic reply may clear a temporary unavailable override because it demonstrates active return, but must not delete a recurring daily schedule.
+
 ## AI outage / fallback contract
 - AI infrastructure/configuration failure must not reduce the bot to FAQ-only mode.
-- Deterministic FAQ remains independent and continues to answer matches.
-- A meaningful FAQ miss still goes to normal human handoff when AI is unavailable.
+- Deterministic FAQ continues to answer matches.
+- Meaningful FAQ misses still go to normal human handoff when AI is unavailable.
 - End users never receive provider/API-key/master-key error details.
-- `src/ai_runtime.ts` distinguishes infrastructure failure from a valid AI policy handoff.
-- Infrastructure failures include `ai_unavailable:<reason>`, `primary_and_fallback_failed`, and `ai_runtime_failure`.
-- Valid AI `answer` or valid policy `handoff` proves the model path is responding and is not treated as an outage.
 
-## Operational AI alerts
-`src/ai_outage_alert.ts` owns outage/recovery visibility.
-
-Alert semantics are state-transition-only:
-1. healthy → outage: persist one outage marker and send one `🚨 AI service unavailable` notice to Bot Owner private chat and configured Staff Inbox
-2. while outage remains active: send no further outage notices, regardless of duration or changes in underlying error reason
-3. outage → recovered: clear outage marker and send one `🟢 AI service recovered` notice
-4. after recovery, a later new outage may again send one outage notice
-
-The outage alert shows a safe internal reason and:
-- `Human fallback: ACTIVE` when a staff destination exists
-- `Human fallback: QUEUED ONLY` when cases can be logged but no staff destination is configured
-
-No time-based repeat throttle remains. Migration `0030_manual_ai_outage_transition_only.sql` updates Owner/Admin manual guidance. Outage state continues to use existing `bot_settings`; no new table is needed.
+Operational AI alerts are state-transition-only:
+1. healthy → outage: one `🚨 AI service unavailable`
+2. while outage remains active: no repeat notices
+3. outage → recovered: one `🟢 AI service recovered`
+4. a later new outage may alert again
 
 ## Human-control lease contract
 - Every successful `Take Over` starts a 1-hour inactivity lease.
-- Lease state is persisted in D1 (`last_human_activity_at`, `human_control_expires_at`).
-- Only the current claimant may renew it.
-- Eligible claimant staff reply or `Extend 1h` renews to one hour from that activity.
+- Only the active claimant may renew with valid staff activity or `Extend 1h`.
 - Other Admin activity does not renew another claimant's lease.
-- Cron sweep every 5 minutes auto-returns expired claims to AI; practical expiry is about 1h00m–1h05m.
-- Auto-return notifies user + claimant/staff, removes stale control button, and preserves history.
-
-Migration `0028_human_control_lease.sql` added lease timestamps/index and gave pre-existing claims a fresh rollout hour.
-
-## Owner authority contract
-- Sudo/Admin may Take Over.
-- Active claimant may Return to AI.
-- Bot Owner may force Return to AI regardless of claimant identity and does not need to wait for lease expiry.
-- Owner override notifies displaced claimant, informs user, cleans control state and preserves history.
+- Existing 5-minute Cron auto-returns expired claims to AI.
+- Owner override remains immediately available and outranks claimant ownership.
 
 ## Deployment contract
 Canonical `wrangler.jsonc` has `triggers.crons = ["*/5 * * * *"]`; the isolated production Wrangler config copies `source.triggers`.
@@ -71,21 +96,18 @@ Every production deploy validates typecheck, local migrations, dry-run bundle, r
 
 The workflow injects:
 - `DEPLOY_REVISION = GITHUB_SHA`
-- `DEPLOY_CHANGE = normalized triggering commit subject` (max 180 chars)
+- `DEPLOY_CHANGE = normalized triggering commit subject`
 
 `🟢 Bot is Online!` shows both `Revision:` and `Change:` when metadata is available.
 
 ## Handoff acknowledgement contract
 For real AI→human escalation, user acknowledgement remains reply-first with plain-private-message fallback. Staff Inbox success does not substitute for user-facing acknowledgement.
 
-## AI credential setup contract
-`AI_CONFIG_MASTER_KEY` is Base64 for exactly 32 random bytes. Provider keys must be re-entered after master-key rotation. `ai_setup_entry.ts` owns early Owner-private credential interception; Gemini credential save and AI use are live-accepted.
-
 ## Canonical Worker stack
 Wrangler entrypoint: `src/interaction_guard_entry.ts`.
 
 Top flow:
-1. `interaction_guard_entry.ts` — Interaction Flood Guard + scheduled lease sweep
+1. `interaction_guard_entry.ts` — Interaction Flood Guard + scheduled human-control/staff-availability sweeps
 2. `rate_limit_entry.ts`
 3. `ai_setup_entry.ts`
 4. `faq_ai_entry.ts`
@@ -94,9 +116,12 @@ Top flow:
 7. lower Staff/manual/deploy/latest-return/monitoring/UX/security/runtime layers
 
 Important ownership:
+- `staff_presence.ts` — effective staff presence + timers/schedules
+- `staff_presence_entry.ts` — staff availability command UX/parser
+- `human_control_lease.ts` — human takeover expiry
 - `ai_runtime.ts` — grounded AI execution + outage/recovery signaling
 - `ai_outage_alert.ts` — transition-only operational AI outage/recovery notices
-- `latest_return_entry.ts` — Return-to-AI button cleanup, `Extend 1h`, claimant renewal, Owner override
+- `latest_return_entry.ts` — Return-to-AI controls, `Extend 1h`, claimant renewal, Owner override
 - `deployment_notice_entry.ts` — production online notice with revision/change metadata
 
 ## Existing product surfaces
@@ -108,6 +133,7 @@ Important ownership:
 - Staff Inbox human takeover/resolve/return-to-AI
 - Owner override of stale Admin takeover
 - 1-hour human-control lease + auto-return
+- timed staff unavailable + recurring daily staff availability schedules
 - transition-only AI outage/recovery alert + human fallback continuity
 - reboot notice with revision + deployed change summary
 - `/limits`, progressive inquiry limits, Interaction Flood Guard
@@ -119,26 +145,27 @@ Important ownership:
 Public (4): `/start`, `/language`, `/faq`, `/whoami`.
 Sudo adds: `/admin`, `/admins`, `/cases`, `/limits`, `/adminmanual`, `/noti`, `/available`, `/unavailable`.
 Owner adds: `/sudo`, `/ai`, `/staff`, `/clearmessage`, `/ownermanual`, `/cancel`, `/reset`.
-Command schema revision: **9**. Sudo total: **12**. Owner total: **19**.
+Command schema revision remains **9**. Sudo total: **12**. Owner total: **19**. This slice adds arguments, not command names.
 
 ## Migrations / manuals
-Current migration range: `0001` through `0030`.
-Newest migration: `0030_manual_ai_outage_transition_only.sql`.
+Current migration range: `0001` through `0031`.
+Newest migration: `0031_staff_availability_schedule.sql`.
 
 ## Next exact validation
 After the triggered production workflow is green:
-1. verify migration 0030/deploy/health/webhook/commands pass
-2. controlled test: make AI unavailable while keeping FAQ/D1/Telegram intact
-3. FAQ match must still answer normally
-4. meaningful FAQ miss must still create/log human handoff
-5. Owner + configured Staff Inbox receive one outage alert
-6. repeat AI failures during the same outage must produce no additional outage alert, even after a long interval or if the underlying reason changes
-7. alert must correctly show `ACTIVE` versus `QUEUED ONLY`
-8. user must not see provider/key details
-9. intentional knowledge-gap AI handoff must not emit outage alert
-10. restore AI and confirm exactly one recovery notice + normal grounded answer
-11. trigger a later new outage and confirm one new outage alert is allowed
-12. existing human-control lease and Owner override remain operational
+1. verify migration 0031/deploy/health/webhook/commands pass
+2. `/unavailable` remains indefinite manual unavailable
+3. `/available` remains immediate manual available and clears schedule
+4. `/unavailable 3` reports a correct Asia/Yangon expiry time and makes staff unavailable immediately
+5. controlled expiry returns unscheduled staff to available within the Cron boundary
+6. `/available 09:00 17:00` saves a recurring schedule
+7. `/available 9am 5pm` produces the same schedule
+8. an overnight schedule is accepted
+9. available-staff count reflects schedule/timer immediately
+10. temporary unavailable overrides a recurring schedule and the schedule resumes after expiry
+11. scheduled off-hours do not show the legacy availability-return prompt
+12. staff topic replies still deliver and preserve recurring schedule
+13. existing human-control lease, Owner override, AI fallback, limits/flood guard, FAQ and manuals remain operational
 
 ## Documentation rule
 After every behavior/schema/deployment slice, keep `ROADMAP.md`, this file, manuals and `docs/TELEGRAM_DESIGN_RULES.md` synchronized with live repository reality.
