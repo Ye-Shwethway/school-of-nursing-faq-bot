@@ -2220,20 +2220,20 @@ function defaultPrivateScope() {
 __name(defaultPrivateScope, "defaultPrivateScope");
 
 // src/command_sync.ts
-async function setCommands(telegramApi6, commands, scope) {
+async function setCommands(telegramApi7, commands, scope) {
   try {
-    const result = await telegramApi6("setMyCommands", { commands, scope });
+    const result = await telegramApi7("setMyCommands", { commands, scope });
     return result === true;
   } catch {
     return false;
   }
 }
 __name(setCommands, "setCommands");
-async function syncUserCommandScope(db, telegramApi6, telegramUserId, ownerIdValue) {
+async function syncUserCommandScope(db, telegramApi7, telegramUserId, ownerIdValue) {
   try {
     const role = await getAdminRole(db, telegramUserId, ownerIdValue);
     await setCommands(
-      telegramApi6,
+      telegramApi7,
       commandsForRole(role),
       commandScopeForPrivateChat(telegramUserId)
     );
@@ -2241,7 +2241,7 @@ async function syncUserCommandScope(db, telegramApi6, telegramUserId, ownerIdVal
   }
 }
 __name(syncUserCommandScope, "syncUserCommandScope");
-async function syncCommandRegistryIfNeeded(db, telegramApi6, ownerIdValue) {
+async function syncCommandRegistryIfNeeded(db, telegramApi7, ownerIdValue) {
   if (!db) return;
   try {
     const current = await db.prepare(
@@ -2249,21 +2249,21 @@ async function syncCommandRegistryIfNeeded(db, telegramApi6, ownerIdValue) {
     ).first();
     if (current?.setting_value === COMMAND_SCHEMA_VERSION) return;
     const defaultOk = await setCommands(
-      telegramApi6,
+      telegramApi7,
       publicCommands(),
       defaultPrivateScope()
     );
     if (!defaultOk) return;
     const ownerId4 = ownerIdValue && /^\d+$/.test(ownerIdValue.trim()) ? Number(ownerIdValue.trim()) : null;
     if (ownerId4 && Number.isSafeInteger(ownerId4)) {
-      await syncUserCommandScope(db, telegramApi6, ownerId4, ownerIdValue);
+      await syncUserCommandScope(db, telegramApi7, ownerId4, ownerIdValue);
     }
     const admins = await db.prepare(
       `SELECT telegram_user_id FROM admin_roles
        WHERE role='sudo_admin' ORDER BY telegram_user_id`
     ).all();
     for (const row of admins.results ?? []) {
-      await syncUserCommandScope(db, telegramApi6, row.telegram_user_id, ownerIdValue);
+      await syncUserCommandScope(db, telegramApi7, row.telegram_user_id, ownerIdValue);
     }
     await db.prepare(
       `INSERT INTO bot_settings (setting_key, setting_value, updated_by, updated_at)
@@ -4429,7 +4429,311 @@ var staff_ux_entry_default = {
     return response;
   }
 };
-export {
-  staff_ux_entry_default as default
+
+// src/monitoring_headers.ts
+function monitoringUserHeader(user) {
+  const name = [user.first_name, user.last_name].filter(Boolean).join(" ").trim() || "Unknown name";
+  const username = user.username ? ` (@${user.username})` : "";
+  return `USER \xB7 ${name}${username} \xB7 ID ${user.id}`;
+}
+__name(monitoringUserHeader, "monitoringUserHeader");
+async function monitoringAiHeader(db, source) {
+  if (!db) return "AI \xB7 model unavailable";
+  try {
+    const row = await db.prepare(
+      `SELECT primary_provider, primary_model, fallback_provider, fallback_model
+       FROM ai_model_bindings WHERE binding_key='faq_agent'`
+    ).first();
+    const fallback = source === "fallback";
+    const provider = fallback ? row?.fallback_provider : row?.primary_provider;
+    const model = fallback ? row?.fallback_model : row?.primary_model;
+    if (!provider && !model) return "AI \xB7 model unavailable";
+    if (!provider) return `AI \xB7 ${model}`;
+    if (!model) return `AI \xB7 ${provider}`;
+    return `AI \xB7 ${provider}/${model}`;
+  } catch {
+    return "AI \xB7 model unavailable";
+  }
+}
+__name(monitoringAiHeader, "monitoringAiHeader");
+function monitoringBotHeader(kind = "faq") {
+  return kind === "handoff" ? "BOT \xB7 Human handoff" : "BOT \xB7 FAQ";
+}
+__name(monitoringBotHeader, "monitoringBotHeader");
+
+// src/monitoring_message_entry.ts
+var HANDOFF_COPY3 = {
+  my: "\u1012\u102E\u1019\u1031\u1038\u1001\u103D\u1014\u103A\u1038\u1000\u102D\u102F \u1021\u1010\u100A\u103A\u1015\u103C\u102F\u1011\u102C\u1038\u101E\u1031\u102C \u1021\u1001\u103B\u1000\u103A\u1021\u101C\u1000\u103A\u1019\u103B\u102C\u1038\u1016\u103C\u1004\u1037\u103A \u101A\u102F\u1036\u1000\u103C\u100A\u103A\u1005\u102D\u1010\u103A\u1001\u103B\u1005\u103D\u102C \u1019\u1016\u103C\u1031\u1014\u102D\u102F\u1004\u103A\u101E\u1031\u1038\u1015\u102B\u104B \u1019\u1031\u1038\u1001\u103D\u1014\u103A\u1038\u1000\u102D\u102F School of Nursing \u101D\u1014\u103A\u1011\u1019\u103A\u1038\u1019\u103B\u102C\u1038 \u1015\u103C\u1014\u103A\u101C\u100A\u103A\u1005\u1005\u103A\u1006\u1031\u1038\u1014\u102D\u102F\u1004\u103A\u101B\u1014\u103A \u101C\u103D\u103E\u1032\u1015\u102D\u102F\u1037\u1011\u102C\u1038\u1015\u102B\u101E\u100A\u103A\u104B",
+  en: "I cannot answer this confidently from the approved information. Your question has been forwarded to authorized School of Nursing staff for review.",
+  zh: "\u76EE\u524D\u65E0\u6CD5\u6839\u636E\u5DF2\u6279\u51C6\u7684\u4FE1\u606F\u53EF\u9760\u56DE\u7B54\u6B64\u95EE\u9898\u3002\u60A8\u7684\u95EE\u9898\u5DF2\u8F6C\u4EA4\u7ED9\u62A4\u7406\u5B66\u9662\u6388\u6743\u5DE5\u4F5C\u4EBA\u5458\u8FDB\u4E00\u6B65\u6838\u67E5\u3002"
 };
-//# sourceMappingURL=staff_ux_entry.js.map
+function json6(body, status = 200) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "content-type": "application/json; charset=utf-8" }
+  });
+}
+__name(json6, "json");
+function privateChat4(message) {
+  return Boolean(message.from && (message.chat.type === "private" || message.chat.id === message.from.id));
+}
+__name(privateChat4, "privateChat");
+async function telegramApi6(env, method, body) {
+  if (!env.TELEGRAM_BOT_TOKEN) return null;
+  try {
+    const response = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/${method}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body)
+    });
+    if (!response.ok) return null;
+    const payload = await response.json();
+    return payload?.result ?? null;
+  } catch {
+    return null;
+  }
+}
+__name(telegramApi6, "telegramApi");
+async function sendMessage5(env, chatId, text, keyboard, options) {
+  return telegramApi6(env, "sendMessage", {
+    chat_id: chatId,
+    text,
+    reply_markup: keyboard,
+    disable_notification: options?.disableNotification,
+    message_thread_id: options?.messageThreadId,
+    reply_parameters: options?.replyToMessageId ? { message_id: options.replyToMessageId } : void 0
+  });
+}
+__name(sendMessage5, "sendMessage");
+async function dynamicFaqReady3(db) {
+  if (!db) return false;
+  try {
+    await db.prepare(`SELECT 1 FROM faq_entries LIMIT 1`).first();
+    return true;
+  } catch {
+    return false;
+  }
+}
+__name(dynamicFaqReady3, "dynamicFaqReady");
+async function getLanguage4(db, userId) {
+  const row = await db.prepare(`SELECT language FROM users WHERE telegram_user_id=?1`).bind(userId).first();
+  return row?.language ?? null;
+}
+__name(getLanguage4, "getLanguage");
+async function hasInteractiveSession2(db, userId) {
+  try {
+    const row = await db.prepare(`SELECT state FROM admin_sessions WHERE telegram_user_id=?1`).bind(userId).first();
+    return Boolean(row?.state);
+  } catch {
+    return false;
+  }
+}
+__name(hasInteractiveSession2, "hasInteractiveSession");
+function topicTitle2(user) {
+  const name = [user.first_name, user.last_name].filter(Boolean).join(" ").trim() || "User";
+  const username = user.username ? ` \xB7 @${user.username}` : "";
+  return `${name}${username} \xB7 ID ${user.id}`.slice(0, 120);
+}
+__name(topicTitle2, "topicTitle");
+async function ensureMonitoringTarget3(env, user) {
+  if (!env.DB) return null;
+  const staffChatId = await getStaffInboxChatId(env.DB);
+  if (!staffChatId) return null;
+  const existing = await getMonitoringTopic(env.DB, user.id, staffChatId);
+  if (existing) {
+    await telegramApi6(env, "editForumTopic", {
+      chat_id: staffChatId,
+      message_thread_id: existing,
+      name: topicTitle2(user)
+    });
+    return { chatId: staffChatId, threadId: existing };
+  }
+  const topic = await telegramApi6(env, "createForumTopic", {
+    chat_id: staffChatId,
+    name: topicTitle2(user)
+  });
+  const threadId = Number(topic?.message_thread_id);
+  if (Number.isSafeInteger(threadId)) {
+    await saveMonitoringTopic(env.DB, user.id, staffChatId, threadId);
+    return { chatId: staffChatId, threadId };
+  }
+  return { chatId: staffChatId };
+}
+__name(ensureMonitoringTarget3, "ensureMonitoringTarget");
+async function mirrorRoutine3(env, user, header, text) {
+  if (!env.DB) return;
+  const mode = await getMonitoringMode(env.DB);
+  if (!shouldMirrorRoutine(mode)) return;
+  const target = await ensureMonitoringTarget3(env, user);
+  if (!target) return;
+  await sendMessage5(
+    env,
+    target.chatId,
+    `${header}
+${text}`,
+    { inline_keyboard: [[{ text: "Take Over", callback_data: `conv:take:${user.id}` }]] },
+    { disableNotification: true, messageThreadId: target.threadId }
+  );
+}
+__name(mirrorRoutine3, "mirrorRoutine");
+async function relayHumanControl2(env, message) {
+  if (!env.DB || !message.from || !message.text) return false;
+  const target = await ensureMonitoringTarget3(env, message.from);
+  if (!target) return false;
+  await sendMessage5(
+    env,
+    target.chatId,
+    `${monitoringUserHeader(message.from)} \xB7 Human control
+${message.text}`,
+    void 0,
+    { messageThreadId: target.threadId }
+  );
+  return true;
+}
+__name(relayHumanControl2, "relayHumanControl");
+function startTyping2(env, chatId) {
+  let active = true;
+  const tick = /* @__PURE__ */ __name(async () => {
+    if (!active) return;
+    await telegramApi6(env, "sendChatAction", { chat_id: chatId, action: "typing" });
+    if (active) setTimeout(tick, 4e3);
+  }, "tick");
+  void tick();
+  return () => {
+    active = false;
+  };
+}
+__name(startTyping2, "startTyping");
+async function logQuestion4(db, message, language, resolution, faqKey, source) {
+  if (!message.from || !message.text) return null;
+  const result = await db.prepare(
+    `INSERT INTO questions
+      (telegram_user_id, chat_id, message_id, question, language, resolution, matched_faq_key, answer_source)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)`
+  ).bind(
+    message.from.id,
+    message.chat.id,
+    message.message_id,
+    message.text,
+    language,
+    resolution,
+    faqKey,
+    source
+  ).run();
+  const id = Number(result.meta.last_row_id);
+  return Number.isSafeInteger(id) ? id : null;
+}
+__name(logQuestion4, "logQuestion");
+function caseText3(caseId, message, language, route, reason) {
+  const identity = message.from ? monitoringUserHeader(message.from).replace(/^USER · /, "") : "Unknown user";
+  return [
+    `New FAQ Escalation #${caseId}`,
+    `Route: ${route}`,
+    `Language: ${language}`,
+    `User: ${identity}`,
+    `Reason: ${reason}`,
+    "",
+    message.text ?? ""
+  ].join("\n");
+}
+__name(caseText3, "caseText");
+async function humanHandoff3(env, message, language, questionId, reason) {
+  if (!env.DB || !message.from || !message.text) return;
+  const destination = await getHandoffDestination(env.DB);
+  const caseId = await createEscalationCase(env.DB, {
+    telegramUserId: message.from.id,
+    sourceQuestionId: questionId,
+    language,
+    question: message.text,
+    staffChatId: destination?.chatId ?? null
+  });
+  if (!caseId || !destination) return;
+  const sent = await sendMessage5(
+    env,
+    destination.chatId,
+    caseText3(caseId, message, language, destination.route, reason),
+    { inline_keyboard: [[{ text: "Take Over", callback_data: `case:claim:${caseId}` }]] }
+  );
+  if (sent?.message_id) {
+    await attachStaffMessage(env.DB, caseId, destination.chatId, Number(sent.message_id));
+  }
+}
+__name(humanHandoff3, "humanHandoff");
+async function handleInquiry(env, message) {
+  if (!env.DB || !message.from || !message.text || !privateChat4(message)) return false;
+  const text = message.text.trim();
+  if (!text || text.startsWith("/")) return false;
+  if (await hasInteractiveSession2(env.DB, message.from.id)) return false;
+  if (!await dynamicFaqReady3(env.DB)) return false;
+  const language = await getLanguage4(env.DB, message.from.id);
+  if (!language) return false;
+  const control = await ensureConversationControl(env.DB, message.from.id);
+  if (control.mode === "human") return relayHumanControl2(env, message);
+  await mirrorRoutine3(env, message.from, monitoringUserHeader(message.from), text);
+  const faq = await findFaqDynamic(env.DB, text, language);
+  if (faq) {
+    await logQuestion4(env.DB, message, language, "answered", faq.key, "dynamic_faq");
+    await sendMessage5(env, message.chat.id, faq.answer[language], void 0, { replyToMessageId: message.message_id });
+    await mirrorRoutine3(env, message.from, monitoringBotHeader("faq"), faq.answer[language]);
+    return true;
+  }
+  const stopTyping = startTyping2(env, message.chat.id);
+  try {
+    let context = "";
+    try {
+      context = await buildApprovedFaqContext(env.DB);
+    } catch {
+      context = "";
+    }
+    const persona = await getAgentPersona(env.DB);
+    const ai = await runGroundedFaqAgent(env, {
+      persona,
+      language,
+      approvedContext: context,
+      question: text
+    });
+    const current = await getConversationControl(env.DB, message.from.id);
+    if (current.mode !== "ai" || current.version !== control.version) return true;
+    if (ai.action === "answer" && ai.answer) {
+      const source = ai.source === "fallback" ? "fallback" : "primary";
+      await logQuestion4(env.DB, message, language, "answered", null, source === "fallback" ? "ai_fallback" : "ai_primary");
+      await sendMessage5(env, message.chat.id, ai.answer, void 0, { replyToMessageId: message.message_id });
+      await mirrorRoutine3(env, message.from, await monitoringAiHeader(env.DB, source), ai.answer);
+      return true;
+    }
+    const questionId = await logQuestion4(env.DB, message, language, "pending", null, "human_handoff");
+    await humanHandoff3(env, message, language, questionId, ai.reason || "AI could not answer safely");
+    await sendMessage5(env, message.chat.id, HANDOFF_COPY3[language], void 0, { replyToMessageId: message.message_id });
+    await mirrorRoutine3(env, message.from, monitoringBotHeader("handoff"), HANDOFF_COPY3[language]);
+    return true;
+  } finally {
+    stopTyping();
+  }
+}
+__name(handleInquiry, "handleInquiry");
+var monitoring_message_entry_default = {
+  async fetch(request, env) {
+    const url = new URL(request.url);
+    if (request.method !== "POST" || url.pathname !== "/telegram/webhook") {
+      return staff_ux_entry_default.fetch(request, env);
+    }
+    if (env.TELEGRAM_WEBHOOK_SECRET) {
+      const supplied = request.headers.get("X-Telegram-Bot-Api-Secret-Token");
+      if (supplied !== env.TELEGRAM_WEBHOOK_SECRET) return json6({ ok: false }, 401);
+    }
+    let update;
+    try {
+      update = await request.clone().json();
+    } catch {
+      return staff_ux_entry_default.fetch(request, env);
+    }
+    if (update.message && await handleInquiry(env, update.message)) {
+      return json6({ ok: true });
+    }
+    return staff_ux_entry_default.fetch(request, env);
+  }
+};
+export {
+  monitoring_message_entry_default as default
+};
+//# sourceMappingURL=monitoring_message_entry.js.map
