@@ -3,7 +3,7 @@
 Last updated: 2026-08-18
 
 ## Goal
-Production Telegram FAQ assistant for a university School of Nursing in Burmese, English, and Simplified Chinese. Approved FAQ knowledge first, grounded configurable AI second, human handoff when automation cannot answer safely.
+Production Telegram FAQ assistant for a university School of Nursing in Burmese, English, and Simplified Chinese. Approved FAQ knowledge first, human staff continuity always available, grounded configurable AI only as a supplementary helper.
 
 ## Branch / deployment policy
 - `main` is the only active development, canonical, and production source branch.
@@ -11,41 +11,46 @@ Production Telegram FAQ assistant for a university School of Nursing in Burmese,
 - relevant `main` pushes run `.github/workflows/deploy-production.yml`.
 
 ## Current checkpoint
-Status: **FAQ-FIRST + FALSE-ESCALATION GUARD LIVE; TOKEN/WEBHOOK ROTATION LIVE; AI CREDENTIAL SAVE LIVE; OWNER TAKEOVER OVERRIDE LIVE-ACCEPTED; 1-HOUR HUMAN-CONTROL LEASE + AUTO-RETURN IMPLEMENTED; DEPLOYMENT ONLINE CHANGE SUMMARY LIVE-ACCEPTED; AI OUTAGE ALERT + HUMAN FALLBACK VISIBILITY IMPLEMENTED ON MAIN; PRODUCTION/LIVE OUTAGE ACCEPTANCE REQUIRED**.
+Status: **FAQ-FIRST + HUMAN-STAFF-CONTINUITY PRIMARY; TOKEN/WEBHOOK ROTATION LIVE; AI CREDENTIAL SAVE LIVE; OWNER TAKEOVER OVERRIDE LIVE-ACCEPTED; 1-HOUR HUMAN-CONTROL LEASE + AUTO-RETURN IMPLEMENTED; DEPLOYMENT ONLINE CHANGE SUMMARY LIVE-ACCEPTED; AI OUTAGE ALERTS CHANGED TO STATE-TRANSITION-ONLY ON MAIN; PRODUCTION/LIVE OUTAGE ACCEPTANCE REQUIRED**.
 
 Live-confirmed:
 - rotated Telegram bot token works inbound/outbound
 - automatic production webhook cutover works
 - `/language`, `/faq`, normal commands and false-escalation filtering work
 - rotated `AI_CONFIG_MASTER_KEY` works after re-saving Gemini credentials
-- grounded Gemini AI is usable
+- grounded Gemini AI is usable when available
 - Bot Owner can override another Admin's stale `Take Over` and return the user to AI
 - reboot notice shows current revision plus deploy change summary
+
+## Product priority
+The operational priority is now explicit:
+1. deterministic FAQ is the primary automated answer source
+2. Human Staff response is the primary fallback and continuity path
+3. AI is supplementary assistance only and may be unavailable because free-tier/provider limits are expected
+4. AI outage must never sever user↔staff communication
 
 ## AI outage / human fallback visibility
 AI infrastructure/configuration failure must never collapse the bot into FAQ-only mode.
 
 Runtime behavior:
-1. deterministic FAQ remains the first path and continues working independently of AI provider health
+1. deterministic FAQ continues working independently of AI provider health
 2. AI availability/configuration/provider/runtime failures return a human-handoff decision rather than surfacing provider errors to the user
-3. the unresolved meaningful question is still logged and handed off through the normal Staff Inbox path
-4. `src/ai_outage_alert.ts` sends an operational `🚨 AI service unavailable` notice to Bot Owner private chat and the configured Staff Inbox
-5. the alert shows the safe internal reason and whether human fallback is `ACTIVE` or `QUEUED ONLY`
+3. unresolved meaningful questions remain logged and handed off through the normal Staff Inbox path
+4. `src/ai_outage_alert.ts` sends an operational `🚨 AI service unavailable` notice to Bot Owner private chat and configured Staff Inbox
+5. the alert shows a safe internal reason and whether human fallback is `ACTIVE` or `QUEUED ONLY`
 6. `ACTIVE` means a staff destination is configured and unresolved questions continue routing to staff
 7. `QUEUED ONLY` means questions/cases are persisted but there is no active staff destination configured
-8. repeated alerts for the same reason are throttled to once per 30 minutes using `bot_settings`
-9. a changed outage reason may alert immediately
-10. once a valid AI decision is obtained again, the outage marker is cleared and one `🟢 AI service recovered` notice is sent
-11. a valid AI policy handoff caused by insufficient approved knowledge is not an outage and must not trigger an outage alert
 
-Infrastructure outage reasons currently include:
-- `ai_unavailable:<reason>`
-- `primary_and_fallback_failed`
-- `ai_runtime_failure`
+### Transition-only alert policy
+AI outage notifications are state transitions, not periodic reminders:
+- healthy → outage: send one outage notice and persist the outage marker
+- while outage remains active: send no additional outage notices, regardless of duration or changes in the underlying reason
+- outage → recovered: clear the marker and send one recovery notice
+- after recovery, a later new outage may send one new outage notice
 
-The end user still receives the normal localized handoff/unavailable copy; provider/API details remain operational-only.
+There is no 30-minute repeat alert anymore. A valid AI policy handoff caused by insufficient approved knowledge is not an outage and must not trigger an outage alert. End users never receive provider/API-key/master-key error details.
 
-Migration `0029_manual_ai_outage_fallback.sql` documents these semantics in Owner/Admin manuals. No new schema table is required because alert state uses existing `bot_settings`.
+Migration `0030_manual_ai_outage_transition_only.sql` updates Owner/Admin manuals to match this policy. Outage state uses existing `bot_settings`; no new table is required.
 
 ## Human-control lease / auto-return
 A successful `Take Over` starts a persisted **1-hour inactivity lease**.
@@ -61,38 +66,20 @@ Lease semantics:
 ### Scheduled expiry
 - canonical `wrangler.jsonc` contains `triggers.crons = ["*/5 * * * *"]`.
 - top-level `interaction_guard_entry.ts` exposes a `scheduled()` handler.
-- `src/human_control_lease.ts` lists expired human claims, atomically expires each claim only if claimant + expiry still match, then performs best-effort notifications/cleanup.
+- `src/human_control_lease.ts` atomically expires stale human claims.
 - practical expiry is approximately **1h00m–1h05m after last claimant activity**.
-- no in-memory sleep/timer is used, so Worker restart/deploy does not erase takeover timing.
+- Worker restart/deploy does not erase takeover timing.
 
-### Auto-return notifications
-On successful expiry:
-- user receives localized notice that the automated assistant is active again
-- previous claimant receives a private expiry notification
-- if claimant DM is unavailable, the Staff Inbox topic note acts as fallback notification
-- Staff Inbox topic records the auto-return transition
-- latest stale `Return to AI` button is removed
-- case/question/user history remains intact
-
-### Rollout safety
-Migration `0028_human_control_lease.sql` adds:
-- `conversation_control.last_human_activity_at`
-- `conversation_control.human_control_expires_at`
-- expiry index
-- Owner/Admin manual sections
-
-Any human-control claim already active when migration 0028 is applied receives a fresh full one-hour lease instead of being immediately expired.
+On successful expiry the user is returned to AI mode, user/claimant/staff are notified, stale control buttons are removed, and case/question/user history remains intact.
 
 ## Production deployment support
-The production workflow builds an isolated Wrangler config and copies `source.triggers` so the canonical Cron schedule survives deploy. Remote D1 migrations still run before Worker deploy.
+The production workflow builds an isolated Wrangler config and copies `source.triggers` so the canonical Cron schedule survives deploy. Remote D1 migrations run before Worker deploy.
 
-### Deployment online change summary
-The production workflow derives the deploy-triggering Git commit subject from `GITHUB_SHA`, normalizes it to one line, caps it at 180 characters, and injects it into the Worker as `DEPLOY_CHANGE` alongside `DEPLOY_REVISION`.
+The workflow also injects:
+- `DEPLOY_REVISION = GITHUB_SHA`
+- `DEPLOY_CHANGE = normalized triggering commit subject`
 
-`src/deployment_notice_entry.ts` displays:
-`Change: <commit subject>`
-
-This lets Owner/Sudo see what changed directly in the `🟢 Bot is Online!` notice. Missing metadata never blocks health/online notification.
+`🟢 Bot is Online!` displays both revision and change summary when available.
 
 ## Owner takeover override
 Bot Owner remains higher authority than the current claimant and may force `Return to AI` immediately without waiting for lease expiry. Previous claimant notification and Staff Inbox transition visibility remain required.
@@ -115,7 +102,7 @@ Top flow:
 6. `cases_entry.ts`
 7. Staff/manual/deploy/latest-return/monitoring/UX/security/runtime layers
 
-`ai_runtime.ts` owns AI availability/provider execution and now owns outage/recovery signaling through `ai_outage_alert.ts`.
+`ai_runtime.ts` owns AI availability/provider execution and outage/recovery signaling through `ai_outage_alert.ts`.
 `latest_return_entry.ts` owns latest `Return to AI` / `Extend 1h` controls, claimant-activity renewal, and explicit Owner override handling.
 
 ## Existing product contracts
@@ -127,7 +114,7 @@ Top flow:
 - Owner override of stale Admin takeover
 - 1-hour inactivity lease + claimant renewal + auto-return
 - deployment online notice with revision + change summary
-- AI outage alert + human fallback continuity + recovery notice
+- transition-only AI outage/recovery notices + human fallback continuity
 - `/limits`, progressive inquiry rate limit, Interaction Flood Guard, Owner-only ban/unban
 - deterministic Input Quality Gate
 - grounded AI `answer | clarify | handoff`
@@ -141,22 +128,24 @@ Owner adds: `/sudo`, `/ai`, `/staff`, `/clearmessage`, `/ownermanual`, `/cancel`
 Command schema revision: **9**. Sudo total: **12**. Owner total: **19**.
 
 ## Migrations
-Current migrations: `0001` through `0029`.
+Current migrations: `0001` through `0030`.
 
 Newest migrations:
 - `0028_human_control_lease.sql` — persisted 1-hour takeover lease, rollout backfill, expiry index, Owner/Admin manual documentation
-- `0029_manual_ai_outage_fallback.sql` — AI outage/human-fallback operational guidance for Owner/Admin manuals
+- `0029_manual_ai_outage_fallback.sql` — initial AI outage/human-fallback guidance
+- `0030_manual_ai_outage_transition_only.sql` — replaces periodic outage reminders with healthy→outage / outage→recovered transition-only notices and documents FAQ/Human Staff as primary continuity
 
 ## Validation boundary
-Do not call the newest AI-outage slice production-green until production workflow + live acceptance confirms:
-1. typecheck, migration 0029, dry-run bundle, remote migration, deploy and health pass
-2. FAQ answers still work while AI provider is intentionally unavailable in a controlled test
-3. a meaningful FAQ-miss under AI outage creates/logs the human handoff as before
-4. Owner receives one `🚨 AI service unavailable` alert
-5. active Staff Inbox receives the operational alert when configured
-6. same outage reason does not spam more than once per 30 minutes
+Do not call the newest AI-outage policy production-green until production workflow + live acceptance confirms:
+1. typecheck, migration 0030, dry-run bundle, remote migration, deploy and health pass
+2. FAQ answers still work while AI provider is unavailable
+3. a meaningful FAQ miss under AI outage creates/logs the human handoff as before
+4. Owner receives exactly one `🚨 AI service unavailable` alert for the outage episode
+5. active Staff Inbox receives the same operational alert when configured
+6. repeated AI failures during the same outage produce no additional outage alert, even after a long interval or when the internal reason changes
 7. alert correctly distinguishes `Human fallback: ACTIVE` from `QUEUED ONLY`
 8. end user never sees provider/API key details
 9. intentional knowledge-gap AI handoff does not create an outage alert
-10. after restoring a valid AI provider response, one `🟢 AI service recovered` notice is emitted and normal grounded AI answering resumes
-11. existing takeover lease, Owner override, limits/flood guard, FAQ and manuals remain operational
+10. after restoring a valid AI provider response, exactly one `🟢 AI service recovered` notice is emitted
+11. a later new outage is allowed to emit one new outage alert
+12. existing takeover lease, Owner override, limits/flood guard, FAQ and manuals remain operational
