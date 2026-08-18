@@ -15,11 +15,16 @@ Production Telegram FAQ assistant for a university School of Nursing in Burmese,
 
 ## Current production checkpoint
 
-Status: **PRODUCTION LIVE; MAIN-ONLY PIPELINE ACTIVE; CURRENT OPERATIONAL SLICES WORKING**
+Status: **PRODUCTION LIVE; MAIN-ONLY PIPELINE ACTIVE; PUBLIC FAQ LIBRARY UX SLICE IMPLEMENTED**
 
-Implemented and live:
+Implemented and live/current:
 
 - multilingual dynamic FAQ
+- public `/faq` command for normal users
+- role-aware FAQ surface: read-only localized library for normal users; management surface for Owner/Sudo
+- localized FAQ labels using approved questions instead of internal slugs
+- paginated FAQ browsing with compact two-column rows only when labels are short
+- public FAQ detail view limited to the user's selected language
 - visible `/language` for all users
 - Owner/Sudo roles and scoped command menus
 - encrypted configurable AI Primary/Fallback
@@ -38,6 +43,16 @@ Implemented and live:
 - Owner/Admin manuals updated for current staff operations
 - stale TEST deployment guidance removed from Owner manual
 - repository documentation reconciled to the main-only production architecture
+
+## FAQ library UX
+
+`/faq` is now public. Normal users can browse only active FAQ entries and never receive Add/Edit/Disable/Restore controls, inactive entries, internal FAQ keys, or revision metadata.
+
+FAQ browsing uses the user's saved Burmese, English, or Simplified Chinese language. Lists are paginated at 8 items per page. Two compact labels may share a row; longer labels receive their own row. Callback navigation continues through the existing Telegram UX layer, which prefers edit-in-place and provides `✕ Close`.
+
+Owner/Sudo `/faq` remains the FAQ management entry point with Browse, Add, Inactive, Help, Edit, Disable, and Restore controls.
+
+No schema migration was required; the existing `faq_entries` data remains canonical.
 
 ## Staff notifications and availability
 
@@ -110,19 +125,19 @@ Owner `/sudo grant <telegram_user_id>` grants Sudo authority, enables staff auth
 
 ## Command registry
 
-Public (3):
+Public (4):
 
-`/start`, `/language`, `/whoami`
+`/start`, `/language`, `/faq`, `/whoami`
 
 Sudo Admin additionally:
 
-`/admin`, `/admins`, `/faq`, `/adminmanual`, `/noti`, `/available`, `/unavailable`
+`/admin`, `/admins`, `/adminmanual`, `/noti`, `/available`, `/unavailable`
 
 Owner additionally:
 
 `/sudo`, `/ai`, `/staff`, `/clearmessage`, `/ownermanual`, `/cancel`, `/reset`
 
-Expected Owner total: **17**. Command schema revision: **5**.
+Expected Owner total remains **17**. Command schema revision: **6**.
 
 ## Single production workflow
 
@@ -167,11 +182,11 @@ Latest canonical migration: `migrations/0015_owner_manual_main_only_cleanup.sql`
 
 ## Documentation checkpoint
 
-Repository docs were reconciled on 2026-08-18. Current docs must describe the main-only production model; retired TEST deployment/promote workflows are historical only and must not be reintroduced as active architecture.
+Repository docs were reconciled on 2026-08-18. Current docs describe the main-only production model and the role-aware public FAQ library. Retired TEST deployment/promote workflows are historical only and must not be reintroduced as active architecture.
 
 ## Next work
 
-There is no active required feature slice at this checkpoint. Continue only from a new explicit product requirement or a verified production defect.
+No additional required feature slice is active after the public FAQ library UX change. Continue only from a new explicit product requirement or a verified production defect.
 
 When new work begins, use the live repository and verified production evidence as authority, implement on `main` in small bounded slices, and update this file plus `NEW_CHAT_BOOTSTRAP.md` after meaningful changes.
 
