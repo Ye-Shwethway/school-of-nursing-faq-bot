@@ -3,6 +3,8 @@ import { getStaffInboxChatId } from "./handoff";
 import { getUserForMonitoringTopic, takeOverConversation } from "./monitoring";
 import {
   canManageStaffState,
+  cancelDailyAvailabilitySchedule,
+  cancelTemporaryUnavailable,
   countAvailableStaff,
   hasDailyAvailabilitySchedule,
   isStaffAvailable,
@@ -292,8 +294,25 @@ async function handleReturnPromptCallback(env: Env, callback: TelegramCallbackQu
 async function handleAvailabilityCommand(env: Env, message: TelegramMessage, command: string): Promise<boolean> {
   if (!env.DB || !message.from || !message.text) return false;
   const args = commandArgs(message.text);
+  const control = args.length === 1 ? args[0].toLowerCase() : "";
 
   if (command === "/unavailable") {
+    if (control === "cancel" || control === "clear") {
+      const result = await cancelTemporaryUnavailable(env.DB, message.from.id);
+      const count = await countAvailableStaff(env.DB);
+      if (!result.cancelled) {
+        await sendMessage(env, message.chat.id, "No active temporary unavailable timer to cancel.", { silent: true, threadId: message.message_thread_id });
+        return true;
+      }
+      const scheduled = await hasDailyAvailabilitySchedule(env.DB, message.from.id);
+      await publishAvailabilityResult(
+        env,
+        message,
+        `Temporary unavailable timer cancelled.\nCurrent state: ${result.available ? "AVAILABLE" : "UNAVAILABLE"}.${scheduled ? " Recurring daily schedule resumed." : ""}\nAvailable staff: ${count}`,
+      );
+      return true;
+    }
+
     if (args.length === 0) {
       await setStaffAvailability(env.DB, message.from.id, false);
       const count = await countAvailableStaff(env.DB);
@@ -320,8 +339,23 @@ async function handleAvailabilityCommand(env: Env, message: TelegramMessage, com
     await sendMessage(
       env,
       message.chat.id,
-      "Usage: /unavailable | /unavailable <hours>\nExample: /unavailable 3",
+      "Usage: /unavailable | /unavailable <hours> | /unavailable cancel\nExamples: /unavailable 3 | /unavailable cancel",
       { silent: true, threadId: message.message_thread_id },
+    );
+    return true;
+  }
+
+  if (control === "cancel" || control === "clear") {
+    const result = await cancelDailyAvailabilitySchedule(env.DB, message.from.id);
+    const count = await countAvailableStaff(env.DB);
+    if (!result.cancelled) {
+      await sendMessage(env, message.chat.id, "No recurring daily availability schedule to cancel.", { silent: true, threadId: message.message_thread_id });
+      return true;
+    }
+    await publishAvailabilityResult(
+      env,
+      message,
+      `Recurring daily availability schedule cancelled.\nCurrent state preserved as: ${result.available ? "AVAILABLE" : "UNAVAILABLE"}.\nAvailable staff: ${count}`,
     );
     return true;
   }
@@ -355,7 +389,7 @@ async function handleAvailabilityCommand(env: Env, message: TelegramMessage, com
   await sendMessage(
     env,
     message.chat.id,
-    "Usage: /available | /available <start> <end>\nExamples: /available 09:00 17:00 | /available 9am 5pm | /available 20:00 08:00\nTimezone: Asia/Yangon (UTC+06:30)",
+    "Usage: /available | /available <start> <end> | /available cancel\nExamples: /available 09:00 17:00 | /available 9am 5pm | /available 20:00 08:00 | /available cancel\nTimezone: Asia/Yangon (UTC+06:30)",
     { silent: true, threadId: message.message_thread_id },
   );
   return true;
