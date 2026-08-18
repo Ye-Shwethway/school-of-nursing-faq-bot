@@ -120,7 +120,7 @@ async function listCases(db: D1Database, filter: CaseFilter, requestedPage: numb
     ? await db.prepare(sql).bind(where.value).all<CaseRow>()
     : await db.prepare(sql).all<CaseRow>();
 
-  const buttons = (rows.results ?? []).map((row) => [{
+  const buttons: Array<Array<{ text: string; callback_data: string }>> = (rows.results ?? []).map((row) => [{
     text: `#${row.id} · ${compact(row.user_question)}`,
     callback_data: `cases:view:${row.id}:${filter}:${page}`,
   }]);
@@ -157,7 +157,6 @@ async function getCase(db: D1Database, id: number): Promise<CaseRow | null> {
 
 function caseKeyboard(row: CaseRow, filter: CaseFilter, page: number) {
   const rows: Array<Array<{ text: string; callback_data: string }>> = [];
-  if (row.status === "open") rows.push([{ text: "Take Over", callback_data: `case:claim:${row.id}` }]);
   rows.push([
     { text: "＋ Add as FAQ", callback_data: `faq:addcase:${row.id}` },
     { text: "Find Related FAQ", callback_data: `cases:related:${row.id}:${filter}:${page}` },
@@ -189,6 +188,8 @@ async function caseDetail(db: D1Database, id: number, filter: CaseFilter, page: 
       "",
       "Question",
       row.user_question,
+      "",
+      row.status === "open" ? "To take over the live conversation, use the Take Over button on the original Staff Inbox escalation message." : null,
     ].filter((line) => line !== null).join("\n"),
     keyboard: caseKeyboard(row, filter, page),
   };
