@@ -1,0 +1,123 @@
+name: Deploy PRODUCTION to Cloudflare
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: 'Type DEPLOY_PRODUCTION to confirm the live deployment'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cloudflare-production-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy-production:
+    name: Validate and deploy PRODUCTION
+    if: github.ref == 'refs/heads/main' && inputs.confirmation == 'DEPLOY_PRODUCTION'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: production
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      PRODUCTION_D1_DATABASE_ID: ${{ secrets.CLOUDFLARE_PRODUCTION_D1_DATABASE_ID }}
+      PRODUCTION_D1_DATABASE_NAME: school-of-nursing-faq-bot-prod-db
+      PRODUCTION_WORKER_NAME: school-of-nursing-faq-bot
+
+    steps:
+      - name: Checkout main source
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Verify production deployment inputs
+        shell: bash
+        run: |
+          test "${GITHUB_REF}" = "refs/heads/main" || { echo "Production deploys are allowed from main only."; exit 1; }
+          test "${{ inputs.confirmation }}" = "DEPLOY_PRODUCTION" || { echo "Production confirmation phrase is missing."; exit 1; }
+          test -n "$CLOUDFLARE_API_TOKEN" || { echo "Missing GitHub secret: CLOUDFLARE_API_TOKEN"; exit 1; }
+          test -n "$CLOUDFLARE_ACCOUNT_ID" || { echo "Missing GitHub secret: CLOUDFLARE_ACCOUNT_ID"; exit 1; }
+          test -n "$PRODUCTION_D1_DATABASE_ID" || { echo "Missing GitHub secret: CLOUDFLARE_PRODUCTION_D1_DATABASE_ID"; exit 1; }
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build isolated production Wrangler config
+        shell: bash
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+          const source = JSON.parse(fs.readFileSync('wrangler.jsonc', 'utf8'));
+          const production = {
+            $schema: source.$schema,
+            name: process.env.PRODUCTION_WORKER_NAME,
+            main: source.main,
+            compatibility_date: source.compatibility_date,
+            vars: { APP_ENV: 'production' },
+            d1_databases: [{
+              binding: 'DB',
+              database_name: process.env.PRODUCTION_D1_DATABASE_NAME,
+              database_id: process.env.PRODUCTION_D1_DATABASE_ID,
+              migrations_dir: 'migrations'
+            }]
+          };
+          fs.writeFileSync('.wrangler.production.generated.json', JSON.stringify(production, null, 2));
+          NODE
+
+      - name: Validate D1 migrations locally
+        run: npx wrangler d1 migrations apply DB --local --config .wrangler.production.generated.json
+
+      - name: Validate production Worker bundle
+        run: npx wrangler deploy --dry-run --config .wrangler.production.generated.json --outdir dist-deploy-production
+
+      - name: Apply production D1 migrations
+        run: npx wrangler d1 migrations apply DB --remote --config .wrangler.production.generated.json
+
+      - name: Deploy production Worker
+        run: npx wrangler deploy --config .wrangler.production.generated.json --var "APP_ENV:production" --var "DEPLOY_REVISION:${GITHUB_SHA}"
+
+      - name: Verify production health
+        shell: bash
+        run: |
+          HEALTH_URL="https://${PRODUCTION_WORKER_NAME}.ye-shwethway13.workers.dev/health"
+          echo "Checking $HEALTH_URL"
+          response="$(curl --fail --silent --show-error --retry 5 --retry-delay 2 "$HEALTH_URL")"
+          echo "$response"
+          node -e '
+            const body = JSON.parse(process.argv[1]);
+            if (body.ok !== true || body.environment !== "production") {
+              console.error("Unexpected production health response", body);
+              process.exit(1);
+            }
+          ' "$response"
+
+      - name: Remove generated production config
+        if: always()
+        run: rm -f .wrangler.production.generated.json
+
+      - name: Deployment summary
+        if: success()
+        run: |
+          {
+            echo "## Cloudflare PRODUCTION deployment"
+            echo ""
+            echo "- Commit: \`${GITHUB_SHA}\`"
+            echo "- Branch: \`main\`"
+            echo "- Worker: \`${PRODUCTION_WORKER_NAME}\`"
+            echo "- D1: isolated production database"
+            echo "- Local validation: PASS"
+            echo "- Production D1 migrations: applied before deploy"
+            echo "- Health: PASS"
+            echo "- Deployment mode: manual + confirmation guarded"
+          } >> "$GITHUB_STEP_SUMMARY"
