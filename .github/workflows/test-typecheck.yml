@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: test-build-${{ github.ref }}
@@ -27,7 +27,8 @@ jobs:
         run: npx wrangler d1 migrations apply school-of-nursing-faq-bot-db --local --env test
       - name: Wrangler dry-run bundle
         run: npx wrangler deploy --dry-run --env test --outdir dist
-      - name: Refresh deployment artifact
+      - name: Prepare validated deployment artifact
+        shell: bash
         run: |
           BUNDLE="$(find dist -type f -name '*.js' | head -n 1)"
           if [ -z "$BUNDLE" ]; then
@@ -36,17 +37,9 @@ jobs:
             exit 1
           fi
           echo "Using generated bundle: $BUNDLE"
-          cp "$BUNDLE" deploy/worker.mjs
-          sha256sum deploy/worker.mjs > deploy/worker.sha256
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          if [ -z "$(git status --porcelain -- deploy/worker.mjs deploy/worker.sha256)" ]; then
-            echo "Deployment artifact and checksum are already current."
-          else
-            git add deploy/worker.mjs deploy/worker.sha256
-            git commit -m "build: refresh validated Worker artifact [skip ci]"
-            git push origin HEAD:test
-          fi
+          mkdir -p handoff
+          cp "$BUNDLE" handoff/worker.mjs
+          sha256sum handoff/worker.mjs > handoff/worker.sha256
       - name: Publish Cloudflare handoff bundle
         uses: actions/upload-artifact@v4
         with:
@@ -54,10 +47,6 @@ jobs:
           if-no-files-found: error
           retention-days: 7
           path: |
-            migrations/0002_ai_settings.sql
-            migrations/0003_handoff_persona.sql
-            migrations/0004_shadow_monitoring.sql
-            migrations/0005_dynamic_faq.sql
-            migrations/0006_conversation_control_version.sql
-            deploy/worker.mjs
-            deploy/worker.sha256
+            migrations/*.sql
+            handoff/worker.mjs
+            handoff/worker.sha256
