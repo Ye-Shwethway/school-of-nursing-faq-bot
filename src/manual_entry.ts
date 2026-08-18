@@ -1,5 +1,6 @@
 import app from "./deployment_notice_entry";
 import { getAdminRole } from "./admin";
+import { syncCommandRegistryIfNeeded } from "./command_sync";
 import {
   getManualSection,
   listManualSections,
@@ -57,6 +58,16 @@ async function telegramApi(env: Env, method: string, body: unknown): Promise<any
     return payload?.result ?? null;
   } catch {
     return null;
+  }
+}
+
+async function syncCommandsBeforeIntercept(env: Env): Promise<void> {
+  if (!env.DB || !env.TELEGRAM_BOT_TOKEN) return;
+  const api = (method: string, body: unknown) => telegramApi(env, method, body);
+  try {
+    await syncCommandRegistryIfNeeded(env.DB, api, env.BOT_OWNER_TELEGRAM_ID);
+  } catch {
+    // Command synchronization must remain non-fatal.
   }
 }
 
@@ -317,6 +328,8 @@ export default {
     } catch {
       return app.fetch(request, env);
     }
+
+    await syncCommandsBeforeIntercept(env);
 
     if (update.callback_query && await handleManualCallback(env, update.callback_query)) {
       return json({ ok: true });
