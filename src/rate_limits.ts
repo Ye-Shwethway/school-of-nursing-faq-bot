@@ -3,7 +3,12 @@ import type { Language } from "./faq";
 
 export type RateDecision =
   | { allowed: true }
-  | { allowed: false; kind: "cooldown" | "restricted" | "banned"; retryMinutes?: number };
+  | {
+      allowed: false;
+      kind: "cooldown" | "restricted" | "banned";
+      retryMinutes?: number;
+      notify: boolean;
+    };
 
 export type LimitsUiResponse = { handled: boolean; text?: string; keyboard?: unknown };
 
@@ -20,7 +25,9 @@ type LimitRow = {
   banned_at: string | null;
   banned_by: number | null;
   ban_reason: string | null;
+  updated_by: number | null;
   updated_at: string;
+  last_notice_at: string | null;
 };
 
 type UserRow = LimitRow & {
@@ -32,6 +39,7 @@ type UserRow = LimitRow & {
 const WINDOW_LIMIT = 10;
 const WINDOW_MINUTES = 10;
 const PAGE_SIZE = 6;
+const NOTICE_THROTTLE_MINUTES = 5;
 
 function isPrivileged(role: AdminRole): boolean {
   return role === "owner" || role === "sudo_admin";
@@ -69,11 +77,29 @@ async function getState(db: D1Database, userId: number): Promise<LimitRow | null
     .bind(userId).first<LimitRow>();
 }
 
-async function audit(db: D1Database, actorId: number, action: string, targetId: number, details?: unknown): Promise<void> {
+async function audit(
+  db: D1Database,
+  actorId: number,
+  action: string,
+  targetId: number,
+  details?: unknown,
+): Promise<void> {
   await db.prepare(
     `INSERT INTO admin_audit (actor_telegram_user_id, action, target_telegram_user_id, details)
      VALUES (?1, ?2, ?3, ?4)`,
   ).bind(actorId, action, targetId, details == null ? null : JSON.stringify(details)).run();
+}
+
+async function shouldNotifyAndMark(db: D1Database, row: LimitRow): Promise<boolean> {
+  const previous = asUtc(row.last_notice_at);
+  const notify = previous === null || Date.now() - previous >= NOTICE_THROTTLE_MINUTES * 60 * 1000;
+  if (notify) {
+    await db.prepare(
+      `UPDATE user_rate_limits SET last_notice_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP
+       WHERE telegram_user_id=?1`,
+    ).bind(row.telegram_user_id).run();
+  }
+  return notify;
 }
 
 export async function checkAndConsumeInquiry(
@@ -86,13 +112,25 @@ export async function checkAndConsumeInquiry(
   if (isPrivileged(role)) return { allowed: true };
 
   const existing = await getState(db, userId);
-  if (existing?.permanently_banned === 1) return { allowed: false, kind: "banned" };
+  if (existing?.permanently_banned === 1) {
+    return { allowed: false, kind: "banned", notify: await shouldNotifyAndMark(db, existing) };
+  }
   if (existing && activeUntil(existing.exempt_until)) return { allowed: true };
   if (existing && activeUntil(existing.temporary_restricted_until)) {
-    return { allowed: false, kind: "restricted", retryMinutes: minutesRemaining(existing.temporary_restricted_until) };
+    return {
+      allowed: false,
+      kind: "restricted",
+      retryMinutes: minutesRemaining(existing.temporary_restricted_until),
+      notify: await shouldNotifyAndMark(db, existing),
+    };
   }
   if (existing && activeUntil(existing.cooldown_until)) {
-    return { allowed: false, kind: "cooldown", retryMinutes: minutesRemaining(existing.cooldown_until) };
+    return {
+      allowed: false,
+      kind: "cooldown",
+      retryMinutes: minutesRemaining(existing.cooldown_until),
+      notify: await shouldNotifyAndMark(db, existing),
+    };
   }
 
   const counter = await db.prepare(
@@ -127,40 +165,64 @@ export async function checkAndConsumeInquiry(
        cooldown_until=?2,
        strike_count=?3,
        last_limit_hit_at=CURRENT_TIMESTAMP,
+       last_notice_at=CURRENT_TIMESTAMP,
        updated_at=CURRENT_TIMESTAMP
      WHERE telegram_user_id=?1`,
   ).bind(userId, sqliteTimestamp(until), strike).run();
 
-  return { allowed: false, kind: "cooldown", retryMinutes: cooldownMinutes };
+  return { allowed: false, kind: "cooldown", retryMinutes: cooldownMinutes, notify: true };
 }
 
-export function rateLimitMessage(language: Language, decision: Exclude<RateDecision, { allowed: true }>): string {
+export function rateLimitMessage(
+  language: Language,
+  decision: Exclude<RateDecision, { allowed: true }>,
+): string {
   if (decision.kind === "banned") {
-    if (language === "my") return "ဒီအကောင့်မှ မေးခွန်းအသစ်ပေးပို့ခြင်းကို စီမံခန့်ခွဲသူက ပိတ်ထားပါသည်။ အတည်ပြုထားသော အချက်အလက်များကို /faq မှ ဆက်လက်ကြည့်ရှုနိုင်ပါသည်။";
-    if (language === "zh") return "此账号已被管理员禁止提交新问题。您仍可通过 /faq 查看已批准的信息。";
+    if (language === "my") {
+      return "ဒီအကောင့်မှ မေးခွန်းအသစ်ပေးပို့ခြင်းကို စီမံခန့်ခွဲသူက ပိတ်ထားပါသည်။ အတည်ပြုထားသော အချက်အလက်များကို /faq မှ ဆက်လက်ကြည့်ရှုနိုင်ပါသည်။";
+    }
+    if (language === "zh") {
+      return "此账号已被管理员禁止提交新问题。您仍可通过 /faq 查看已批准的信息。";
+    }
     return "New questions from this account have been disabled by an administrator. You can still browse approved information with /faq.";
   }
+
   const minutes = decision.retryMinutes ?? 1;
-  if (language === "my") return `အချိန်တိုအတွင်း မေးခွန်းများစွာ ပေးပို့ထားသဖြင့် မေးခွန်းအသစ်များကို ခေတ္တရပ်ထားပါသည်။ ယခင်လက်ခံပြီးသော မေးခွန်းများကို မှတ်တမ်းတင်ထားပြီးဖြစ်ပါသည်။ ${minutes} မိနစ်ခန့်ကြာပြီးနောက် ပြန်လည်မေးမြန်းနိုင်ပါသည်။ အဲဒီအချိန်အတွင်း /faq မှ အတည်ပြုထားသော မေးခွန်းများကို ကြည့်ရှုနိုင်ပါသည်။`;
-  if (language === "zh") return `由于短时间内提交了较多问题，新问题已暂时暂停。此前已接受的问题仍保留记录。请约 ${minutes} 分钟后再试；期间可通过 /faq 查看已批准的信息。`;
+  if (language === "my") {
+    return `အချိန်တိုအတွင်း မေးခွန်းများစွာ ပေးပို့ထားသဖြင့် မေးခွန်းအသစ်များကို ခေတ္တရပ်ထားပါသည်။ ယခင်လက်ခံပြီးသော မေးခွန်းများကို မှတ်တမ်းတင်ထားပြီးဖြစ်ပါသည်။ ${minutes} မိနစ်ခန့်ကြာပြီးနောက် ပြန်လည်မေးမြန်းနိုင်ပါသည်။ အဲဒီအချိန်အတွင်း /faq မှ အတည်ပြုထားသော မေးခွန်းများကို ကြည့်ရှုနိုင်ပါသည်။`;
+  }
+  if (language === "zh") {
+    return `由于短时间内提交了较多问题，新问题已暂时暂停。此前已接受的问题仍保留记录。请约 ${minutes} 分钟后再试；期间可通过 /faq 查看已批准的信息。`;
+  }
   return `New questions are temporarily paused because many were submitted in a short period. Previously accepted questions remain recorded. Please try again in about ${minutes} minutes. You can browse approved information with /faq meanwhile.`;
 }
 
-async function roleAllowed(db: D1Database | undefined, userId: number, ownerIdValue?: string): Promise<AdminRole | null> {
+async function roleAllowed(
+  db: D1Database | undefined,
+  userId: number,
+  ownerIdValue?: string,
+): Promise<AdminRole | null> {
   const role = await getAdminRole(db, userId, ownerIdValue);
   return isPrivileged(role) ? role : null;
 }
 
 function label(row: UserRow): string {
   const name = [row.first_name, row.last_name].filter(Boolean).join(" ").trim();
-  return `${name || row.username || `User ${row.telegram_user_id}`}${row.username ? ` (@${row.username})` : ""}`;
+  const base = name || (row.username ? `@${row.username}` : `User ${row.telegram_user_id}`);
+  return name && row.username ? `${base} (@${row.username})` : base;
 }
 
 function activeStatus(row: UserRow): string {
   if (row.permanently_banned === 1) return "Permanently banned";
-  if (activeUntil(row.temporary_restricted_until)) return `Restricted · ${minutesRemaining(row.temporary_restricted_until)} min remaining`;
-  if (activeUntil(row.cooldown_until)) return `Cooldown · ${minutesRemaining(row.cooldown_until)} min remaining`;
-  if (activeUntil(row.exempt_until)) return `Exempt · ${minutesRemaining(row.exempt_until)} min remaining`;
+  if (activeUntil(row.temporary_restricted_until)) {
+    return `Restricted · ${minutesRemaining(row.temporary_restricted_until)} min remaining`;
+  }
+  if (activeUntil(row.cooldown_until)) {
+    return `Cooldown · ${minutesRemaining(row.cooldown_until)} min remaining`;
+  }
+  if (activeUntil(row.exempt_until)) {
+    return `Exempt · ${minutesRemaining(row.exempt_until)} min remaining`;
+  }
   return "Normal";
 }
 
@@ -176,6 +238,7 @@ async function listLimits(db: D1Database, pageRaw: number): Promise<LimitsUiResp
   const total = Number(count?.count ?? 0);
   const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
   const page = Math.max(0, Math.min(pageRaw, pages - 1));
+
   const rows = await db.prepare(
     `SELECT rl.*, u.username, u.first_name, u.last_name
      FROM user_rate_limits rl
@@ -193,6 +256,7 @@ async function listLimits(db: D1Database, pageRaw: number): Promise<LimitsUiResp
     text: `${row.permanently_banned ? "🚫 " : ""}${label(row).slice(0, 42)}`,
     callback_data: `limits:view:${row.telegram_user_id}:${page}`,
   }]);
+
   if (pages > 1) {
     const nav: Array<{ text: string; callback_data: string }> = [];
     if (page > 0) nav.push({ text: "← Previous", callback_data: `limits:list:${page - 1}` });
@@ -200,29 +264,42 @@ async function listLimits(db: D1Database, pageRaw: number): Promise<LimitsUiResp
     if (page < pages - 1) nav.push({ text: "Next →", callback_data: `limits:list:${page + 1}` });
     buttons.push(nav);
   }
+
   buttons.push([{ text: "✕ Close", callback_data: "ui:close" }]);
   return {
     handled: true,
-    text: total ? `User Limits · ${total}\nChoose a user to review or override.` : "User Limits\nNo users currently have rate-limit history, active restrictions, exemptions, or bans.",
+    text: total
+      ? `User Limits · ${total}\nChoose a user to review or override.\nDirect lookup: /limits <telegram_id>`
+      : "User Limits\nNo users currently have rate-limit history, active restrictions, exemptions, or bans.\nDirect lookup: /limits <telegram_id>",
     keyboard: { inline_keyboard: buttons },
   };
 }
 
-async function detail(db: D1Database, targetId: number, page: number, role: AdminRole): Promise<LimitsUiResponse> {
+async function detail(
+  db: D1Database,
+  targetId: number,
+  page: number,
+  role: AdminRole,
+): Promise<LimitsUiResponse> {
   let row = await db.prepare(
     `SELECT rl.*, u.username, u.first_name, u.last_name
-     FROM user_rate_limits rl LEFT JOIN users u ON u.telegram_user_id=rl.telegram_user_id
+     FROM user_rate_limits rl
+     LEFT JOIN users u ON u.telegram_user_id=rl.telegram_user_id
      WHERE rl.telegram_user_id=?1`,
   ).bind(targetId).first<UserRow>();
+
   if (!row) {
     await db.prepare(`INSERT INTO user_rate_limits (telegram_user_id) VALUES (?1)`).bind(targetId).run();
     row = await db.prepare(
       `SELECT rl.*, u.username, u.first_name, u.last_name
-       FROM user_rate_limits rl LEFT JOIN users u ON u.telegram_user_id=rl.telegram_user_id
+       FROM user_rate_limits rl
+       LEFT JOIN users u ON u.telegram_user_id=rl.telegram_user_id
        WHERE rl.telegram_user_id=?1`,
     ).bind(targetId).first<UserRow>();
   }
+
   if (!row) return { handled: true, text: "User limit state is unavailable." };
+
   const rows: Array<Array<{ text: string; callback_data: string }>> = [
     [{ text: "🔓 Unlock Now", callback_data: `limits:unlock:${targetId}:${page}` }],
     [
@@ -231,13 +308,18 @@ async function detail(db: D1Database, targetId: number, page: number, role: Admi
     ],
     [{ text: "Reset Strikes", callback_data: `limits:reset:${targetId}:${page}` }],
   ];
+
   if (role === "owner") {
-    rows.push([row.permanently_banned === 1
-      ? { text: "✅ Unban User", callback_data: `limits:unban:${targetId}:${page}` }
-      : { text: "🚫 Permanently Ban", callback_data: `limits:banask:${targetId}:${page}` }]);
+    rows.push([
+      row.permanently_banned === 1
+        ? { text: "✅ Unban User", callback_data: `limits:unban:${targetId}:${page}` }
+        : { text: "🚫 Permanently Ban", callback_data: `limits:banask:${targetId}:${page}` },
+    ]);
   }
+
   rows.push([{ text: "← Users", callback_data: `limits:list:${page}` }]);
   rows.push([{ text: "✕ Close", callback_data: "ui:close" }]);
+
   return {
     handled: true,
     text: [
@@ -253,14 +335,36 @@ async function detail(db: D1Database, targetId: number, page: number, role: Admi
   };
 }
 
-export async function handleLimitsCommand(db: D1Database | undefined, actorId: number, ownerIdValue: string | undefined, text: string): Promise<LimitsUiResponse> {
+export async function handleLimitsCommand(
+  db: D1Database | undefined,
+  actorId: number,
+  ownerIdValue: string | undefined,
+  text: string,
+): Promise<LimitsUiResponse> {
   if (!text.trim().toLowerCase().startsWith("/limits")) return { handled: false };
   if (!db) return { handled: true, text: "Rate-limit storage is unavailable." };
-  if (!await roleAllowed(db, actorId, ownerIdValue)) return { handled: true, text: "User limits are available to Owner/Sudo only." };
+  const role = await roleAllowed(db, actorId, ownerIdValue);
+  if (!role) return { handled: true, text: "User limits are available to Owner/Sudo only." };
+
+  const parts = text.trim().split(/\s+/);
+  if (parts[1]) {
+    if (!/^\d+$/.test(parts[1])) {
+      return { handled: true, text: "Usage: /limits or /limits <telegram_user_id>" };
+    }
+    const targetId = Number(parts[1]);
+    if (!Number.isSafeInteger(targetId)) return { handled: true, text: "Invalid Telegram user ID." };
+    return detail(db, targetId, 0, role);
+  }
+
   return listLimits(db, 0);
 }
 
-export async function handleLimitsCallback(db: D1Database | undefined, actorId: number, ownerIdValue: string | undefined, data: string): Promise<LimitsUiResponse> {
+export async function handleLimitsCallback(
+  db: D1Database | undefined,
+  actorId: number,
+  ownerIdValue: string | undefined,
+  data: string,
+): Promise<LimitsUiResponse> {
   if (!data.startsWith("limits:")) return { handled: false };
   if (!db) return { handled: true, text: "Rate-limit storage is unavailable." };
   const role = await roleAllowed(db, actorId, ownerIdValue);
@@ -268,6 +372,7 @@ export async function handleLimitsCallback(db: D1Database | undefined, actorId: 
 
   const list = data.match(/^limits:list:(\d+)$/);
   if (list) return listLimits(db, Number(list[1]));
+
   const view = data.match(/^limits:view:(\d+):(\d+)$/);
   if (view) return detail(db, Number(view[1]), Number(view[2]), role);
 
@@ -277,20 +382,78 @@ export async function handleLimitsCallback(db: D1Database | undefined, actorId: 
     const target = Number(action[2]);
     const page = Number(action[3]);
     if (!Number.isSafeInteger(target)) return { handled: true, text: "Invalid user ID." };
+
     if (kind === "unlock") {
-      await db.prepare(`INSERT INTO user_rate_limits (telegram_user_id) VALUES (?1) ON CONFLICT DO NOTHING`).bind(target).run();
-      await db.prepare(`UPDATE user_rate_limits SET cooldown_until=NULL, temporary_restricted_until=NULL, window_count=0, window_started_at=CURRENT_TIMESTAMP, updated_by=?2, updated_at=CURRENT_TIMESTAMP WHERE telegram_user_id=?1`).bind(target, actorId).run();
+      await db.prepare(
+        `INSERT INTO user_rate_limits (telegram_user_id) VALUES (?1) ON CONFLICT DO NOTHING`,
+      ).bind(target).run();
+      await db.prepare(
+        `UPDATE user_rate_limits SET
+           cooldown_until=NULL,
+           temporary_restricted_until=NULL,
+           window_count=0,
+           window_started_at=CURRENT_TIMESTAMP,
+           last_notice_at=NULL,
+           updated_by=?2,
+           updated_at=CURRENT_TIMESTAMP
+         WHERE telegram_user_id=?1`,
+      ).bind(target, actorId).run();
     } else if (kind === "exempt") {
-      await db.prepare(`INSERT INTO user_rate_limits (telegram_user_id, exempt_until, updated_by) VALUES (?1, datetime('now','+1 hour'), ?2) ON CONFLICT(telegram_user_id) DO UPDATE SET exempt_until=datetime('now','+1 hour'), cooldown_until=NULL, temporary_restricted_until=NULL, updated_by=?2, updated_at=CURRENT_TIMESTAMP`).bind(target, actorId).run();
+      await db.prepare(
+        `INSERT INTO user_rate_limits (telegram_user_id, exempt_until, updated_by)
+         VALUES (?1, datetime('now','+1 hour'), ?2)
+         ON CONFLICT(telegram_user_id) DO UPDATE SET
+           exempt_until=datetime('now','+1 hour'),
+           cooldown_until=NULL,
+           temporary_restricted_until=NULL,
+           last_notice_at=NULL,
+           updated_by=?2,
+           updated_at=CURRENT_TIMESTAMP`,
+      ).bind(target, actorId).run();
     } else if (kind === "restrict") {
-      await db.prepare(`INSERT INTO user_rate_limits (telegram_user_id, temporary_restricted_until, updated_by) VALUES (?1, datetime('now','+2 hours'), ?2) ON CONFLICT(telegram_user_id) DO UPDATE SET temporary_restricted_until=datetime('now','+2 hours'), exempt_until=NULL, updated_by=?2, updated_at=CURRENT_TIMESTAMP`).bind(target, actorId).run();
+      await db.prepare(
+        `INSERT INTO user_rate_limits (telegram_user_id, temporary_restricted_until, updated_by)
+         VALUES (?1, datetime('now','+2 hours'), ?2)
+         ON CONFLICT(telegram_user_id) DO UPDATE SET
+           temporary_restricted_until=datetime('now','+2 hours'),
+           exempt_until=NULL,
+           last_notice_at=NULL,
+           updated_by=?2,
+           updated_at=CURRENT_TIMESTAMP`,
+      ).bind(target, actorId).run();
     } else if (kind === "reset") {
-      await db.prepare(`INSERT INTO user_rate_limits (telegram_user_id) VALUES (?1) ON CONFLICT DO NOTHING`).bind(target).run();
-      await db.prepare(`UPDATE user_rate_limits SET strike_count=0, last_limit_hit_at=NULL, window_count=0, window_started_at=CURRENT_TIMESTAMP, updated_by=?2, updated_at=CURRENT_TIMESTAMP WHERE telegram_user_id=?1`).bind(target, actorId).run();
+      await db.prepare(
+        `INSERT INTO user_rate_limits (telegram_user_id) VALUES (?1) ON CONFLICT DO NOTHING`,
+      ).bind(target).run();
+      await db.prepare(
+        `UPDATE user_rate_limits SET
+           strike_count=0,
+           last_limit_hit_at=NULL,
+           window_count=0,
+           window_started_at=CURRENT_TIMESTAMP,
+           updated_by=?2,
+           updated_at=CURRENT_TIMESTAMP
+         WHERE telegram_user_id=?1`,
+      ).bind(target, actorId).run();
     } else if (kind === "unban") {
       if (role !== "owner") return { handled: true, text: "Permanent unban is Owner-only." };
-      await db.prepare(`UPDATE user_rate_limits SET permanently_banned=0, banned_at=NULL, banned_by=NULL, ban_reason=NULL, cooldown_until=NULL, temporary_restricted_until=NULL, window_count=0, window_started_at=CURRENT_TIMESTAMP, updated_by=?2, updated_at=CURRENT_TIMESTAMP WHERE telegram_user_id=?1`).bind(target, actorId).run();
+      await db.prepare(
+        `UPDATE user_rate_limits SET
+           permanently_banned=0,
+           banned_at=NULL,
+           banned_by=NULL,
+           ban_reason=NULL,
+           cooldown_until=NULL,
+           temporary_restricted_until=NULL,
+           window_count=0,
+           window_started_at=CURRENT_TIMESTAMP,
+           last_notice_at=NULL,
+           updated_by=?2,
+           updated_at=CURRENT_TIMESTAMP
+         WHERE telegram_user_id=?1`,
+      ).bind(target, actorId).run();
     }
+
     await audit(db, actorId, `rate_limit_${kind}`, target);
     return detail(db, target, page, role);
   }
@@ -303,11 +466,13 @@ export async function handleLimitsCallback(db: D1Database | undefined, actorId: 
     return {
       handled: true,
       text: `Permanently ban Telegram user ${target}?\n\nThey will no longer be able to submit free-text questions. AI and escalation will not run for them. /faq and other safe read-only commands remain available.`,
-      keyboard: { inline_keyboard: [
-        [{ text: "🚫 Yes, Permanently Ban", callback_data: `limits:ban:${target}:${page}` }],
-        [{ text: "← Cancel", callback_data: `limits:view:${target}:${page}` }],
-        [{ text: "✕ Close", callback_data: "ui:close" }],
-      ] },
+      keyboard: {
+        inline_keyboard: [
+          [{ text: "🚫 Yes, Permanently Ban", callback_data: `limits:ban:${target}:${page}` }],
+          [{ text: "← Cancel", callback_data: `limits:view:${target}:${page}` }],
+          [{ text: "✕ Close", callback_data: "ui:close" }],
+        ],
+      },
     };
   }
 
@@ -316,7 +481,19 @@ export async function handleLimitsCallback(db: D1Database | undefined, actorId: 
     if (role !== "owner") return { handled: true, text: "Permanent ban is Owner-only." };
     const target = Number(ban[1]);
     const page = Number(ban[2]);
-    await db.prepare(`INSERT INTO user_rate_limits (telegram_user_id, permanently_banned, banned_at, banned_by, updated_by) VALUES (?1,1,CURRENT_TIMESTAMP,?2,?2) ON CONFLICT(telegram_user_id) DO UPDATE SET permanently_banned=1, banned_at=CURRENT_TIMESTAMP, banned_by=?2, exempt_until=NULL, updated_by=?2, updated_at=CURRENT_TIMESTAMP`).bind(target, actorId).run();
+    await db.prepare(
+      `INSERT INTO user_rate_limits
+         (telegram_user_id, permanently_banned, banned_at, banned_by, updated_by, last_notice_at)
+       VALUES (?1,1,CURRENT_TIMESTAMP,?2,?2,NULL)
+       ON CONFLICT(telegram_user_id) DO UPDATE SET
+         permanently_banned=1,
+         banned_at=CURRENT_TIMESTAMP,
+         banned_by=?2,
+         exempt_until=NULL,
+         last_notice_at=NULL,
+         updated_by=?2,
+         updated_at=CURRENT_TIMESTAMP`,
+    ).bind(target, actorId).run();
     await audit(db, actorId, "rate_limit_permanent_ban", target);
     return detail(db, target, page, role);
   }
