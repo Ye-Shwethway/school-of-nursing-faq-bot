@@ -118,13 +118,17 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
   }
 
   const message = update.message;
-  if (message?.from && message.text) {
+  const text = message?.text?.trim() ?? "";
+  // Commands such as /cancel and /reset belong to the canonical lower UX layer.
+  // Only ordinary text is intercepted here so FAQ authoring inside Staff Inbox
+  // cannot be mistaken for a staff reply to a user topic.
+  if (message?.from && text && !text.startsWith("/")) {
     try {
       const result = await consumeFaqAdminText(
         env.DB,
         message.from.id,
         env.BOT_OWNER_TELEGRAM_ID,
-        message.text,
+        text,
       );
       if (result.handled) {
         if (result.text) {
