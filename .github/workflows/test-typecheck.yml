@@ -58,5 +58,6 @@ jobs:
             migrations/0003_handoff_persona.sql
             migrations/0004_shadow_monitoring.sql
             migrations/0005_dynamic_faq.sql
+            migrations/0006_conversation_control_version.sql
             deploy/worker.mjs
             deploy/worker.sha256
