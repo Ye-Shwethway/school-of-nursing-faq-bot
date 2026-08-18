@@ -59,9 +59,9 @@ jobs:
         run: npx wrangler d1 migrations apply school-of-nursing-faq-bot-db --remote --env test
 
       - name: Deploy TEST Worker
-        run: npx wrangler deploy --env test
+        run: npx wrangler deploy --env test --var "APP_ENV:test" --var "DEPLOY_REVISION:${GITHUB_SHA}"
 
-      - name: Verify TEST health
+      - name: Verify TEST health and trigger online notice
         shell: bash
         run: |
           HEALTH_URL="https://school-of-nursing-faq-bot-test.ye-shwethway13.workers.dev/health"
@@ -88,5 +88,6 @@ jobs:
             echo "- Local validation: PASS"
             echo "- D1 migrations: applied before deploy"
             echo "- Health: PASS"
+            echo "- Owner/Admin online notice: triggered once for this revision"
             echo "- Production Worker: untouched by this workflow"
           } >> "$GITHUB_STEP_SUMMARY"
