@@ -160,6 +160,17 @@ async function claimRevisionNotice(env: Env, revision: string): Promise<boolean>
   }
 }
 
+async function releaseRevisionNotice(env: Env, revision: string): Promise<void> {
+  if (!env.DB) return;
+  try {
+    await env.DB.prepare(
+      `DELETE FROM bot_settings WHERE setting_key=?1`,
+    ).bind(`deploy_online:${revision}`).run();
+  } catch {
+    // A later health request can still retry if cleanup succeeds then.
+  }
+}
+
 async function notifyDeploymentOnline(env: Env): Promise<void> {
   // TEST and PRODUCTION share the same Telegram bot token. TEST deployments must
   // never inject operational status messages into the live Owner chat.
@@ -183,9 +194,20 @@ async function notifyDeploymentOnline(env: Env): Promise<void> {
   ].join("\n");
 
   const targets = await notificationTargets(env);
-  await Promise.allSettled(
+  const deliveries = await Promise.allSettled(
     targets.map((chatId) => telegramApi(env, "sendMessage", { chat_id: chatId, text })),
   );
+  const delivered = deliveries.some(
+    (result) => result.status === "fulfilled" && result.value !== null,
+  );
+
+  // The revision claim is only durable when at least one operational recipient
+  // actually received the notice. If Telegram delivery fails completely, release
+  // the claim so the next successful /health request can retry the same revision.
+  if (!delivered) {
+    await releaseRevisionNotice(env, revision);
+    return;
+  }
 
   try {
     await env.DB.prepare(
