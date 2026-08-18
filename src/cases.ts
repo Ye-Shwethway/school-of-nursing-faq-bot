@@ -164,9 +164,20 @@ function caseKeyboard(row: CaseRow, filter: CaseFilter, page: number) {
   if (row.linked_faq_key) {
     rows.push([{ text: `Open linked FAQ · ${row.linked_faq_key}`, callback_data: `faq:view:${row.linked_faq_key}:active:0` }]);
   }
+  rows.push([{ text: "🗑 Delete Case", callback_data: `cases:delete:${row.id}:${filter}:${page}` }]);
   rows.push([{ text: "← Cases", callback_data: `cases:list:${filter}:${page}` }]);
   rows.push([{ text: "✕ Close", callback_data: "ui:close" }]);
   return { inline_keyboard: rows };
+}
+
+function deleteConfirmKeyboard(id: number, filter: CaseFilter, page: number) {
+  return {
+    inline_keyboard: [
+      [{ text: "🗑 Yes, Delete Permanently", callback_data: `cases:deleteconfirm:${id}:${filter}:${page}` }],
+      [{ text: "← Cancel", callback_data: `cases:view:${id}:${filter}:${page}` }],
+      [{ text: "✕ Close", callback_data: "ui:close" }],
+    ],
+  };
 }
 
 async function caseDetail(db: D1Database, id: number, filter: CaseFilter, page: number): Promise<CasesUiResponse> {
@@ -192,6 +203,41 @@ async function caseDetail(db: D1Database, id: number, filter: CaseFilter, page: 
       row.status === "open" ? "To take over the live conversation, use the Take Over button on the original Staff Inbox escalation message." : null,
     ].filter((line) => line !== null).join("\n"),
     keyboard: caseKeyboard(row, filter, page),
+  };
+}
+
+async function deleteConfirm(db: D1Database, id: number, filter: CaseFilter, page: number): Promise<CasesUiResponse> {
+  const row = await getCase(db, id);
+  if (!row) return { handled: true, text: `Escalation #${id} was not found.`, keyboard: menuKeyboard() };
+  return {
+    handled: true,
+    text: [
+      `Delete Escalation #${row.id}?`,
+      "",
+      compact(row.user_question, 180),
+      "",
+      "This permanently removes this case and its escalation-message history from the Escalation Inbox.",
+      "The user record, source question log, and any FAQ already created from this case are not deleted.",
+      "",
+      "This action cannot be undone.",
+    ].join("\n"),
+    keyboard: deleteConfirmKeyboard(id, filter, page),
+  };
+}
+
+async function deleteCase(db: D1Database, id: number, filter: CaseFilter, page: number): Promise<CasesUiResponse> {
+  const row = await getCase(db, id);
+  if (!row) return listCases(db, filter, page);
+
+  await db.batch([
+    db.prepare(`DELETE FROM escalation_messages WHERE case_id=?1`).bind(id),
+    db.prepare(`DELETE FROM escalation_cases WHERE id=?1`).bind(id),
+  ]);
+
+  const result = await listCases(db, filter, page);
+  return {
+    ...result,
+    text: `Escalation #${id} deleted permanently.\n\n${result.text ?? ""}`.trim(),
   };
 }
 
@@ -248,5 +294,9 @@ export async function handleCasesCallback(
   if (view) return caseDetail(db, Number(view[1]), view[2] as CaseFilter, Number(view[3]));
   const related = data.match(/^cases:related:(\d+):(open|claimed|resolved|all):(\d+)$/);
   if (related) return relatedFaq(db, Number(related[1]), related[2] as CaseFilter, Number(related[3]));
+  const deletePrompt = data.match(/^cases:delete:(\d+):(open|claimed|resolved|all):(\d+)$/);
+  if (deletePrompt) return deleteConfirm(db, Number(deletePrompt[1]), deletePrompt[2] as CaseFilter, Number(deletePrompt[3]));
+  const deleteConfirmed = data.match(/^cases:deleteconfirm:(\d+):(open|claimed|resolved|all):(\d+)$/);
+  if (deleteConfirmed) return deleteCase(db, Number(deleteConfirmed[1]), deleteConfirmed[2] as CaseFilter, Number(deleteConfirmed[3]));
   return { handled: true, text: "Unknown Escalation Inbox action.", keyboard: menuKeyboard() };
 }
