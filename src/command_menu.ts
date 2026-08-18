@@ -9,6 +9,7 @@ const START_COMMAND: BotCommand = { command: "start", description: "Start School
 const LANGUAGE_COMMAND: BotCommand = { command: "language", description: "Change language" };
 const WHOAMI_COMMAND: BotCommand = { command: "whoami", description: "Show my Telegram identity" };
 const FAQ_COMMAND: BotCommand = { command: "faq", description: "Browse School of Nursing FAQs" };
+const CASES_COMMAND: BotCommand = { command: "cases", description: "Review FAQ escalation cases" };
 
 const PUBLIC_COMMANDS: BotCommand[] = [
   START_COMMAND,
@@ -25,6 +26,7 @@ const ADMIN_COMMANDS: BotCommand[] = [
   { command: "admin", description: "Open administrator tools" },
   { command: "admins", description: "List authorized administrators" },
   FAQ_COMMAND,
+  CASES_COMMAND,
   { command: "adminmanual", description: "Read the Sudo Admin manual" },
   { command: "noti", description: "Turn Staff Inbox notifications on or off" },
   { command: "available", description: "Mark myself available for staff replies" },
@@ -42,7 +44,7 @@ const OWNER_COMMANDS: BotCommand[] = [
   { command: "reset", description: "Reset transient conversation state" },
 ];
 
-const COMMAND_SYNC_REVISION = 7;
+const COMMAND_SYNC_REVISION = 8;
 
 export const COMMAND_SCHEMA_VERSION = JSON.stringify({
   revision: COMMAND_SYNC_REVISION,
