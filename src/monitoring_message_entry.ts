@@ -103,6 +103,24 @@ async function sendMessage(
   });
 }
 
+async function sendUserReplyWithFallback(
+  env: Env,
+  message: TelegramMessage,
+  text: string,
+): Promise<boolean> {
+  const replied = await sendMessage(
+    env,
+    message.chat.id,
+    text,
+    undefined,
+    { replyToMessageId: message.message_id },
+  );
+  if (replied) return true;
+
+  const fallback = await sendMessage(env, message.chat.id, text);
+  return Boolean(fallback);
+}
+
 async function dynamicFaqReady(db: D1Database | undefined): Promise<boolean> {
   if (!db) return false;
   try {
@@ -319,7 +337,7 @@ async function handleInquiry(env: Env, message: TelegramMessage): Promise<boolea
 
     const availableStaff = await countAvailableStaff(env.DB);
     const handoffCopy = availableStaff > 0 ? HANDOFF_COPY[language] : STAFF_UNAVAILABLE_COPY[language];
-    await sendMessage(env, message.chat.id, handoffCopy, undefined, { replyToMessageId: message.message_id });
+    await sendUserReplyWithFallback(env, message, handoffCopy);
     await mirrorRoutine(env, message.from, monitoringBotHeader("handoff"), handoffCopy);
     return true;
   } finally {
