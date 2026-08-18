@@ -1,3 +1,4 @@
+# Main-only production pipeline. The legacy test branch is inactive and has no workflow runtime effect.
 name: Deploy PRODUCTION to Cloudflare
 
 on:
