@@ -15,24 +15,38 @@ Read in order:
 Treat live repository plus verified Cloudflare/Telegram evidence as authoritative over remembered chat context.
 
 ## Current checkpoint
-Production infrastructure and approved operational data are green. Telegram production cutover is armed as a one-time automated main-push operation.
+Production infrastructure, operational data and Telegram webhook cutover are green. `/start` works on production. A production Owner command-menu hotfix is being promoted because the Owner account showed only the two public commands after cutover.
 
-Verified evidence:
+Verified production evidence:
 - isolated production D1 `school-of-nursing-faq-bot-prod-db` exists
-- its UUID is stored as GitHub secret `CLOUDFLARE_PRODUCTION_D1_DATABASE_ID`
-- guarded production deploy from `main` is green
-- production Worker `school-of-nursing-faq-bot` is deployed
-- production `/health` passes with `environment=production`
-- production Worker runtime secrets exist: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET`, `BOT_OWNER_TELEGRAM_ID`, `AI_CONFIG_MASTER_KEY`
-- production uses a fresh `AI_CONFIG_MASTER_KEY`; encrypted TEST AI credentials were intentionally not copied
-- `Bootstrap PRODUCTION operational data` completed green
-- approved FAQ/manual/admin/staff/settings state is initialized in production
+- production Worker `school-of-nursing-faq-bot` is deployed and healthy
+- production `/health` returns `environment=production`
+- production runtime secrets exist: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET`, `BOT_OWNER_TELEGRAM_ID`, `AI_CONFIG_MASTER_KEY`
+- approved FAQ/manual/admin/staff/settings data was bootstrapped into production
+- Telegram webhook cutover workflow completed green and `/start` works through production
+- production uses a fresh `AI_CONFIG_MASTER_KEY`; encrypted TEST AI provider credentials were intentionally not copied
+
+## Owner command-menu hotfix
+Observed production symptom:
+Owner account displayed only `/start` and `/whoami`.
+
+Root cause:
+`src/command_sync.ts` previously swallowed role-specific `setMyCommands` failures and could still persist `command_schema_version`, causing later syncs to treat the command registry as current and skip retries.
+
+Fix on `test`:
+- `syncUserCommandScope()` returns boolean success/failure
+- Owner or Sudo command-scope failure aborts fingerprint persistence
+- later request/health sync can retry and self-heal
+- `COMMAND_SYNC_REVISION` is bumped so production is forced to rebuild command scopes
+
+Expected Owner command menu:
+`/start`, `/whoami`, `/admin`, `/admins`, `/faq`, `/adminmanual`, `/sudo`, `/ai`, `/staff`, `/ownermanual`, `/cancel`, `/reset`.
 
 ## Canonical Worker stack
 Wrangler entrypoint: `src/manual_entry.ts`
 
 1. `manual_entry.ts` — Owner/Admin manual pager/edit/add + command sync
-2. `deployment_notice_entry.ts` — deploy-health command sync + online notice + production-only nonce-gated Telegram cutover endpoint
+2. `deployment_notice_entry.ts` — deploy-health command sync + online notice + production cutover endpoint
 3. `latest_return_entry.ts` — latest Return-to-AI control
 4. `monitoring_message_entry.ts` — monitoring presentation + isolated handoff
 5. `staff_ux_entry.ts` — Staff Inbox UX
@@ -47,22 +61,22 @@ Wrangler entrypoint: `src/manual_entry.ts`
 Approved active FAQ data is the grounding source. AI/config failure fails closed to human review.
 
 ## Commands
-Normal user: `/start`, `/whoami`
+Normal user: `/start`, `/whoami`.
 
-Sudo Admin adds: `/admin`, `/admins`, `/faq`, `/adminmanual`
+Sudo Admin adds: `/admin`, `/admins`, `/faq`, `/adminmanual`.
 
-Owner adds: `/sudo`, `/ai`, `/staff`, `/ownermanual`, `/cancel`, `/reset`; Owner inherits `/adminmanual`.
+Owner adds: `/sudo`, `/ai`, `/staff`, `/ownermanual`, `/cancel`, `/reset`; Owner inherits Admin commands.
 
 ## Production operational data
 Workflow: `.github/workflows/bootstrap-production-data.yml`
 
 Copied from TEST allow-list:
-- current `faq_entries`
-- current `manual_sections`
-- `admin_roles`
-- `staff_members`
+- current FAQ entries
+- current manual sections
+- Sudo Admin roles
+- staff membership
 - operator identity rows required for labels
-- `agent_persona`, `monitoring_mode`, `staff_inbox_chat_id`, `handoff_route`, `dedicated_staff_id`
+- persona, monitoring mode, Staff Inbox ID, handoff route, dedicated staff ID
 
 Intentionally not copied:
 - ordinary user/question history
@@ -71,46 +85,18 @@ Intentionally not copied:
 - monitoring-topic mappings
 - admin sessions
 - AI provider credentials/cache/tests/bindings
-- deployment markers / command-sync fingerprint
 
-## One-time Telegram production cutover
-Runtime endpoint:
-`POST /ops/telegram/cutover`
+## Telegram production cutover
+Workflow: `.github/workflows/production-telegram-cutover-once.yml`
 
-Workflow:
-`.github/workflows/production-telegram-cutover-once.yml`
+The workflow deploys current main, verifies production health, uses a one-time D1 nonce to authorize the Worker cutover endpoint, calls Telegram `setWebhook`, verifies exact production URL through `getWebhookInfo`, refreshes command scopes and performs final health verification.
 
-Trigger:
-- push to `main`
-- job runs only when the head commit message contains `[production-cutover]`
-
-Flow:
-1. typecheck current main
-2. generate isolated production Wrangler config
-3. apply production migrations
-4. deploy current main to production
-5. resolve real workers.dev production origin through Cloudflare API
-6. verify production health
-7. generate a high-entropy one-time nonce and mask it in GitHub Actions
-8. store nonce in production D1
-9. call production `/ops/telegram/cutover` with the nonce
-10. Worker atomically consumes the nonce
-11. Worker uses its own runtime `TELEGRAM_BOT_TOKEN` + `TELEGRAM_WEBHOOK_SECRET` to call Telegram `setWebhook`
-12. Worker calls `getWebhookInfo` and requires exact production URL read-back
-13. refresh role-scoped command menus
-14. final production health check
-
-The bot token is never copied into GitHub Actions. The cutover endpoint is production-only and unusable without the current one-time D1 nonce.
-
-Normal future `main` promotions do not retrigger cutover because they will not carry the `[production-cutover]` head-commit tag.
-
-## Post-cutover next work
-After cutover workflow is verified green:
-1. smoke-test `/start`, FAQ, Owner/Admin commands, manuals and Staff Inbox on production
-2. configure production AI provider/API key through `/ai` because production uses a fresh master key
-3. verify grounded AI + fallback/handoff
-4. remove the one-time cutover workflow from the repository
-5. continue future development through `test -> validate -> main`; user should not need to manage branches manually
+## Next exact sequence
+1. promote the Owner command-menu hotfix from `test` to `main`
+2. tagged production workflow auto-deploys the hotfix and forces command resync
+3. verify Owner menu shows all Owner commands
+4. configure production AI provider/API key through `/ai`
+5. verify grounded AI + fallback/handoff
 
 ## Current migrations
 - 0001 initial
