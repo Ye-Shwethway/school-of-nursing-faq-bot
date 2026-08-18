@@ -25,6 +25,10 @@ type TelegramUpdate = {
   message?: TelegramMessage;
 };
 
+type InlineKeyboard = {
+  inline_keyboard: Array<Array<{ text: string; callback_data?: string; url?: string }>>;
+};
+
 function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
@@ -47,6 +51,17 @@ function privateChat(message: TelegramMessage): boolean {
   return Boolean(message.from && (message.chat.type === "private" || message.chat.id === message.from.id));
 }
 
+function withClose(keyboard?: unknown): unknown {
+  if (!keyboard || typeof keyboard !== "object" || !Array.isArray((keyboard as InlineKeyboard).inline_keyboard)) {
+    return keyboard;
+  }
+  const rows = [...(keyboard as InlineKeyboard).inline_keyboard];
+  if (!rows.some((row) => row.some((button) => button.callback_data === "ui:close"))) {
+    rows.push([{ text: "✕ Close", callback_data: "ui:close" }]);
+  }
+  return { inline_keyboard: rows };
+}
+
 async function telegramApi(env: Env, method: string, body: unknown): Promise<any | null> {
   if (!env.TELEGRAM_BOT_TOKEN) return null;
   try {
@@ -67,7 +82,7 @@ async function sendMessage(env: Env, chatId: number, text: string, keyboard?: un
   await telegramApi(env, "sendMessage", {
     chat_id: chatId,
     text,
-    reply_markup: keyboard,
+    reply_markup: withClose(keyboard),
   });
 }
 
@@ -141,6 +156,8 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
     return forward(request, raw, env);
   }
 
+  // ux_entry owns the canonical /cancel and /reset semantics. These remain as
+  // migration-safe fallbacks if secure_entry is ever invoked directly.
   if (command === "/cancel" || command === "/reset") {
     const cleared = await clearAiSetup(env.DB, configuredOwner);
     await sendMessage(
