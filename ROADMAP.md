@@ -15,6 +15,7 @@ Production Telegram FAQ assistant for a university School of Nursing in Burmese,
 - Telegram webhook on Cloudflare Workers + D1
 - normal users: `/start`, `/whoami`
 - role-scoped command menus synced automatically with Telegram `setMyCommands`
+- command-menu schema changes synchronize during deploy health and before outer manual interception
 - immutable Telegram numeric IDs for authority
 - dynamic D1 FAQ knowledge + revisions
 - deterministic FAQ -> grounded Primary AI -> grounded Fallback AI -> Human Handoff
@@ -48,17 +49,29 @@ Wrangler enters:
 `src/manual_entry.ts`
 
 Layer order:
-1. `manual_entry.ts` — editable Owner/Admin manuals
-2. `deployment_notice_entry.ts` — revision-aware online notification after successful health check
+1. `manual_entry.ts` — editable Owner/Admin manuals; command registry sync before manual interception
+2. `deployment_notice_entry.ts` — deploy-health command sync and revision-aware online notification
 3. `latest_return_entry.ts` — latest-message Return to AI control during human takeover
 4. `monitoring_message_entry.ts` — user/model-aware staff mirror headers and isolated inquiry/handoff presentation
 5. `staff_ux_entry.ts` — group-native `/staff` inline control panel and topic identity polish
 6. `ux_entry.ts` — typing indicator, reply-to, Close/Back, `/cancel`, `/reset`, stale-AI guard
 7. `secure_entry.ts` — secret/setup routing guard
-8. `runtime_entry.ts` — dynamic FAQ / AI / command integration
+8. `runtime_entry.ts` — dynamic FAQ / AI / command integration and lower compatibility command self-heal
 9. `index.ts` — retained fallback / compatibility runtime
 
 Do not bypass or independently reconstruct this stack.
+
+## Command menu sync hardening
+Status: IMPLEMENTED ON `test`; LIVE CONFIRMATION PENDING
+
+Earlier gap: new commands could be present in `command_menu.ts` but an outer runtime layer could intercept the new command before the lower `runtime_entry.ts` command-sync routine ran.
+
+Current rule:
+- successful deploy `/health` runs `syncCommandRegistryIfNeeded` before the online notice
+- `manual_entry.ts` also runs registry sync before consuming manual commands/callbacks
+- `runtime_entry.ts` retains its normal webhook self-heal
+
+Expected result: after a successful deployment that changes `COMMAND_SCHEMA_VERSION`, Owner and Sudo Admin command lists refresh without requiring `/start` or another unrelated command.
 
 ## Editable operating manuals
 Status: IMPLEMENTED ON `test`; LIVE TEST PENDING
@@ -154,8 +167,10 @@ Pipeline:
 5. remote D1 migrations
 6. deploy TEST Worker with `DEPLOY_REVISION=${GITHUB_SHA}`
 7. verify `/health`
+8. health path refreshes role-scoped Telegram command menus
+9. new revision sends `🟢 Bot is Online!` once to Owner + current Sudo Admins
 
-A new deployed revision sends `🟢 Bot is Online!` once to the configured Owner plus current Sudo Admins after a successful health request. Duplicate health checks for the same revision do not resend the notice.
+Duplicate health checks for the same revision do not resend the online notice.
 
 ## Current migrations
 - 0001 initial
@@ -170,6 +185,7 @@ A new deployed revision sends `🟢 Bot is Online!` once to the configured Owner
 
 ## Current validation focus
 Before `main` promotion, keep testing bounded to live behavior:
+- command additions appear after successful deploy without requiring `/start`
 - Owner `/ownermanual` renders and edit Preview/Save/Discard works
 - Sudo Admin `/adminmanual` renders read-only
 - manual edits do not alter FAQ/AI knowledge behavior
