@@ -70,6 +70,22 @@ Order: `မြန်မာ` · `English` · `简体中文`.
 - Staff Inbox should also show a concise Owner-override note so the control transition is visible to the team.
 - A previous claimant must Take Over again before resuming direct staff control after an Owner override.
 
+### Human takeover lease and auto-return
+- Every successful `Take Over` starts a **1-hour inactivity lease** for that claimant/user conversation pair.
+- The lease is claimant-specific. Activity from another Admin must not extend someone else's takeover.
+- A claimant's eligible non-command staff reply inside that user's Staff Inbox topic or claimed case reply renews the lease to **1 hour from that activity**.
+- The active claimant may also press `Extend 1h` to renew explicitly without sending a user-facing message.
+- `Extend 1h` must be server-authorized for the active claimant only.
+- Normal browsing, `/faq`, `/limits`, unrelated admin commands, or activity in another user's conversation must not renew the lease.
+- Production uses a persisted expiry timestamp, never an in-memory sleep/timer, so Worker restart/deploy does not lose takeover timing.
+- A Cloudflare Cron sweep runs every **5 minutes**. Therefore practical auto-return may occur roughly between **1h00m and 1h05m** after the last claimant activity.
+- When an expired lease is atomically returned to AI, notify the user in their saved language that the automated assistant is active again.
+- Notify the previous claimant privately that the takeover expired after inactivity. If direct delivery is unavailable, the Staff Inbox topic note acts as the fallback notification.
+- Record a concise auto-return note in the relevant Staff Inbox topic and remove the latest stale `Return to AI` control button.
+- Auto-return clears only transient human-control ownership. It must not delete cases, question logs, user history, FAQ state, or staff roles.
+- Bot Owner manual `Return to AI` remains immediately available and takes precedence over waiting for lease expiry.
+- Existing human claims at the moment this feature is deployed receive a fresh full 1-hour lease rather than being expired immediately.
+
 ## Input quality and false escalation
 - Before normal FAQ/AI/handoff processing, obvious low-information private text must pass an Input Quality Gate.
 - Obvious low-information examples include numbers-only input, punctuation/symbol-only input, single-character noise, URL-only input, username-only input, phone-number-only input, repeated-character garbage, and acknowledgement-only text such as `ok`/`yes` when no usable question is present.
