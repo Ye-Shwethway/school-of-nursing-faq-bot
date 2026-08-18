@@ -1,6 +1,7 @@
 # Main-only production pipeline. Touching this file intentionally triggers a production validation/deploy run.
 # Telegram bot-token rotations are completed by an automatic nonce-gated webhook cutover.
 # Manual production rerun: AI_CONFIG_MASTER_KEY rotated in Cloudflare on 2026-08-18.
+# Deployment change-summary verification rerun: 2026-08-18.
 # Spam-protection checkpoint: Owner registry now contains 19 commands.
 name: Deploy PRODUCTION to Cloudflare
 
