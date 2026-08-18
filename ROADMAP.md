@@ -26,6 +26,7 @@ Implemented:
 - visible `/language` for all users
 - staff notification toggle and staff availability state
 - staff-topic reply relay back to the original user
+- returning-unavailable staff pending-inquiry reminder with inline availability choice
 - Owner/Admin manuals include the current staff-operations commands and reconnect workflow
 
 ## Staff notifications and availability
@@ -48,15 +49,26 @@ When FAQ + AI cannot answer:
 
 When staff later return, an authorized staff member can write inside that user's Staff Inbox topic. The bot resolves the topic -> Telegram user mapping, takes human control if available, and relays the staff text to the user's private chat as a School of Nursing staff reply. The staff member is also marked available on successful reply handling.
 
+## Returning unavailable staff prompt
+When an authorized staff member is currently marked unavailable and later interacts with the bot in private chat, the bot checks for open escalation cases.
+
+If new pending inquiries exist since that staff member last acknowledged the reminder, the bot sends a private prompt showing the pending count with:
+- `✅ Mark me Available & Review` — marks the staff member available and directs them to review waiting Staff Inbox topics
+- `⏸ Stay Unavailable` — leaves their availability unchanged and keeps cases queued
+
+The newest pending case ID is stored as a per-staff acknowledgement in `bot_settings`, so the same pending set does not generate repeated reminders. A later newly-created open case can trigger a fresh reminder.
+
 ## Staff Inbox notification semantics
 `/noti off` does not disable monitoring, delete messages, or discard escalation cases. It only sets Telegram `disable_notification=true` for handoff/human-control group delivery. This avoids push-notification spam while preserving the operational record.
 
 ## Manual coverage
 Migration `0013_manual_staff_operations.sql` adds a new operational section to both manuals without overwriting existing editable sections.
 
-Owner Manual coverage includes `/language`, `/noti`, `/available`, `/unavailable`, `/clearmessage`, Staff Inbox switching, unavailable-staff behavior, and later topic-reply reconnect.
+Migration `0014_manual_returning_staff_prompt.sql` documents the returning-staff pending-inquiry reminder and its two inline availability choices in both Owner and Admin manuals.
 
-Admin Manual coverage includes `/language`, `/noti`, `/available`, `/unavailable`, Take Over / Return to AI context, and topic-reply reconnect. Owner-only controls remain explicitly identified as Owner-only.
+Owner Manual coverage includes `/language`, `/noti`, `/available`, `/unavailable`, `/clearmessage`, Staff Inbox switching, unavailable-staff behavior, returning-staff reminders, and later topic-reply reconnect.
+
+Admin Manual coverage includes `/language`, `/noti`, `/available`, `/unavailable`, Take Over / Return to AI context, returning-staff reminders, and topic-reply reconnect. Owner-only controls remain explicitly identified as Owner-only.
 
 ## AI configuration contract
 `AI_CONFIG_MASTER_KEY` must be a Cloudflare `secret_text` containing Base64 for exactly 32 random bytes. Credentials encrypted with an older master key must be entered again through `/ai` after key rotation.
@@ -81,7 +93,7 @@ Expected Owner commands (17):
 ## Canonical Worker stack
 Wrangler entrypoint: `src/staff_presence_entry.ts`.
 
-1. staff presence / notification commands + topic reply relay
+1. staff presence / notification commands + returning-staff pending reminder + topic reply relay
 2. Staff Inbox cleanup wrapper
 3. manual + command sync
 4. deployment notice / ops endpoints
@@ -94,12 +106,13 @@ Wrangler entrypoint: `src/staff_presence_entry.ts`.
 11. compatibility fallback + `/health`
 
 ## Current migrations
-0001 through 0013. Canonical 0013: `migrations/0013_manual_staff_operations.sql`.
+0001 through 0014. Canonical 0014: `migrations/0014_manual_returning_staff_prompt.sql`.
 
 ## Next exact work
-1. verify the migration 0013 manual-update production run is green
-2. open `/ownermanual` and `/adminmanual` and confirm the new Staff operations sections render correctly
-3. continue directly on `main` in small validated slices
+1. verify the returning-staff prompt + migration 0014 production run is green
+2. mark one staff unavailable, create a new unanswered inquiry, then use the bot privately as that staff member
+3. verify the pending-count prompt appears once, `Stay Unavailable` preserves presence, and `Mark me Available & Review` restores availability
+4. continue directly on `main` in small validated slices
 
 ## Deferred validation debt
 - multiuser simultaneous live stress test
