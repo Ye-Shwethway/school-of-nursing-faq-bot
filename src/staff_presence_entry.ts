@@ -4,9 +4,13 @@ import { getUserForMonitoringTopic, takeOverConversation } from "./monitoring";
 import {
   canManageStaffState,
   countAvailableStaff,
+  hasDailyAvailabilitySchedule,
   isStaffAvailable,
+  markStaffActiveNow,
+  setDailyAvailabilitySchedule,
   setStaffAvailability,
   setStaffNotificationsEnabled,
+  setTemporaryUnavailable,
   staffNotificationsEnabled,
 } from "./staff_presence";
 
@@ -38,6 +42,8 @@ type TelegramUpdate = { message?: TelegramMessage; callback_query?: TelegramCall
 
 type PendingSummary = { count: number; newestId: number };
 
+const YANGON_OFFSET_MINUTES = 390;
+
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
@@ -47,6 +53,39 @@ function json(body: unknown, status = 200): Response {
 
 function commandName(text: string): string {
   return text.trim().split(/\s+/, 1)[0].toLowerCase().replace(/@[^\s]+$/, "");
+}
+
+function commandArgs(text: string): string[] {
+  return text.trim().split(/\s+/).slice(1);
+}
+
+function parseTimeToken(token: string): number | null {
+  const value = token.trim().toLowerCase();
+  const h24 = value.match(/^(\d{1,2}):([0-5]\d)$/);
+  if (h24) {
+    const hour = Number(h24[1]);
+    if (hour >= 0 && hour <= 23) return hour * 60 + Number(h24[2]);
+    return null;
+  }
+  const h12 = value.match(/^(\d{1,2})(?::([0-5]\d))?(am|pm)$/);
+  if (!h12) return null;
+  let hour = Number(h12[1]);
+  if (hour < 1 || hour > 12) return null;
+  const minute = Number(h12[2] ?? 0);
+  if (h12[3] === "am") hour = hour === 12 ? 0 : hour;
+  else hour = hour === 12 ? 12 : hour + 12;
+  return hour * 60 + minute;
+}
+
+function minuteLabel(minute: number): string {
+  return `${String(Math.floor(minute / 60)).padStart(2, "0")}:${String(minute % 60).padStart(2, "0")}`;
+}
+
+function yangonDateTimeLabel(sqliteUtc: string): string {
+  const utc = Date.parse(sqliteUtc.replace(" ", "T") + "Z");
+  if (!Number.isFinite(utc)) return sqliteUtc;
+  const local = new Date(utc + YANGON_OFFSET_MINUTES * 60_000);
+  return `${local.getUTCFullYear()}-${String(local.getUTCMonth() + 1).padStart(2, "0")}-${String(local.getUTCDate()).padStart(2, "0")} ${String(local.getUTCHours()).padStart(2, "0")}:${String(local.getUTCMinutes()).padStart(2, "0")}`;
 }
 
 function isGroup(message: TelegramMessage): boolean {
@@ -105,10 +144,7 @@ async function pendingSummary(db: D1Database | undefined): Promise<PendingSummar
      FROM escalation_cases
      WHERE status='open'`,
   ).first<{ count: number; newest_id: number }>();
-  return {
-    count: Number(row?.count ?? 0),
-    newestId: Number(row?.newest_id ?? 0),
-  };
+  return { count: Number(row?.count ?? 0), newestId: Number(row?.newest_id ?? 0) };
 }
 
 function pendingAckKey(userId: number): string {
@@ -140,6 +176,7 @@ async function maybePromptReturningStaff(env: Env, message: TelegramMessage): Pr
   if (!env.DB || !message.from || !isPrivate(message)) return;
   if (!await canManageStaffState(env.DB, message.from.id, env.BOT_OWNER_TELEGRAM_ID)) return;
   if (await isStaffAvailable(env.DB, message.from.id)) return;
+  if (await hasDailyAvailabilitySchedule(env.DB, message.from.id)) return;
 
   const pending = await pendingSummary(env.DB);
   if (pending.count < 1 || pending.newestId < 1) return;
@@ -212,6 +249,67 @@ async function handleReturnPromptCallback(env: Env, callback: TelegramCallbackQu
   return true;
 }
 
+async function handleAvailabilityCommand(env: Env, message: TelegramMessage, command: string): Promise<boolean> {
+  if (!env.DB || !message.from || !message.text) return false;
+  const args = commandArgs(message.text);
+
+  if (command === "/unavailable") {
+    if (args.length === 0) {
+      await setStaffAvailability(env.DB, message.from.id, false);
+      const count = await countAvailableStaff(env.DB);
+      await sendMessage(env, message.chat.id, `You are marked unavailable until you use /available. Available staff: ${count}`, { silent: true, threadId: message.message_thread_id });
+      return true;
+    }
+    if (args.length === 1) {
+      const hours = Number(args[0]);
+      if (Number.isFinite(hours) && hours > 0 && hours <= 168) {
+        const expiresAt = await setTemporaryUnavailable(env.DB, message.from.id, hours);
+        const count = await countAvailableStaff(env.DB);
+        await sendMessage(
+          env,
+          message.chat.id,
+          `You are unavailable for ${hours} hour${hours === 1 ? "" : "s"}.\nAuto-return: ${expiresAt ? yangonDateTimeLabel(expiresAt) : "scheduled"} Asia/Yangon (UTC+06:30).\nAvailable staff: ${count}`,
+          { silent: true, threadId: message.message_thread_id },
+        );
+        return true;
+      }
+    }
+    await sendMessage(env, message.chat.id, "Usage: /unavailable | /unavailable <hours>\nExample: /unavailable 3", { silent: true, threadId: message.message_thread_id });
+    return true;
+  }
+
+  if (args.length === 0) {
+    await setStaffAvailability(env.DB, message.from.id, true);
+    const count = await countAvailableStaff(env.DB);
+    await sendMessage(env, message.chat.id, `You are marked available. Any recurring availability schedule was cleared. Available staff: ${count}`, { silent: true, threadId: message.message_thread_id });
+    return true;
+  }
+
+  if (args.length === 2) {
+    const start = parseTimeToken(args[0]);
+    const end = parseTimeToken(args[1]);
+    if (start !== null && end !== null && start !== end) {
+      const availableNow = await setDailyAvailabilitySchedule(env.DB, message.from.id, start, end);
+      const count = await countAvailableStaff(env.DB);
+      await sendMessage(
+        env,
+        message.chat.id,
+        `Daily availability scheduled: ${minuteLabel(start)}–${minuteLabel(end)} Asia/Yangon (UTC+06:30).\nCurrent state: ${availableNow ? "AVAILABLE" : "UNAVAILABLE"}.\nAvailable staff: ${count}`,
+        { silent: true, threadId: message.message_thread_id },
+      );
+      return true;
+    }
+  }
+
+  await sendMessage(
+    env,
+    message.chat.id,
+    "Usage: /available | /available <start> <end>\nExamples: /available 09:00 17:00 | /available 9am 5pm | /available 20:00 08:00\nTimezone: Asia/Yangon (UTC+06:30)",
+    { silent: true, threadId: message.message_thread_id },
+  );
+  return true;
+}
+
 async function handleStaffCommand(env: Env, message: TelegramMessage): Promise<boolean> {
   if (!message.from || !message.text) return false;
   const command = commandName(message.text);
@@ -227,29 +325,13 @@ async function handleStaffCommand(env: Env, message: TelegramMessage): Promise<b
   }
 
   if (command === "/available" || command === "/unavailable") {
-    const available = command === "/available";
-    await setStaffAvailability(env.DB, message.from.id, available);
-    const count = await countAvailableStaff(env.DB);
-    await sendMessage(
-      env,
-      message.chat.id,
-      available
-        ? `You are marked available. Available staff: ${count}`
-        : `You are marked unavailable. Available staff: ${count}`,
-      { silent: true, threadId: message.message_thread_id },
-    );
-    return true;
+    return handleAvailabilityCommand(env, message, command);
   }
 
-  const action = message.text.trim().split(/\s+/)[1]?.toLowerCase();
+  const action = commandArgs(message.text)[0]?.toLowerCase();
   if (action !== "on" && action !== "off") {
     const enabled = await staffNotificationsEnabled(env.DB);
-    await sendMessage(
-      env,
-      message.chat.id,
-      `Staff notifications are ${enabled ? "ON" : "OFF"}.\nUsage: /noti on | /noti off`,
-      { silent: true, threadId: message.message_thread_id },
-    );
+    await sendMessage(env, message.chat.id, `Staff notifications are ${enabled ? "ON" : "OFF"}.\nUsage: /noti on | /noti off`, { silent: true, threadId: message.message_thread_id });
     return true;
   }
 
@@ -276,7 +358,7 @@ async function relayStaffTopicReply(env: Env, message: TelegramMessage): Promise
   const userId = await getUserForMonitoringTopic(env.DB, message.chat.id, message.message_thread_id);
   if (!userId) return false;
 
-  await setStaffAvailability(env.DB, message.from.id, true);
+  await markStaffActiveNow(env.DB, message.from.id);
   const takeover = await takeOverConversation(env.DB, userId, message.from.id);
   if (!takeover.ok && !takeover.message.includes("already control")) {
     await sendMessage(env, message.chat.id, takeover.message, { silent: true, threadId: message.message_thread_id });
@@ -285,12 +367,7 @@ async function relayStaffTopicReply(env: Env, message: TelegramMessage): Promise
 
   const sent = await sendMessage(env, userId, `School of Nursing staff:\n${text}`);
   if (!sent) {
-    await sendMessage(
-      env,
-      message.chat.id,
-      "Could not deliver this reply to the user. The user may have blocked the bot or Telegram may not allow the private message.",
-      { silent: true, threadId: message.message_thread_id },
-    );
+    await sendMessage(env, message.chat.id, "Could not deliver this reply to the user. The user may have blocked the bot or Telegram may not allow the private message.", { silent: true, threadId: message.message_thread_id });
   }
   return true;
 }
@@ -319,9 +396,7 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
-    if (request.method === "POST" && url.pathname === "/telegram/webhook") {
-      return handleWebhook(request, env);
-    }
+    if (request.method === "POST" && url.pathname === "/telegram/webhook") return handleWebhook(request, env);
     return app.fetch(request, env);
   },
 };
