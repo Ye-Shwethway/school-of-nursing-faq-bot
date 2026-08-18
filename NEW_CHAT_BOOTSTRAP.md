@@ -14,103 +14,123 @@ Historical branch: `test` (dormant/reference-only)
 Live repository plus verified Cloudflare/Telegram evidence outranks remembered chat context.
 
 ## Current checkpoint
-The project is main-only and production-live. Owner private-chat `/cases` has already been live-accepted. The newest source slice on `main` adds **FAQ-first onboarding after language selection** on top of the existing two-layer spam protection and `/limits` controls. Do not call the newest source slice production-green until the single production workflow is verified.
+The project is main-only and production-live. FAQ-first language confirmation has been live-accepted in Telegram, proving the prior onboarding deploy reached production even though that revision's online-notice message was missed.
+
+The newest source slice on `main` adds **false-escalation filtering, AI clarification-before-handoff policy, retry-safe production-online notice delivery, and synchronized manuals/docs**. Do not call this newest slice production-green until the production workflow and live acceptance below are verified.
 
 ## Current product surfaces
 - multilingual deterministic/dynamic FAQ
-- public role-aware `/faq` with localized paginated read-only browsing for normal users
-- FAQ-first `/start`/`/language` onboarding: choose language → delete picker → localized `/faq`-first confirmation → direct `📚 Browse FAQ` button
-- free-text questions positioned as the path only when the FAQ library does not cover the topic
-- Owner/Sudo FAQ management
-- one-language multilingual FAQ authoring with Primary→Fallback AI translation drafts
-- manual translation fallback and explicit `✅ Approve & Save`
-- `/cases` Owner/Sudo escalation archive, 6/page, Open/Claimed/Resolved/All
-- case → Add as FAQ / Find Related FAQ
-- persisted escalation reason + linked FAQ
-- confirmed permanent case deletion for typo/test/junk cases
-- Staff Inbox per-user topics, Take Over/Resolve/Return-to-AI, notifications/presence/reply relay
-- `/limits` Owner/Sudo user-limit management
-- private command/callback/message flood protection
+- public role-aware `/faq` with localized paginated read-only browsing
+- FAQ-first `/start`/`/language` onboarding with localized Browse FAQ CTA
+- Owner/Sudo FAQ management and multilingual AI-assisted drafting
+- `/cases` escalation archive with Add as FAQ / Find Related FAQ / confirmed delete
+- Staff Inbox human takeover/resolve/return-to-AI, presence, notifications, topic relay
+- `/limits` Owner/Sudo limit management
+- progressive free-text inquiry rate limiting
+- private command/callback/message Interaction Flood Guard
 - Owner-only permanent ban/unban
+- new Input Quality Gate to suppress obvious junk/fragment false escalations
+- AI clarify-vs-handoff policy
+- retry-safe deploy-online notification
 - editable Owner/Admin manuals covering current operations
 
 ## FAQ-first onboarding contract
-`/start` and `/language` use the existing one-shot picker: `မြန်မာ` · `English` · `简体中文`.
+`/start` and `/language` use the one-shot `မြန်မာ` · `English` · `简体中文` picker.
 
-After a valid selection:
-1. persist the language
-2. delete the picker message
-3. send one localized confirmation
-4. tell the user to check `/faq` first for common questions
-5. explain that they may type a free-text question if the FAQ library does not cover it
-6. show one localized `📚 Browse FAQ` button using the existing public FAQ callback path
+After selection:
+1. persist language
+2. delete picker
+3. send localized confirmation
+4. promote `/faq` first for common questions
+5. say free-text may be used when FAQ does not cover the topic
+6. show localized `📚 Browse FAQ`
 
-This is intentional product guidance to favor deterministic approved FAQ content before unnecessary free-text/AI calls. Never silent-close the picker and never tell the user only that they can now send a question.
+This flow is live-confirmed in production as of 2026-08-18.
+
+## False escalation / Input Quality Gate
+Normal private free-text reaches this gate after flood/rate protection and FAQ-admin text interception, but before lower FAQ/AI/handoff processing.
+
+Filter without AI/case creation:
+- numbers only (`1`, `12`, `123`)
+- punctuation/symbol-only input
+- single-character noise
+- URL-only input
+- username-only input
+- phone-number-only input
+- repeated-character garbage
+- acknowledgement-only/basic greeting/thanks with no usable school question
+
+Filtered response:
+- localized request for a more complete question
+- localized `📚 Browse FAQ` button
+- no AI call
+- no escalation case
+- no unresolved Staff Inbox escalation
+
+Do not use length alone. Short meaningful school topics such as `fees?`, `tuition`, `admission`, `CDM`, `accreditation`, etc. must continue normally.
+
+Bypasses:
+- human-controlled conversations
+- active admin/setup sessions
+
+Implementation: `src/input_quality_entry.ts`. `src/faq_ai_entry.ts` forwards non-authoring normal text into this gate before `cases_entry.ts` and lower monitoring/AI flow.
+
+## AI clarify vs handoff contract
+`src/agent_policy.ts` now instructs the grounded AI to choose among:
+- `answer` — grounded supported answer
+- `clarify` — meaningful but incomplete/ambiguous/fragmentary input that needs more detail
+- `handoff` — sufficiently specific meaningful School of Nursing question requiring real staff review/action because approved knowledge cannot safely answer
+
+`clarify` must not claim staff review and must not create a case. For minimal compatibility, `parseAgentDecision()` normalizes `clarify` into the existing terminal answered-response path and prefixes the internal reason with `clarify:`.
+
+Do not use handoff for obvious junk, standalone numbers, acknowledgement-only input, typo fragments, or messages that first need clarification.
 
 ## Spam protection contract
-Two independent gates are active for normal private users.
-
 ### Inquiry rate gate
-Applies to private free-text inquiries before FAQ/AI/handoff processing.
-
-Default window:
-- 10 free-text inquiries / 10 minutes
-- the next inquiry triggers cooldown
-- repeat limit hits within 24h: 30 minutes → 2 hours → 12 hours
-- never auto-permanently-ban
-
-When inquiry-blocked:
-- do not run deterministic/AI/handoff processing for rejected text
-- do not call AI
-- do not create a new escalation case
-- keep previously accepted/logged questions
-- return neutral localized system copy with approximate wait time and `/faq`
-- throttle repeated blocked warnings to at most one per 5 minutes
-- keep `/faq`, `/language`, `/start`, `/whoami`, and other safe commands available
-
-Owner/Sudo accounts bypass the normal-user inquiry window.
+- 10 private free-text inquiries / 10 minutes
+- next inquiry triggers cooldown
+- repeat hits within 24h: 30 minutes → 2 hours → 12 hours
+- no automatic permanent ban
+- rejected text does not call AI/create case
+- blocked warning max once / 5 min
+- Owner/Sudo bypass this window
 
 ### Interaction Flood Guard
-Runs before lower private command/callback/free-text handling.
-
-Policy:
-- count private commands + inline-button callbacks + messages
-- normal users: 20 interactions / 60 seconds
-- active cooldown/restriction/permanent-ban users: 6 interactions / 60 seconds
-- threshold breach → 5-minute UI flood block
-- first blocked interaction may show one localized warning
-- additional blocked interactions are silently dropped; warning repeats at most once per 5 minutes
-- Owner/Sudo bypass this flood guard
-- `Exempt 1h` does not bypass flood protection
-
-This keeps safe commands available without leaving `/faq` or callback navigation open to unlimited command/button spam.
+- normal: 20 private interactions / 60 sec
+- active cooldown/restriction/permanent ban: 6 / 60 sec
+- threshold breach → 5-minute flood block
+- first blocked interaction may warn; later blocked traffic silent-dropped
+- Owner/Sudo bypass
+- `Exempt 1h` bypasses inquiry rate only, never flood protection
 
 ## `/limits` contract
-Owner/Sudo only; allowed in private bot chat or configured active Staff Inbox group.
+Owner/Sudo:
+- `🔓 Unlock Now`
+- `🧪 Exempt 1h`
+- `⏳ Restrict 2h`
+- `Reset Strikes`
 
-Entry points:
-- `/limits` — pager of users with history/active state
-- `/limits <telegram_user_id>` — direct lookup, including a normal test account that has not hit a limit yet
-
-Owner + Sudo controls:
-- `🔓 Unlock Now` — clears cooldown/temporary restriction and resets the immediate inquiry window; it does not grant Exempt
-- `🧪 Exempt 1h` — temporary QA/trusted bypass of the free-text inquiry limiter only; Interaction Flood Guard remains active
-- `⏳ Restrict 2h` — blocks free-text inquiries for 2 hours and removes any active Exempt; safe commands remain under the tighter flood threshold
-- `Reset Strikes` — clears progressive strike/window history; it is not an exemption
-
-Owner-only controls:
-- `🚫 Permanently Ban` — requires confirmation
+Owner-only:
+- `🚫 Permanently Ban` with confirmation
 - `✅ Unban User`
 
-Permanent ban blocks normal free-text inquiries before FAQ/AI/escalation but keeps `/faq` and safe commands available under the tighter flood threshold. Unban clears ban plus immediate cooldown/window state. Admin overrides and ban/unban operations write to `admin_audit`.
+## Deployment online notice retry
+`src/deployment_notice_entry.ts` still atomically claims a revision before sending, preventing duplicate concurrent online notices.
+
+New behavior:
+- if at least one Owner/Sudo Telegram delivery succeeds, keep the revision claim
+- if **all** Telegram deliveries fail, delete/release the revision claim
+- next successful `/health` may retry that same revision
+- notice failure never fails the health response
+
+This fixes the observed case where production deploy succeeded but no `🟢 Bot is Online!` message appeared.
 
 ## Escalation Inbox contract
-`/cases` is Owner/Sudo only in private bot chat or active Staff Inbox. Lists are newest-first, 6/page.
+`/cases` remains Owner/Sudo only in private bot chat or active Staff Inbox.
 
-`🗑 Delete Case` requires explicit permanent-delete confirmation and deletes only the case + `escalation_messages`; preserve user, original `questions` record, and linked FAQ.
+`🗑 Delete Case` requires explicit permanent-delete confirmation and deletes only case + `escalation_messages`; preserve user, original question log, and linked FAQ.
 
-## Multilingual FAQ authoring
-Owner/Sudo choose Burmese, English, or Simplified Chinese as authoritative source language, enter source question+answer, then use configured Primary→Fallback AI to draft the other two languages or fill them manually. AI remains draft-only. All three languages require review before `✅ Approve & Save`. AI failure never blocks manual completion.
+The Input Quality Gate and AI clarification policy are intended to reduce typo/junk/incomplete false cases before they reach this archive.
 
 ## Command registry
 Public (4): `/start`, `/language`, `/faq`, `/whoami`.
@@ -119,56 +139,43 @@ Sudo adds: `/admin`, `/admins`, `/cases`, `/limits`, `/adminmanual`, `/noti`, `/
 
 Owner additionally: `/sudo`, `/ai`, `/staff`, `/clearmessage`, `/ownermanual`, `/cancel`, `/reset`.
 
-Command schema revision: **9**.
-Sudo total: **12**.
-Production exact Owner target: **19 commands**.
+Command schema revision: **9**. Sudo total: **12**. Owner total: **19**.
 
 ## Migrations / manuals
-Current migration range: `0001` through `0025`.
+Current migration range: `0001` through `0026`.
 
-Latest relevant migrations:
-- `0019_user_rate_limits.sql`
-- `0020_manual_spam_protection.sql`
-- `0021_rate_limit_notice_throttle.sql`
-- `0022_manual_limits_refinement.sql`
-- `0023_interaction_flood_guard.sql`
-- `0024_interaction_flood_guard_no_fk.sql`
-- `0025_manual_interaction_flood_guard.sql`
+Newest manual migration:
+- `0026_manual_false_escalation_guard.sql`
 
-Owner/Admin manuals explicitly distinguish Exempt vs Restrict and document interaction-flood thresholds, silent-drop behavior, Owner/Sudo bypass, and the fact that Exempt bypasses inquiry limits only.
+Owner/Admin manuals now explain obvious false-escalation filtering, short meaningful query exceptions, AI clarification, and the rule that real staff handoff requires a sufficiently specific actionable school question.
 
 ## Canonical Worker stack
 Wrangler entrypoint: `src/interaction_guard_entry.ts`.
 
-Top layers:
-1. `interaction_guard_entry.ts` — private commands/callbacks/messages flood gate
-2. `rate_limit_entry.ts` — `/limits` + normal-user free-text inquiry rate gate
-3. `faq_ai_entry.ts` — FAQ authoring + AI translation
-4. `cases_entry.ts` — `/cases`
-5. existing Staff/manual/deploy/monitoring/UX/security/runtime/index stack
+Top flow:
+1. `interaction_guard_entry.ts` — interaction flood guard
+2. `rate_limit_entry.ts` — `/limits` + inquiry rate gate
+3. `faq_ai_entry.ts` — FAQ-authoring interception
+4. `input_quality_entry.ts` — false-escalation filter
+5. `cases_entry.ts` — `/cases`
+6. lower Staff/monitoring/FAQ/AI/runtime stack
 
-`secure_entry.ts` owns the active one-shot language-selection save/delete/FAQ-first confirmation behavior.
+`agent_policy.ts` owns clarify-vs-handoff semantics. `deployment_notice_entry.ts` owns deploy-online retry behavior.
 
 ## Production workflow contract
-`.github/workflows/deploy-production.yml` remains the sole production workflow and must validate credentials, typecheck, migrations, Worker dry-run, remote migrations, deploy, binding preservation, `/health`, nonce-gated command sync, and exact **19-command** Owner Telegram read-back including `/limits`.
+`.github/workflows/deploy-production.yml` remains the sole production workflow. It must pass typecheck, migrations through `0026`, dry-run bundle, remote migrations, production deploy, binding preservation, `/health`, and exact 19-command Owner Telegram read-back.
 
 ## Next exact validation
 After workflow green:
-1. `/start` → choose each language → verify picker deletion + FAQ-first localized confirmation
-2. verify `📚 Browse FAQ` opens the public FAQ list directly
-3. `/language` repeats the same one-shot FAQ-first behavior
-4. send 10 normal-user free-text inquiries inside 10 min
-5. verify next inquiry is blocked before AI/case creation
-6. verify repeated blocked free-text spam produces no more than one warning per 5 min
-7. verify `/faq` remains usable while limited
-8. normal user exceeds 20 private interactions/60s → 5-minute flood block
-9. restricted/banned user exceeds 6 private interactions/60s → 5-minute flood block
-10. verify only first blocked flood interaction warns and subsequent blocked commands/callbacks/messages are silent-dropped
-11. `/limits <test_user_id>` → `Exempt 1h`; verify inquiry QA continues but flood guard still applies
-12. apply `Restrict 2h`; verify Exempt disappears and free-text is blocked
-13. Owner permanent-ban confirmation → free text blocked, `/faq` remains available under tight flood guard
-14. Owner Unban → free text restored
-15. verify blocked inquiry/flood traffic created no extra `/cases` or AI calls
+1. `1`, `123`, `...`, single emoji, URL-only, `ok` → clarification + FAQ CTA; no AI/case
+2. `fees?`, `CDM?`, `admission?` → normal FAQ/AI path
+3. meaningful incomplete school question → AI clarification; no case
+4. specific unanswered school question → real handoff/case still works
+5. human-control short replies such as `yes`/`1` are relayed, not filtered
+6. active admin/setup wizard text is not filtered
+7. verify `/cases` does not receive filtered junk
+8. verify deploy-online notice appears for the new revision; if Telegram send fails completely, later `/health` can retry
+9. recheck FAQ-first onboarding, flood guard, inquiry rate limit, `/limits`, restrict/exempt, ban/unban
 
 ## Documentation rule
 After every behavior/schema/deployment slice, keep `ROADMAP.md`, this file, manuals, and `docs/TELEGRAM_DESIGN_RULES.md` synchronized with live repository reality.
