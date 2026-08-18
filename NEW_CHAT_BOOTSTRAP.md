@@ -20,7 +20,7 @@ Treat live repository plus verified Cloudflare/Telegram evidence as authoritativ
 
 The project is production-live and main-only.
 
-Current working/currently implemented surfaces include:
+Current implemented surfaces include:
 
 - multilingual deterministic FAQ
 - public `/faq` command for normal users
@@ -45,8 +45,6 @@ Current working/currently implemented surfaces include:
 - Owner/Admin manual coverage for current staff operations
 - Owner manual cleaned of stale TEST deployment guidance
 - Owner `/clearmessage` retained as best-effort only
-
-There is no additional active required implementation slice after the public FAQ library UX change.
 
 ## Main-only operating model
 
@@ -73,11 +71,11 @@ Normal users:
 
 Owner/Sudo retain the `/faq` management surface with Browse, Add, Inactive, Help, Edit, Disable, and Restore.
 
-The Telegram UX layer already handles FAQ callback navigation edit-in-place first and appends the shared `✕ Close` control.
+The Telegram UX layer handles FAQ callback navigation edit-in-place first and appends the shared `✕ Close` control.
 
 No D1 migration was required for this slice.
 
-## Command registry
+## Command registry and normal-user scope rule
 
 Public:
 
@@ -91,9 +89,11 @@ Owner additionally has:
 
 `/sudo`, `/ai`, `/staff`, `/clearmessage`, `/ownermanual`, `/cancel`, `/reset`
 
-Command schema revision: `6`.
+Command schema revision: `7`.
 
-Production exact Owner read-back target remains **17 commands**. Privileged command ordering remains compatible with the existing workflow read-back contract.
+Production exact Owner read-back target remains **17 commands** and privileged ordering remains compatible with the workflow contract.
+
+Important scope correction: normal users must inherit the global `all_private_chats` public registry. Older runtime versions created chat-specific normal-user command scopes, which can shadow newly-public commands. `syncUserCommandScope()` now deletes normal-user per-chat scopes, and schema synchronization clears stale overrides for already-known normal users. Production `/health` invokes this synchronization during deployment validation.
 
 ## Staff presence / notification behavior
 
@@ -122,37 +122,15 @@ No immediate staff response is promised when nobody is available.
 
 ## Staff reconnect / reply behavior
 
-Authorized staff can later write normal text inside the affected user's Staff Inbox topic.
-
-The runtime:
-
-- maps `(staff_chat_id, message_thread_id)` back to the original Telegram user
-- marks the replying staff member available
-- takes human control when allowed
-- leaves another staff member's existing claim intact rather than stealing it
-- relays the staff text to the user's private chat under the neutral School of Nursing staff label
-- reports private-delivery failure back into the topic
+Authorized staff can later write normal text inside the affected user's Staff Inbox topic. The runtime maps the Staff Inbox topic back to the original Telegram user, marks the replying staff member available, takes human control when allowed, preserves another staff member's existing claim, relays the text under a neutral School of Nursing staff label, and reports private-delivery failure back into the topic.
 
 ## Returning unavailable staff reminder
 
-If an authorized staff member is still marked unavailable and later interacts with the bot privately while new open cases are waiting, the bot can show a pending-count reminder with:
-
-- `✅ Mark me Available & Review`
-- `⏸ Stay Unavailable`
-
-The latest pending-case ID is acknowledged per staff member so an unchanged pending set does not repeatedly spam them. A newly-created case can trigger another reminder.
+If an authorized staff member is still unavailable and later interacts privately while new open cases are waiting, the bot can show `✅ Mark me Available & Review` / `⏸ Stay Unavailable`. Per-staff acknowledgement prevents repeated reminders for an unchanged pending set.
 
 ## Staff Inbox and Sudo lifecycle
 
-Owner `/sudo grant <telegram_user_id>`:
-
-- grants `sudo_admin`
-- enables staff authorization
-- refreshes the user's command scope best-effort
-- checks Staff Inbox membership
-- creates a one-use invite when needed and Telegram permissions allow it
-- attempts private invite delivery to the new Sudo Admin
-- falls back to sending the link to Owner if the target cannot receive the DM
+Owner `/sudo grant <telegram_user_id>` grants `sudo_admin`, enables staff authorization, refreshes command scope best-effort, checks Staff Inbox membership, creates a one-use invite when needed, attempts private invite delivery, and falls back to sending the link to Owner if the target cannot receive the DM.
 
 `/sudo revoke` removes Sudo and disables bot-side staff authorization. It does not currently auto-kick an already-joined Telegram group member.
 
@@ -160,13 +138,11 @@ Owner can switch Staff Inbox by using `/staff` in the desired group and choosing
 
 ## Cleanup limitation
 
-`/clearmessage` is Owner-only and best-effort. Telegram history/update/deletion behavior prevents a guaranteed full-history purge. Do not treat this utility as a security/data-retention eraser.
+`/clearmessage` is Owner-only and best-effort. Telegram history/update/deletion behavior prevents a guaranteed full-history purge. Do not treat it as a security/data-retention eraser.
 
 ## AI master-key contract
 
-`AI_CONFIG_MASTER_KEY` must be a Cloudflare `secret_text` containing Base64 for exactly 32 random bytes.
-
-Changing the key invalidates provider credentials encrypted under the previous key; re-enter those credentials through `/ai` after rotation.
+`AI_CONFIG_MASTER_KEY` must be a Cloudflare `secret_text` containing Base64 for exactly 32 random bytes. Changing the key invalidates provider credentials encrypted under the previous key; re-enter those credentials through `/ai` after rotation.
 
 ## Manuals
 
@@ -178,9 +154,7 @@ Current manual-related migrations:
 - `0014_manual_returning_staff_prompt.sql`
 - `0015_owner_manual_main_only_cleanup.sql`
 
-`0015` removes stale TEST guidance from the live Owner manual while preserving the old section bodies in manual revision history.
-
-Manual content remains separate from FAQ knowledge and AI grounding.
+`0015` removes stale TEST guidance from the live Owner manual while preserving old section bodies in manual revision history. Manual content remains separate from FAQ knowledge and AI grounding.
 
 ## Canonical Worker stack
 
@@ -189,7 +163,7 @@ Wrangler entrypoint: `src/staff_presence_entry.ts`.
 1. `staff_presence_entry.ts` — availability, `/noti`, returning-staff reminder, topic reply relay
 2. `clear_message_entry.ts` — best-effort Staff Inbox cleanup
 3. `manual_entry.ts` — manuals + command sync
-4. `deployment_notice_entry.ts` — production ops/deploy notice
+4. `deployment_notice_entry.ts` — production ops/deploy notice + health-triggered command synchronization
 5. `latest_return_entry.ts` — latest Return-to-AI control
 6. `monitoring_message_entry.ts` — FAQ/AI/handoff + availability-aware copy
 7. `staff_ux_entry.ts` — Staff Inbox UX + Sudo invite lifecycle
@@ -200,18 +174,7 @@ Wrangler entrypoint: `src/staff_presence_entry.ts`.
 
 ## Production workflow contract
 
-`.github/workflows/deploy-production.yml` validates:
-
-- production credentials/runtime bindings
-- install/typecheck
-- local migrations
-- production Worker dry run
-- remote D1 migrations
-- production Worker deploy
-- runtime-binding preservation
-- production `/health`
-- nonce-gated Owner command resync
-- exact Telegram Owner command read-back
+`.github/workflows/deploy-production.yml` validates production credentials/runtime bindings, install/typecheck, local migrations, production Worker dry run, remote D1 migrations, production Worker deploy, runtime-binding preservation, production `/health`, nonce-gated Owner command resync, and exact Telegram Owner command read-back.
 
 ## Current migrations
 
@@ -219,15 +182,25 @@ Wrangler entrypoint: `src/staff_presence_entry.ts`.
 
 Latest: `migrations/0015_owner_manual_main_only_cleanup.sql`.
 
-## Documentation checkpoint
+## Latest defect correction
 
-On 2026-08-18, root/docs documentation was reconciled against the live main-only production architecture and updated with the public role-aware FAQ library contract.
+Verified defect: after `/faq` became public, an existing normal user's Telegram command menu could still omit it because an older chat-specific command scope shadowed the updated global public scope.
+
+Correction on `main`:
+
+- command schema bumped to revision 7
+- normal-user per-chat scopes are deleted instead of explicitly set
+- already-known normal users have stale overrides removed during registry synchronization
+- Owner/Sudo explicit private scopes remain intact
+- privileged command order stays aligned with the existing production read-back contract
+
+After production deployment, verify `/faq` appears for an already-existing normal user. If the Telegram client itself still shows a stale menu, reopen the bot chat/menu before treating it as a runtime failure.
 
 ## Next exact sequence
 
-No implementation is currently required after this slice.
+No further implementation is required unless this live verification fails or a new requirement arrives.
 
-When a new requirement or verified production defect arrives:
+For new work:
 
 1. reconcile from live `main`
 2. inspect only task-relevant source/docs
