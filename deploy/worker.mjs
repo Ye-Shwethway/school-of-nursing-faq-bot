@@ -2185,13 +2185,15 @@ var ADMIN_COMMANDS = [
   ...PUBLIC_COMMANDS,
   { command: "admin", description: "Open administrator tools" },
   { command: "admins", description: "List authorized administrators" },
-  { command: "faq", description: "Manage FAQ knowledge" }
+  { command: "faq", description: "Manage FAQ knowledge" },
+  { command: "adminmanual", description: "Read the Sudo Admin manual" }
 ];
 var OWNER_COMMANDS = [
   ...ADMIN_COMMANDS,
   { command: "sudo", description: "Manage Sudo Admin access" },
   { command: "ai", description: "Configure AI agent" },
   { command: "staff", description: "Configure staff and monitoring" },
+  { command: "ownermanual", description: "Read or edit the Bot Owner manual" },
   { command: "cancel", description: "Cancel the current setup flow" },
   { command: "reset", description: "Reset transient conversation state" }
 ];
@@ -2220,20 +2222,20 @@ function defaultPrivateScope() {
 __name(defaultPrivateScope, "defaultPrivateScope");
 
 // src/command_sync.ts
-async function setCommands(telegramApi9, commands, scope) {
+async function setCommands(telegramApi10, commands, scope) {
   try {
-    const result = await telegramApi9("setMyCommands", { commands, scope });
+    const result = await telegramApi10("setMyCommands", { commands, scope });
     return result === true;
   } catch {
     return false;
   }
 }
 __name(setCommands, "setCommands");
-async function syncUserCommandScope(db, telegramApi9, telegramUserId, ownerIdValue) {
+async function syncUserCommandScope(db, telegramApi10, telegramUserId, ownerIdValue) {
   try {
     const role = await getAdminRole(db, telegramUserId, ownerIdValue);
     await setCommands(
-      telegramApi9,
+      telegramApi10,
       commandsForRole(role),
       commandScopeForPrivateChat(telegramUserId)
     );
@@ -2241,7 +2243,7 @@ async function syncUserCommandScope(db, telegramApi9, telegramUserId, ownerIdVal
   }
 }
 __name(syncUserCommandScope, "syncUserCommandScope");
-async function syncCommandRegistryIfNeeded(db, telegramApi9, ownerIdValue) {
+async function syncCommandRegistryIfNeeded(db, telegramApi10, ownerIdValue) {
   if (!db) return;
   try {
     const current = await db.prepare(
@@ -2249,21 +2251,21 @@ async function syncCommandRegistryIfNeeded(db, telegramApi9, ownerIdValue) {
     ).first();
     if (current?.setting_value === COMMAND_SCHEMA_VERSION) return;
     const defaultOk = await setCommands(
-      telegramApi9,
+      telegramApi10,
       publicCommands(),
       defaultPrivateScope()
     );
     if (!defaultOk) return;
     const ownerId5 = ownerIdValue && /^\d+$/.test(ownerIdValue.trim()) ? Number(ownerIdValue.trim()) : null;
     if (ownerId5 && Number.isSafeInteger(ownerId5)) {
-      await syncUserCommandScope(db, telegramApi9, ownerId5, ownerIdValue);
+      await syncUserCommandScope(db, telegramApi10, ownerId5, ownerIdValue);
     }
     const admins = await db.prepare(
       `SELECT telegram_user_id FROM admin_roles
        WHERE role='sudo_admin' ORDER BY telegram_user_id`
     ).all();
     for (const row of admins.results ?? []) {
-      await syncUserCommandScope(db, telegramApi9, row.telegram_user_id, ownerIdValue);
+      await syncUserCommandScope(db, telegramApi10, row.telegram_user_id, ownerIdValue);
     }
     await db.prepare(
       `INSERT INTO bot_settings (setting_key, setting_value, updated_by, updated_at)
@@ -4472,21 +4474,21 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 __name(sleep, "sleep");
-async function refreshTopicTitle(telegramApi9, staffChatId, threadId, user) {
-  await telegramApi9("editForumTopic", {
+async function refreshTopicTitle(telegramApi10, staffChatId, threadId, user) {
+  await telegramApi10("editForumTopic", {
     chat_id: staffChatId,
     message_thread_id: threadId,
     name: topicTitle2(user)
   });
 }
 __name(refreshTopicTitle, "refreshTopicTitle");
-async function ensureIsolatedMonitoringTarget(env, user, telegramApi9) {
+async function ensureIsolatedMonitoringTarget(env, user, telegramApi10) {
   if (!env.DB) return null;
   const staffChatId = await getStaffInboxChatId(env.DB);
   if (!staffChatId) return null;
   const existing = await getMonitoringTopic(env.DB, user.id, staffChatId);
   if (existing) {
-    await refreshTopicTitle(telegramApi9, staffChatId, existing, user);
+    await refreshTopicTitle(telegramApi10, staffChatId, existing, user);
     return { chatId: staffChatId, threadId: existing };
   }
   await env.DB.prepare(
@@ -4504,7 +4506,7 @@ async function ensureIsolatedMonitoringTarget(env, user, telegramApi9) {
       await sleep(125);
       const provisioned = await getMonitoringTopic(env.DB, user.id, staffChatId);
       if (provisioned) {
-        await refreshTopicTitle(telegramApi9, staffChatId, provisioned, user);
+        await refreshTopicTitle(telegramApi10, staffChatId, provisioned, user);
         return { chatId: staffChatId, threadId: provisioned };
       }
     }
@@ -4513,10 +4515,10 @@ async function ensureIsolatedMonitoringTarget(env, user, telegramApi9) {
   try {
     const afterClaim = await getMonitoringTopic(env.DB, user.id, staffChatId);
     if (afterClaim) {
-      await refreshTopicTitle(telegramApi9, staffChatId, afterClaim, user);
+      await refreshTopicTitle(telegramApi10, staffChatId, afterClaim, user);
       return { chatId: staffChatId, threadId: afterClaim };
     }
-    const topic = await telegramApi9("createForumTopic", {
+    const topic = await telegramApi10("createForumTopic", {
       chat_id: staffChatId,
       name: topicTitle2(user)
     });
@@ -5038,7 +5040,347 @@ var deployment_notice_entry_default = {
     return response;
   }
 };
-export {
-  deployment_notice_entry_default as default
+
+// src/manual_store.ts
+async function listManualSections(db, manualKey) {
+  if (!db) return [];
+  const rows = await db.prepare(
+    `SELECT manual_key, section_key, title, body, sort_order, version
+     FROM manual_sections
+     WHERE manual_key=?1
+     ORDER BY sort_order ASC, section_key ASC`
+  ).bind(manualKey).all();
+  return (rows.results ?? []).map((row) => ({
+    manualKey: row.manual_key,
+    sectionKey: row.section_key,
+    title: row.title,
+    body: row.body,
+    sortOrder: row.sort_order,
+    version: row.version
+  }));
+}
+__name(listManualSections, "listManualSections");
+async function getManualSection(db, manualKey, sectionKey) {
+  if (!db) return null;
+  const row = await db.prepare(
+    `SELECT manual_key, section_key, title, body, sort_order, version
+     FROM manual_sections
+     WHERE manual_key=?1 AND section_key=?2`
+  ).bind(manualKey, sectionKey).first();
+  return row ? {
+    manualKey: row.manual_key,
+    sectionKey: row.section_key,
+    title: row.title,
+    body: row.body,
+    sortOrder: row.sort_order,
+    version: row.version
+  } : null;
+}
+__name(getManualSection, "getManualSection");
+async function updateManualSection(db, manualKey, sectionKey, body, actorId) {
+  const current = await getManualSection(db, manualKey, sectionKey);
+  if (!current) return null;
+  await db.prepare(
+    `INSERT INTO manual_revisions
+      (manual_key, section_key, version, title, body, changed_by, changed_at)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, CURRENT_TIMESTAMP)`
+  ).bind(manualKey, sectionKey, current.version, current.title, current.body, actorId).run();
+  await db.prepare(
+    `UPDATE manual_sections
+     SET body=?3, version=version+1, updated_by=?4, updated_at=CURRENT_TIMESTAMP
+     WHERE manual_key=?1 AND section_key=?2`
+  ).bind(manualKey, sectionKey, body, actorId).run();
+  return getManualSection(db, manualKey, sectionKey);
+}
+__name(updateManualSection, "updateManualSection");
+
+// src/manual_entry.ts
+function json8(body, status = 200) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "content-type": "application/json; charset=utf-8" }
+  });
+}
+__name(json8, "json");
+function commandName6(text) {
+  return text.trim().split(/\s+/, 1)[0].toLowerCase().replace(/@[^\s]+$/, "");
+}
+__name(commandName6, "commandName");
+async function telegramApi9(env, method, body) {
+  if (!env.TELEGRAM_BOT_TOKEN) return null;
+  try {
+    const response = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/${method}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body)
+    });
+    if (!response.ok) return null;
+    const payload = await response.json();
+    return payload?.result ?? null;
+  } catch {
+    return null;
+  }
+}
+__name(telegramApi9, "telegramApi");
+async function sendMessage6(env, chatId, text, keyboard) {
+  await telegramApi9(env, "sendMessage", { chat_id: chatId, text, reply_markup: keyboard });
+}
+__name(sendMessage6, "sendMessage");
+async function answerCallback3(env, callbackId, text) {
+  await telegramApi9(env, "answerCallbackQuery", { callback_query_id: callbackId, text });
+}
+__name(answerCallback3, "answerCallback");
+async function editOrSend3(env, message, text, keyboard) {
+  const edited = await telegramApi9(env, "editMessageText", {
+    chat_id: message.chat.id,
+    message_id: message.message_id,
+    text,
+    reply_markup: keyboard
+  });
+  if (!edited) await sendMessage6(env, message.chat.id, text, keyboard);
+}
+__name(editOrSend3, "editOrSend");
+async function roleFor(env, userId) {
+  return getAdminRole(env.DB, userId, env.BOT_OWNER_TELEGRAM_ID);
+}
+__name(roleFor, "roleFor");
+function manualTitle(key) {
+  return key === "owner" ? "Bot Owner Manual" : "Sudo Admin Manual";
+}
+__name(manualTitle, "manualTitle");
+function manualControls(key, canEdit) {
+  const rows = [];
+  if (canEdit) rows.push([{ text: "\u270E Edit a section", callback_data: `manual:edit:${key}` }]);
+  rows.push([{ text: "\u2715 Close", callback_data: "ui:close" }]);
+  return { inline_keyboard: rows };
+}
+__name(manualControls, "manualControls");
+async function sendFullManual(env, chatId, key, canEdit) {
+  const sections = await listManualSections(env.DB, key);
+  if (!sections.length) {
+    await sendMessage6(env, chatId, `${manualTitle(key)} is not available yet.`);
+    return;
+  }
+  await sendMessage6(
+    env,
+    chatId,
+    `${manualTitle(key)}
+
+\u1012\u102E manual \u1000 bot \u1000\u102D\u102F \u1014\u1031\u1037\u1005\u1009\u103A\u1021\u101E\u102F\u1036\u1038\u1015\u103C\u102F\u101B\u102C\u1019\u103E\u102C \u1014\u102C\u1038\u101C\u100A\u103A\u101C\u103D\u101A\u103A\u1021\u1031\u102C\u1004\u103A \u101B\u1031\u1038\u1011\u102C\u1038\u1010\u102C\u1015\u102B\u104B Technical setup guide \u1019\u101F\u102F\u1010\u103A\u1015\u102B\u104B`
+  );
+  for (const section of sections) {
+    await sendMessage6(env, chatId, `${section.title}
+
+${section.body}`);
+  }
+  await sendMessage6(env, chatId, "Manual controls", manualControls(key, canEdit));
+}
+__name(sendFullManual, "sendFullManual");
+async function saveSession2(db, userId, state, provider, payload) {
+  await db.prepare(
+    `INSERT INTO admin_sessions (telegram_user_id, state, provider, payload, updated_at)
+     VALUES (?1, ?2, ?3, ?4, CURRENT_TIMESTAMP)
+     ON CONFLICT(telegram_user_id) DO UPDATE SET
+       state=excluded.state, provider=excluded.provider, payload=excluded.payload, updated_at=CURRENT_TIMESTAMP`
+  ).bind(userId, state, provider, payload == null ? null : JSON.stringify(payload)).run();
+}
+__name(saveSession2, "saveSession");
+async function clearSession2(db, userId) {
+  await db.prepare(`DELETE FROM admin_sessions WHERE telegram_user_id=?1`).bind(userId).run();
+}
+__name(clearSession2, "clearSession");
+async function handleManualCommand(env, message) {
+  if (!message.from || !message.text) return false;
+  const command = commandName6(message.text);
+  if (command !== "/ownermanual" && command !== "/adminmanual") return false;
+  const role = await roleFor(env, message.from.id);
+  const key = command === "/ownermanual" ? "owner" : "admin";
+  if (key === "owner" && role !== "owner") {
+    await sendMessage6(env, message.chat.id, "Owner Manual is available to the Bot Owner only.");
+    return true;
+  }
+  if (key === "admin" && role !== "owner" && role !== "sudo_admin") {
+    await sendMessage6(env, message.chat.id, "Admin Manual is available to the Bot Owner and Sudo Admins only.");
+    return true;
+  }
+  await sendFullManual(env, message.chat.id, key, role === "owner");
+  return true;
+}
+__name(handleManualCommand, "handleManualCommand");
+async function handleManualCallback(env, callback) {
+  const data = callback.data ?? "";
+  if (!data.startsWith("manual:")) return false;
+  const role = await roleFor(env, callback.from.id);
+  if (role !== "owner") {
+    await answerCallback3(env, callback.id, "Owner only");
+    return true;
+  }
+  if (!env.DB || !callback.message) {
+    await answerCallback3(env, callback.id);
+    return true;
+  }
+  const editMatch = data.match(/^manual:edit:(owner|admin)$/);
+  if (editMatch) {
+    const key = editMatch[1];
+    const sections = await listManualSections(env.DB, key);
+    await answerCallback3(env, callback.id);
+    await editOrSend3(
+      env,
+      callback.message,
+      `${manualTitle(key)}
+Choose the section you want to edit.`,
+      {
+        inline_keyboard: [
+          ...sections.map((section) => [{
+            text: section.title.slice(0, 58),
+            callback_data: `manual:section:${key}:${section.sectionKey}`
+          }]),
+          [{ text: "\u2190 Back", callback_data: `manual:back:${key}` }],
+          [{ text: "\u2715 Close", callback_data: "ui:close" }]
+        ]
+      }
+    );
+    return true;
+  }
+  const sectionMatch = data.match(/^manual:section:(owner|admin):([a-z0-9-]+)$/);
+  if (sectionMatch) {
+    const key = sectionMatch[1];
+    const sectionKey = sectionMatch[2];
+    const section = await getManualSection(env.DB, key, sectionKey);
+    await answerCallback3(env, callback.id);
+    if (!section) {
+      await editOrSend3(env, callback.message, "Manual section not found.", manualControls(key, true));
+      return true;
+    }
+    await saveSession2(env.DB, callback.from.id, "awaiting_manual_edit_body", `${key}:${sectionKey}`, null);
+    await editOrSend3(
+      env,
+      callback.message,
+      [
+        `Editing: ${section.title}`,
+        `Current version: ${section.version}`,
+        "",
+        "Send the complete replacement text for this section in one message.",
+        "Nothing is saved until you review the preview and press Save.",
+        "Use /cancel to stop editing."
+      ].join("\n")
+    );
+    return true;
+  }
+  const backMatch = data.match(/^manual:back:(owner|admin)$/);
+  if (backMatch) {
+    const key = backMatch[1];
+    await answerCallback3(env, callback.id);
+    await editOrSend3(env, callback.message, `${manualTitle(key)} controls`, manualControls(key, true));
+    return true;
+  }
+  if (data === "manual:discard") {
+    await clearSession2(env.DB, callback.from.id);
+    await answerCallback3(env, callback.id, "Edit discarded");
+    await editOrSend3(env, callback.message, "Manual edit discarded.");
+    return true;
+  }
+  if (data === "manual:save") {
+    const session = await env.DB.prepare(
+      `SELECT state, provider, payload FROM admin_sessions WHERE telegram_user_id=?1`
+    ).bind(callback.from.id).first();
+    if (!session || session.state !== "manual_edit_preview" || !session.provider || !session.payload) {
+      await answerCallback3(env, callback.id, "Edit session expired");
+      return true;
+    }
+    const target = session.provider.match(/^(owner|admin):([a-z0-9-]+)$/);
+    if (!target) {
+      await clearSession2(env.DB, callback.from.id);
+      await answerCallback3(env, callback.id, "Invalid edit session");
+      return true;
+    }
+    const payload = JSON.parse(session.payload);
+    const key = target[1];
+    const updated = await updateManualSection(env.DB, key, target[2], payload.body, callback.from.id);
+    await clearSession2(env.DB, callback.from.id);
+    await answerCallback3(env, callback.id, updated ? "Saved" : "Section not found");
+    await editOrSend3(
+      env,
+      callback.message,
+      updated ? `Saved successfully.
+
+${updated.title}
+Version: ${updated.version}
+
+${updated.body}` : "Manual section was not found.",
+      manualControls(key, true)
+    );
+    return true;
+  }
+  return false;
+}
+__name(handleManualCallback, "handleManualCallback");
+async function consumeManualEditText(env, message) {
+  if (!env.DB || !message.from || !message.text) return false;
+  const text = message.text.trim();
+  if (!text || text.startsWith("/")) return false;
+  const role = await roleFor(env, message.from.id);
+  if (role !== "owner") return false;
+  const session = await env.DB.prepare(
+    `SELECT state, provider FROM admin_sessions WHERE telegram_user_id=?1`
+  ).bind(message.from.id).first();
+  if (!session || session.state !== "awaiting_manual_edit_body" || !session.provider) return false;
+  if (text.length > 3500) {
+    await sendMessage6(env, message.chat.id, "This section is too long for a clean Telegram manual view. Keep it under 3,500 characters or use /cancel.");
+    return true;
+  }
+  const target = session.provider.match(/^(owner|admin):([a-z0-9-]+)$/);
+  if (!target) {
+    await clearSession2(env.DB, message.from.id);
+    await sendMessage6(env, message.chat.id, "Manual edit session expired. Open the manual and try again.");
+    return true;
+  }
+  await saveSession2(env.DB, message.from.id, "manual_edit_preview", session.provider, { body: text });
+  await sendMessage6(
+    env,
+    message.chat.id,
+    `Preview \u2014 not saved yet
+
+${text}`,
+    {
+      inline_keyboard: [[
+        { text: "\u2713 Save", callback_data: "manual:save" },
+        { text: "Discard", callback_data: "manual:discard" }
+      ]]
+    }
+  );
+  return true;
+}
+__name(consumeManualEditText, "consumeManualEditText");
+var manual_entry_default = {
+  async fetch(request, env) {
+    const url = new URL(request.url);
+    if (request.method !== "POST" || url.pathname !== "/telegram/webhook") {
+      return deployment_notice_entry_default.fetch(request, env);
+    }
+    if (env.TELEGRAM_WEBHOOK_SECRET) {
+      const supplied = request.headers.get("X-Telegram-Bot-Api-Secret-Token");
+      if (supplied !== env.TELEGRAM_WEBHOOK_SECRET) return json8({ ok: false }, 401);
+    }
+    let update;
+    try {
+      update = await request.clone().json();
+    } catch {
+      return deployment_notice_entry_default.fetch(request, env);
+    }
+    if (update.callback_query && await handleManualCallback(env, update.callback_query)) {
+      return json8({ ok: true });
+    }
+    if (update.message && await handleManualCommand(env, update.message)) {
+      return json8({ ok: true });
+    }
+    if (update.message && await consumeManualEditText(env, update.message)) {
+      return json8({ ok: true });
+    }
+    return deployment_notice_entry_default.fetch(request, env);
+  }
 };
-//# sourceMappingURL=deployment_notice_entry.js.map
+export {
+  manual_entry_default as default
+};
+//# sourceMappingURL=manual_entry.js.map
