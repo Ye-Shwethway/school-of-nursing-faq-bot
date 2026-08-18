@@ -75,6 +75,17 @@ function withClose(keyboard?: unknown): unknown {
   return { inline_keyboard: rows };
 }
 
+function faqFirstKeyboard(language: Language): InlineKeyboard {
+  const labels: Record<Language, string> = {
+    my: "📚 FAQ များကြည့်ရန်",
+    en: "📚 Browse FAQ",
+    zh: "📚 查看常见问题",
+  };
+  return {
+    inline_keyboard: [[{ text: labels[language], callback_data: "faq:list:0" }]],
+  };
+}
+
 async function telegramApi(env: Env, method: string, body: unknown): Promise<any | null> {
   if (!env.TELEGRAM_BOT_TOKEN) return null;
   try {
@@ -137,9 +148,9 @@ async function handleLanguageSelection(
 
   const language = match[1] as Language;
   const confirmations: Record<Language, string> = {
-    my: "ဘာသာစကားကို မြန်မာဘာသာအဖြစ် သတ်မှတ်ပြီးပါပြီ။ မေးလိုသည့် မေးခွန်းကို ပို့နိုင်ပါပြီ။",
-    en: "Language set to English. You can now send your question.",
-    zh: "语言已设置为简体中文。现在可以发送您的问题。",
+    my: "ဘာသာစကားကို မြန်မာဘာသာအဖြစ် သတ်မှတ်ပြီးပါပြီ။\n\nအများအားဖြင့် မေးလေ့ရှိသော အချက်အလက်များအတွက် /faq ကို အရင်ကြည့်ရှုပါ။ သင်မေးလိုသောအကြောင်းအရာ မပါရှိသေးပါက ဒီနေရာမှာ စာရိုက်ပြီး မေးမြန်းနိုင်ပါတယ်။",
+    en: "Language set to English.\n\nFor common questions, please check /faq first. If your question is not covered there, you can send it here and the assistant will help.",
+    zh: "语言已设置为简体中文。\n\n常见问题请先查看 /faq。如果没有找到您需要的信息，可以直接在这里发送问题。",
   };
 
   try {
@@ -157,7 +168,12 @@ async function handleLanguageSelection(
 
   if (callback.message) {
     await deleteMessage(env, callback.message.chat.id, callback.message.message_id);
-    await sendMessage(env, callback.message.chat.id, confirmations[language]);
+    await sendMessage(
+      env,
+      callback.message.chat.id,
+      confirmations[language],
+      faqFirstKeyboard(language),
+    );
   }
   return true;
 }
