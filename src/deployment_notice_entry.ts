@@ -1,5 +1,6 @@
 import app from "./latest_return_entry";
 import { syncCommandRegistryIfNeeded } from "./command_sync";
+import { commandScopeForPrivateChat, commandsForRole } from "./command_menu";
 
 interface Env {
   APP_ENV: string;
@@ -46,8 +47,83 @@ async function syncDeploymentCommandMenus(env: Env): Promise<void> {
   try {
     await syncCommandRegistryIfNeeded(env.DB, api, env.BOT_OWNER_TELEGRAM_ID);
   } catch {
-    // Command menu refresh is best-effort and must not make health fail.
+    // Command menu refresh is best-effort on ordinary health requests.
   }
+}
+
+async function consumeOpsNonce(request: Request, env: Env, settingKey: string): Promise<Response | null> {
+  if (env.APP_ENV !== "production") return json({ ok: false, error: "production_only" }, 404);
+  if (!env.DB) return json({ ok: false, error: "production_database_not_ready" }, 503);
+
+  const suppliedNonce = request.headers.get("x-ops-nonce")?.trim()
+    ?? request.headers.get("x-cutover-nonce")?.trim();
+  if (!suppliedNonce) return json({ ok: false, error: "missing_nonce" }, 401);
+
+  const row = await env.DB.prepare(
+    `SELECT setting_value FROM bot_settings WHERE setting_key=?1`,
+  ).bind(settingKey).first<{ setting_value: string }>();
+  if (!row?.setting_value || row.setting_value !== suppliedNonce) {
+    return json({ ok: false, error: "invalid_nonce" }, 403);
+  }
+
+  const consumed = await env.DB.prepare(
+    `DELETE FROM bot_settings WHERE setting_key=?1 AND setting_value=?2`,
+  ).bind(settingKey, suppliedNonce).run();
+  if ((consumed.meta.changes ?? 0) !== 1) {
+    return json({ ok: false, error: "nonce_already_consumed" }, 409);
+  }
+  return null;
+}
+
+async function handleProductionOwnerCommandResync(request: Request, env: Env): Promise<Response> {
+  if (!env.TELEGRAM_BOT_TOKEN) return json({ ok: false, error: "telegram_token_missing" }, 503);
+  const owner = ownerId(env);
+  if (owner === null) return json({ ok: false, error: "owner_id_missing_or_invalid" }, 503);
+
+  const nonceError = await consumeOpsNonce(request, env, "owner_command_resync_nonce");
+  if (nonceError) return nonceError;
+
+  const expected = commandsForRole("owner");
+  const scope = commandScopeForPrivateChat(owner);
+  const setResult = await telegramApi(env, "setMyCommands", { commands: expected, scope });
+  if (setResult !== true) {
+    return json({ ok: false, error: "telegram_set_owner_commands_failed" }, 502);
+  }
+
+  const actual = await telegramApi(env, "getMyCommands", { scope });
+  if (!Array.isArray(actual)) {
+    return json({ ok: false, error: "telegram_get_owner_commands_failed" }, 502);
+  }
+
+  const expectedNames = expected.map((item) => item.command);
+  const actualNames = actual.map((item: any) => String(item?.command ?? ""));
+  const exactMatch = expectedNames.length === actualNames.length
+    && expectedNames.every((name, index) => actualNames[index] === name);
+  if (!exactMatch) {
+    return json({
+      ok: false,
+      error: "owner_command_readback_mismatch",
+      expected_commands: expectedNames,
+      actual_commands: actualNames,
+    }, 502);
+  }
+
+  if (env.DB) {
+    try {
+      await env.DB.prepare(
+        `DELETE FROM bot_settings WHERE setting_key='command_schema_version'`,
+      ).run();
+    } catch {
+      // Read-back verification above is authoritative for this operation.
+    }
+  }
+
+  return json({
+    ok: true,
+    environment: "production",
+    owner_commands: actualNames,
+    command_count: actualNames.length,
+  });
 }
 
 async function notificationTargets(env: Env): Promise<number[]> {
@@ -97,7 +173,7 @@ async function notifyDeploymentOnline(env: Env): Promise<void> {
     `Environment: ${env.APP_ENV || "unknown"}`,
     `Revision: ${shortRevision}`,
     "Health check: PASS",
-    "Command menus: synced",
+    "Command menus: sync requested",
     "",
     "Telegram webhook, FAQ, AI, staff handoff, monitoring, and manuals are ready.",
   ].join("\n");
@@ -173,6 +249,9 @@ export default {
     const url = new URL(request.url);
     if (request.method === "POST" && url.pathname === "/ops/telegram/cutover") {
       return handleProductionTelegramCutover(request, env);
+    }
+    if (request.method === "POST" && url.pathname === "/ops/telegram/owner-command-resync") {
+      return handleProductionOwnerCommandResync(request, env);
     }
 
     const response = await app.fetch(request, env);
