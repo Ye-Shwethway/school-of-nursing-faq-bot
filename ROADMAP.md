@@ -31,7 +31,7 @@ Implemented:
 - `/language` is a visible public command for all users and therefore inherited by Sudo/Admin and Owner command sets
 - Sudo Admin grant also enables staff authorization and provisions private Staff Inbox access
 - Staff Inbox can be explicitly switched to a new Telegram group from `/staff`
-- Owner-only `/clearmessage` cleanup for the active Staff Inbox with confirmation and bulk deletion
+- Owner-only `/clearmessage` cleanup for the active Staff Inbox with confirmation, permission diagnostics and tracked-message deletion
 
 ## Verified production checkpoint
 - production D1 and Worker are healthy
@@ -42,6 +42,7 @@ Implemented:
 - `AI_CONFIG_MASTER_KEY` is configured as a valid Cloudflare `secret_text` binding
 - production Gemini provider setup is working
 - `/language` is visible in the live Telegram command menu
+- 14-command Owner registry including `/clearmessage` has passed exact Telegram read-back
 
 ## AI configuration contract
 `AI_CONFIG_MASTER_KEY` must be Base64 representing exactly 32 random bytes. It is used as the AES-GCM key for encrypting provider credentials in D1.
@@ -77,19 +78,24 @@ When switching from an old group to a new group:
 - deleting/leaving the old Telegram group is an Owner-side Telegram action, not required for the bot-side switch
 
 ## Staff Inbox cleanup
-Migration `0011_group_message_cleanup.sql` adds `group_message_ledger` for observed group message IDs.
+Migration `0011_group_message_cleanup.sql` adds `group_message_ledger` for observed Staff Inbox message IDs.
 
 `/clearmessage` is Owner-only and works only inside the currently active Staff Inbox. It shows a destructive-action confirmation before deleting anything.
 
-After confirmation:
-- the bot calculates the recent observed message-ID range for the group
-- Telegram `deleteMessages` is used in batches of at most 100 IDs
-- failed batches are recursively narrowed so undeletable IDs do not block deletion of the rest
-- the confirmation/control messages are included in the cleanup range
-- the command leaves no normal success message in the Staff Inbox; limitations are reported privately to the Owner
-- one cleanup attempts at most the newest 5,000 message IDs
+The first production implementation used a synthetic `min_id -> max_id` sweep and could appear to succeed without deleting real messages. That algorithm is retired.
 
-Telegram Bot API only permits bot deletion of messages younger than 48 hours and the bot needs the appropriate group administrator deletion permission. The Bot API does not expose general chat-history retrieval, so messages that existed before this ledger started cannot be guaranteed to be discovered retroactively.
+Current cleanup behavior:
+- verifies the bot's own Telegram membership/admin state before showing confirmation
+- for supergroups, requires administrator `can_delete_messages`; creator status also passes
+- selects only actual message IDs present in `group_message_ledger`
+- uses Telegram `deleteMessages` in batches of at most 100 IDs
+- if a batch fails, it narrows the batch and finally falls back to `deleteMessage` for an exact ID
+- captures Telegram's error description for failures instead of silently swallowing them
+- removes only successfully deleted IDs from the ledger
+- sends the Owner a private result: deleted count, failed count, and first Telegram error if any
+- one cleanup considers at most the newest 5,000 tracked messages younger than the Telegram deletion window
+
+Telegram Bot API permits deletion only for messages younger than 48 hours. The bot must be a group administrator with the appropriate deletion right to delete other users' messages. The Bot API does not expose general chat-history retrieval, so messages that predate ledger observation cannot be guaranteed to be discovered retroactively.
 
 ## Single production workflow
 Canonical workflow: `.github/workflows/deploy-production.yml`
@@ -140,10 +146,10 @@ Wrangler enters `src/clear_message_entry.ts`.
 10. compatibility fallback + `/health`
 
 ## Next exact work
-1. verify migration 0011 + `/clearmessage` production deployment completes green
-2. live-smoke `/clearmessage` in the active Staff Inbox after a few test messages
-3. verify the bot has Telegram `can_delete_messages` permission if any IDs remain undeleted
-4. live-smoke Sudo invite delivery when needed
+1. verify the corrected `/clearmessage` production deployment completes green
+2. run `/clearmessage` in the active Staff Inbox and read the permission/result diagnostics
+3. if permission diagnostic says `can_delete_messages` is missing, grant that Telegram group-admin permission to the bot and retry
+4. verify actual tracked messages disappear and Owner receives a nonzero deleted count
 5. continue feature work directly on `main` in small validated slices
 
 ## Current migrations
@@ -153,3 +159,4 @@ Wrangler enters `src/clear_message_entry.ts`.
 - multiuser simultaneous live stress test
 - same-user near-simultaneous first-message live race test
 - optional future policy: automatically remove a revoked Sudo Admin from the Telegram Staff Inbox group
+- broader ledger coverage for every bot-originated Staff Inbox control message if production cleanup coverage needs expansion
