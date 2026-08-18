@@ -1,116 +1,112 @@
-# Cloudflare Handoff
+# Cloudflare TEST Deployment Handoff
 
 Last updated: 2026-08-18
 
-## Current TEST checkpoint
+## Current TEST resources
 Repository: `Ye-Shwethway/school-of-nursing-faq-bot`
 Branch: `test`
 
-Cloudflare account:
-- Account ID: `abd28e59860f09dab81b7e09de467f38`
-- D1 database: `school-of-nursing-faq-bot-db`
+Cloudflare:
+- D1: `school-of-nursing-faq-bot-db`
 - D1 ID: `9109c1ef-3613-49f8-aee3-c62a3dbdd744`
 - binding: `DB`
 - TEST Worker: `school-of-nursing-faq-bot-test`
 - production Worker: `school-of-nursing-faq-bot`
 
-The Creator reports that the manual TEST deployment/configuration recovery succeeded and the live bot now passes:
+Production remains untouched until `test` is promoted through the branch contract.
 
-`FAQ miss → Gemini grounded agent → Telegram reply`
+## Deployment ownership
+Manual Worker artifact courier flow is no longer the normal path.
 
-The earlier AI API-key routing issue is therefore no longer the current blocker.
+Canonical workflow:
+`.github/workflows/deploy-test.yml`
 
-Before any mutation, read back the actual Cloudflare Worker/D1 state. Treat that read-back as authoritative if it differs from this report.
+It runs automatically for deploy-relevant pushes on `test` and can also be manually dispatched.
 
-## Branch/environment rule
-- deploy only the `test` artifact to `school-of-nursing-faq-bot-test`
-- do not deploy or modify production during this refinement handoff
-- do not merge `test` into `main`
-- preserve existing TEST secrets, D1 binding, webhook and `APP_ENV=test`
+Pipeline:
+1. checkout current `test`
+2. Node 22 dependency install
+3. verify `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`
+4. strict TypeScript typecheck
+5. apply all repository migrations locally
+6. Wrangler TEST dry run
+7. apply unapplied migrations to remote D1
+8. deploy TEST Worker with `DEPLOY_REVISION=${GITHUB_SHA}`
+9. verify `/health` reports TEST healthy
 
-## Current application entrypoint
+Telegram secrets remain Cloudflare Worker secrets; do not copy them into GitHub Actions.
+
+## Current Worker entrypoint
 Wrangler entrypoint:
 
-`src/ux_entry.ts`
+`src/deployment_notice_entry.ts`
 
-Runtime stack:
-1. `ux_entry.ts` — Telegram UX Polish v1 and AI generation control guard
-2. `secure_entry.ts` — AI secret/setup routing guard
-3. `runtime_entry.ts` — dynamic FAQ/AI integration
-4. `index.ts` — retained fallback application runtime
+Current stack:
+1. deployment online notice
+2. latest Return-to-AI control
+3. monitoring headers + isolated group handoff
+4. Staff Inbox inline UX
+5. Telegram UX polish / stale-AI guard
+6. secure secret/setup guard
+7. dynamic FAQ / grounded AI runtime
+8. compatibility fallback
 
-Do not reconstruct or independently patch the generated Worker.
+Read `NEW_CHAT_BOOTSTRAP.md` for the authoritative layer-by-layer handoff.
 
-## New migration required before UX v1 Worker
-Apply exact repository migration:
+## Deployment visibility
+Every deployment receives the Git commit SHA as `DEPLOY_REVISION`.
 
-`migrations/0006_conversation_control_version.sql`
+The workflow's successful health request causes `deployment_notice_entry.ts` to send `🟢 Bot is Online!` once for that revision to:
+- Bot Owner
+- active Sudo Admins
 
-It adds:
+A D1 marker prevents duplicate notices from repeated health requests for the same revision.
 
-`conversation_control.control_version INTEGER NOT NULL DEFAULT 0`
+## Current required migrations
+Remote D1 should advance through all repository migrations in order, currently:
+- 0001 initial
+- 0002 AI settings
+- 0003 handoff/persona
+- 0004 shadow monitoring
+- 0005 dynamic FAQ
+- 0006 conversation control version
+- 0007 latest Return-to-AI message pointer
+- 0008 monitoring topic provision lock
 
-This column is required by the new runtime. Apply migration 0006 before uploading the new Worker.
+Do not manually rewrite historical migrations. Let Wrangler apply only unapplied files.
 
-Do not reapply or rewrite migrations 0001–0005 unless Cloudflare read-back proves they are actually missing. The currently functioning Gemini/D1 runtime strongly indicates the earlier application migrations are already present, but verify rather than assume.
+## Multiuser topic safety
+Migration 0008 plus `src/monitoring_target.ts` protects same-user concurrent first-topic creation.
 
-After migration 0006 verify:
-- `conversation_control.control_version` exists
-- existing rows have a usable default value
-- existing user/admin/FAQ/AI credential data remains intact
-
-## Exact deployment artifact
-Use only the current generated files from `test`:
-- `deploy/worker.mjs`
-- `deploy/worker.sha256`
-
-Verify SHA-256 against the sidecar immediately before upload. Do not rely on an older checksum copied into a chat because the Test Build workflow refreshes the artifact after source changes.
-
-Repository build gates before artifact refresh:
-1. Node 22 dependency install
-2. strict TypeScript typecheck
-3. local D1 migrations 0001 → 0006
-4. Wrangler `--dry-run --env test`
-5. generated Worker + checksum refresh
-
-The `cloudflare-test-handoff` GitHub Actions artifact now includes migration 0006 plus the generated Worker/checksum.
+The Staff Inbox contract is fail-closed:
+- different users have different Telegram forum topics
+- same-user concurrent first messages share one canonical topic mapping
+- group handoff is posted into that user's topic
+- topic provisioning failure must not fall back to the main Staff Inbox chat
 
 ## Preserve runtime configuration
-Do not rotate, remove, print or replace existing values unless explicitly requested:
+Do not rotate/remove/print unless explicitly requested:
 - `TELEGRAM_BOT_TOKEN`
 - `TELEGRAM_WEBHOOK_SECRET`
 - `BOT_OWNER_TELEGRAM_ID`
 - `AI_CONFIG_MASTER_KEY`
-- provider credentials encrypted in D1
-- current Primary/Fallback model binding
-- Staff Inbox / dedicated responder settings
-- Telegram webhook
+- encrypted provider credentials in D1
+- Primary/Fallback bindings
+- Staff Inbox / route / monitoring settings
 
-## UX v1 live validation
-After migration 0006 and TEST redeploy, validate:
+## Current TEST validation checklist
+After a deploy:
+1. `/health` is HTTP 200 with `environment=test`
+2. Owner/Sudo Admin online notice arrives once for the revision
+3. deterministic FAQ remains fast
+4. grounded AI shows typing and replies to the originating question
+5. staff mirror USER header carries name/username/ID
+6. AI mirror header carries actual provider/model
+7. multiple users stay in separate forum topics
+8. same-user near-simultaneous first messages do not create duplicate topics
+9. Take Over affects only the selected user
+10. newest human-control USER message alone carries Return to AI
+11. group handoff card stays inside that user's topic
+12. no runtime secret/config regression
 
-1. `GET /health` remains HTTP 200 and environment remains `test`.
-2. A deterministic FAQ still returns immediately and does not unnecessarily invoke AI.
-3. A natural-language FAQ miss that Gemini can answer from approved context shows Telegram native `typing` while generation is in flight.
-4. AI answer is sent as a reply to the originating question.
-5. AI/FAQ/monitoring callback navigation edits the existing menu where possible instead of flooding chat.
-6. `✕ Close` dismisses the current bot-owned menu.
-7. `← Back` returns to the parent screen.
-8. `/cancel` clears only the current wizard/setup and does not delete saved AI provider/model configuration.
-9. `/reset` clears transient session/conversation state and returns the conversation to automated mode while preserving language, FAQ knowledge, AI credentials, model bindings, persona, roles and monitoring settings.
-10. Start a deliberately slow AI request, then use staff `Take Over`; the old in-flight AI result must not be delivered.
-11. Start a deliberately slow AI request, then issue `/reset`; the old in-flight AI result must not be delivered.
-12. While human control is active, user follow-up must reach the staff monitoring destination even when routine monitoring mode is `alerts_only` or `off`.
-13. AI provider-key setup still consumes secret input before normal question routing and the secret-like Telegram message remains best-effort deleted.
-
-## Stop boundary
-After focused TEST validation, stop and report:
-- migration 0006 result
-- Worker deployment/version
-- exact deployed artifact checksum
-- health result
-- each UX validation result
-- any runtime error or behavioral regression
-- confirmation that production was untouched
-
-Do not promote `main` or production until the GitHub-side session reviews this evidence.
+Do not promote `main` until the TEST checklist is green.
