@@ -1,11 +1,8 @@
 import app from "./monitoring_message_entry";
-import {
-  getConversationControl,
-  getMonitoringTopic,
-  saveMonitoringTopic,
-} from "./monitoring";
+import { getConversationControl } from "./monitoring";
 import { getStaffInboxChatId } from "./handoff";
 import { monitoringUserHeader } from "./monitoring_headers";
+import { ensureIsolatedMonitoringTarget } from "./monitoring_target";
 
 interface Env {
   APP_ENV: string;
@@ -58,12 +55,6 @@ function commandName(text: string): string {
   return text.trim().split(/\s+/, 1)[0].toLowerCase().replace(/@[^\s]+$/, "");
 }
 
-function topicTitle(user: TelegramUser): string {
-  const name = [user.first_name, user.last_name].filter(Boolean).join(" ").trim() || "User";
-  const username = user.username ? ` · @${user.username}` : "";
-  return `${name}${username} · ID ${user.id}`.slice(0, 120);
-}
-
 async function telegramApi(env: Env, method: string, body: unknown): Promise<any | null> {
   if (!env.TELEGRAM_BOT_TOKEN) return null;
   try {
@@ -83,31 +74,12 @@ async function telegramApi(env: Env, method: string, body: unknown): Promise<any
 async function ensureMonitoringTarget(
   env: Env,
   user: TelegramUser,
-): Promise<{ chatId: number; threadId?: number } | null> {
-  if (!env.DB) return null;
-  const staffChatId = await getStaffInboxChatId(env.DB);
-  if (!staffChatId) return null;
-
-  const existing = await getMonitoringTopic(env.DB, user.id, staffChatId);
-  if (existing) {
-    await telegramApi(env, "editForumTopic", {
-      chat_id: staffChatId,
-      message_thread_id: existing,
-      name: topicTitle(user),
-    });
-    return { chatId: staffChatId, threadId: existing };
-  }
-
-  const topic = await telegramApi(env, "createForumTopic", {
-    chat_id: staffChatId,
-    name: topicTitle(user),
-  });
-  const threadId = Number(topic?.message_thread_id);
-  if (Number.isSafeInteger(threadId)) {
-    await saveMonitoringTopic(env.DB, user.id, staffChatId, threadId);
-    return { chatId: staffChatId, threadId };
-  }
-  return { chatId: staffChatId };
+): Promise<{ chatId: number; threadId: number } | null> {
+  return ensureIsolatedMonitoringTarget(
+    env,
+    user,
+    (method, body) => telegramApi(env, method, body),
+  );
 }
 
 async function getLatestControlMessage(
