@@ -6,99 +6,146 @@ Last updated: 2026-08-18
 Production Telegram FAQ assistant for a university School of Nursing in Burmese, English, and Simplified Chinese. Approved FAQ knowledge first, grounded configurable AI second, anonymous human staff handoff whenever automation cannot answer safely.
 
 ## Branch policy
-- `test` = active development/validation
-- `main` = verified canonical/production
+- `test` = active development / live TEST validation
+- `main` = verified canonical / production
 - no direct implementation on `main`
-- merge only after live test validation is green
+- promote only after TEST behavior is green
 
 ## Locked architecture
-- Telegram Bot API webhook on Cloudflare Workers + D1
-- public-only `/start`; `/whoami` for every user
-- role-scoped commands managed automatically by Worker `setMyCommands`
-- immutable Telegram numeric IDs for authority; management UI shows name/username + ID
-- D1-managed active FAQ knowledge + revision history
-- deterministic FAQ → grounded Primary AI → grounded Fallback AI → Human Handoff
-- AI/provider/config failure is a handoff condition, never a crash path
-- Staff Inbox group or dedicated private responder
-- silent shadow monitoring + alert escalation
+- Telegram webhook on Cloudflare Workers + D1
+- normal users: `/start`, `/whoami`
+- role-scoped command menus synced automatically with Telegram `setMyCommands`
+- immutable Telegram numeric IDs for authority
+- dynamic D1 FAQ knowledge + revisions
+- deterministic FAQ -> grounded Primary AI -> grounded Fallback AI -> Human Handoff
+- AI/config failures fail closed to human review
+- Owner/Sudo Admin management, separate staff responder allow-list
+- Staff Inbox group with per-user forum topics or dedicated private responder
+- anonymous staff relay
 - atomic Take Over / Return to AI
-- anonymous human relay
-- public repo; no plaintext credentials in source
+- public repo; no plaintext runtime credentials
 
-## Phase 0–8 — Foundation through repository build
-Status: COMPLETE ON `test`
+## Foundation through live TEST
+Status: COMPLETE / FUNCTIONAL ON `test`
 
-Implemented and repository-validated:
-- multilingual public FAQ UX and 22 approved FAQ seeds
-- Owner/Sudo authorization, `/whoami`, identity formatting and audit logging
-- self-managed scoped command menus
-- encrypted multi-provider AI settings, model fetch, Test Ping, Primary/Fallback
-- strict grounded AI runtime and fail-safe human handoff
-- group/dedicated handoff, anonymous claimant relay
-- shadow monitoring and conversation takeover
-- dynamic D1 FAQ knowledge + Owner/Sudo CRUD + revisions + change notifications
-- generated Worker artifact workflow with TypeScript, local D1 migration and Wrangler dry-run gates
+Verified live capabilities include:
+- 22 multilingual FAQ seeds
+- Owner/Sudo roles, identity display, `/whoami`
+- encrypted configurable AI providers/models
+- Gemini grounded answer path
+- dynamic FAQ CRUD
+- Staff Inbox binding and group routing
+- shadow monitoring
+- human Take Over / Return to AI
+- direct GitHub Actions -> Cloudflare TEST deployment
 
-## Phase 9 — Live TEST runtime
-Status: TEST RUNTIME FUNCTIONAL; CONTINUED VALIDATION/REFINEMENT
+`main` and production remain unpromoted.
 
-Creator manually completed the blocked deployment/configuration path and verified the important AI path in the TEST bot:
+## Current canonical Worker stack
+Wrangler enters:
 
-`FAQ miss → Gemini grounded agent → Telegram answer`
+`src/deployment_notice_entry.ts`
 
-The earlier API-key routing bug was fixed by the secure setup guard so secret input is consumed before normal FAQ/AI/handoff routing.
+Layer order:
+1. `deployment_notice_entry.ts` — revision-aware online notification after successful health check
+2. `latest_return_entry.ts` — latest-message Return to AI control during human takeover
+3. `monitoring_message_entry.ts` — user/model-aware staff mirror headers and isolated inquiry/handoff presentation
+4. `staff_ux_entry.ts` — group-native `/staff` inline control panel and topic identity polish
+5. `ux_entry.ts` — typing indicator, reply-to, Close/Back, `/cancel`, `/reset`, stale-AI guard
+6. `secure_entry.ts` — secret/setup routing guard
+7. `runtime_entry.ts` — dynamic FAQ / AI / command integration
+8. `index.ts` — retained fallback / compatibility runtime
 
-Production remains outside this development slice and `main` is not promoted yet.
+Do not bypass or independently reconstruct this stack.
 
-## Phase 10 — Telegram UX Polish v1
-Status: IMPLEMENTED ON `test`; LIVE MIGRATION/REDEPLOY PENDING
-
-New canonical entrypoint:
-- `src/ux_entry.ts`
-
-Wrangler now enters the UX layer first, then preserves the existing secure/runtime fallback stack.
-
-Implemented:
-- native Telegram `typing` progress for grounded AI generation, refreshed while the request is in flight
-- no persistent “please wait” clutter
-- AI answer/handoff replies attach to the originating question
-- shared `ui:close` callback and `✕ Close` on AI, FAQ and monitoring configuration surfaces
-- callback navigation prefers `editMessageText`, with send fallback
+## Telegram UX polish
+Implemented on `test`:
+- native `typing` refresh during AI generation
+- AI/handoff replies attach to original user question
+- `✕ Close`, edit-in-place navigation, consistent Back/Cancel semantics
 - `/cancel` = current wizard/setup only
-- `/reset` = transient conversation/session reset; persistent language, FAQ knowledge, AI credentials/bindings, persona, roles and monitoring config are preserved
-- active human-control user messages are relayed to the monitoring destination regardless of routine mirror mode
-- AI generation captures conversation control version before provider work and re-checks before sending output
+- `/reset` = transient conversation/session reset only; persistent FAQ/AI/admin settings preserved
+- Owner command menu includes `/cancel` and `/reset`
+- `/staff` inside the group opens an inline control panel
+- Staff Inbox can be bound from the current group without copying a group ID
 
-Migration 0006:
-- `migrations/0006_conversation_control_version.sql`
-- adds `conversation_control.control_version`
-- Take Over, Return to AI and `/reset` increment the version
-- stale AI output is discarded when control mode/version changes while a provider call is running
+## Staff monitoring presentation
+Each user has a separate Staff Inbox forum topic.
 
-Repository validation evidence:
-- the UX entrypoint + migration 0006 produced a validated regenerated Worker artifact through the existing Test Build pipeline
-- pipeline gates include strict TypeScript typecheck, local D1 migrations and Wrangler `test` dry-run
+Topic title:
+`Name · @username · ID 123456789`
 
-## Telegram UX grammar
-Canonical rules are in `docs/TELEGRAM_DESIGN_RULES.md`:
-- `← Back` = parent screen
-- `✕ Close` = dismiss menu
-- `Cancel` = abandon active wizard only
-- callback menus edit in place when possible
+Mirror headers:
+- `USER · Name (@username) · ID 123456789`
+- `BOT · FAQ`
+- `AI · provider/model`
+- human-control USER header includes `Human control`
 
-## Current deployment requirement
-Before deploying the UX Polish v1 Worker to TEST:
-1. apply migration `0006_conversation_control_version.sql` to the existing TEST/live D1 database
-2. deploy the newly generated exact `deploy/worker.mjs`
-3. preserve existing TEST Worker secrets, DB binding and `APP_ENV=test`
-4. validate `/cancel`, `/reset`, Close, Back/edit-in-place, AI typing/reply-to, Take Over race suppression and human-control follow-up delivery
+## Conversation and concurrency hardening
+Migration 0006 — `conversation_control.control_version`
+- Take Over / Return to AI / `/reset` increment version
+- in-flight AI output is discarded after control changes
 
-Do not deploy this Worker before migration 0006 because the new control runtime reads `control_version`.
+Migration 0007 — `monitoring_topics.latest_control_message_id`
+- only the newest human-control USER message carries `Return to AI`
+- new USER message moves the button down and removes the older button
 
-## Next slice after UX v1 live validation
-Keep it small:
-- latency/route telemetry without secrets
-- answer formatting polish
-- provider/model latency comparison
+Migration 0008 — `monitoring_topic_provision_locks`
+- same-user concurrent first messages cannot independently create duplicate forum topics
+- one request provisions; competitors wait for the canonical mapping
+- stale locks recover after 30 seconds
+- monitoring/group-handoff delivery fails closed if an isolated topic cannot be established
+- no fallback that mixes users into the Staff Inbox main chat
 
-Do not add these until UX v1 is live-green.
+## Multiuser contract
+Different Telegram users are independent across:
+- language/user profile
+- question logs
+- conversation control
+- AI/human takeover state
+- monitoring topic
+- human claimant
+
+Group monitoring and group handoff are isolated by `(telegram_user_id, staff_chat_id) -> message_thread_id`.
+
+A Take Over for User A must not pause User B or User C.
+
+## Deployment visibility
+GitHub workflow `.github/workflows/deploy-test.yml` automatically runs on deploy-relevant pushes to `test` and remains manually dispatchable.
+
+Pipeline:
+1. install dependencies
+2. strict typecheck
+3. local D1 migration validation
+4. Wrangler dry run
+5. remote D1 migrations
+6. deploy TEST Worker with `DEPLOY_REVISION=${GITHUB_SHA}`
+7. verify `/health`
+
+A new deployed revision sends `🟢 Bot is Online!` once to the configured Owner plus current Sudo Admins after a successful health request. Duplicate health checks for the same revision do not resend the notice.
+
+## Current migrations
+- 0001 initial
+- 0002 AI settings
+- 0003 handoff/persona
+- 0004 shadow monitoring
+- 0005 dynamic FAQ
+- 0006 conversation control version
+- 0007 latest control message
+- 0008 monitoring topic provision lock
+
+## Current validation focus
+Before `main` promotion, keep testing bounded to live behavior:
+- multiple simultaneous users create/use distinct topics
+- same user sends two near-simultaneous first messages without duplicate topics
+- group handoff card remains inside the correct user topic
+- Take Over only affects that user
+- latest-message Return to AI button moves correctly
+- online deployment notification reaches Owner/Sudo Admins once per revision
+- no secrets/config regression after automated deployment
+
+## Later slice
+After live-green multiuser/handoff validation:
+- latency / route telemetry without secrets
+- provider/model performance comparison
+- answer presentation polish only where live UX shows a real need
