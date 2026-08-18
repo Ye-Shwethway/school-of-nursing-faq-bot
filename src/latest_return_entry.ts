@@ -1,5 +1,5 @@
 import app from "./monitoring_message_entry";
-import { getConversationControl } from "./monitoring";
+import { getConversationControl, returnConversationToAi } from "./monitoring";
 import { getStaffInboxChatId } from "./handoff";
 import { monitoringUserHeader } from "./monitoring_headers";
 import { ensureIsolatedMonitoringTarget } from "./monitoring_target";
@@ -40,11 +40,26 @@ type TelegramUpdate = {
   callback_query?: TelegramCallbackQuery;
 };
 
+type Language = "my" | "en" | "zh";
+
+const AI_RETURNED_COPY: Record<Language, string> = {
+  my: "ဒီစကားဝိုင်းကို automated assistant ဆီ ပြန်လည်လွှဲပြောင်းပြီးပါပြီ။",
+  en: "This conversation has been returned to the automated assistant.",
+  zh: "此对话已交回自动助理处理。",
+};
+
 function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
     headers: { "content-type": "application/json; charset=utf-8" },
   });
+}
+
+function ownerId(env: Env): number | null {
+  const raw = env.BOT_OWNER_TELEGRAM_ID?.trim();
+  if (!raw || !/^\d+$/.test(raw)) return null;
+  const parsed = Number(raw);
+  return Number.isSafeInteger(parsed) ? parsed : null;
 }
 
 function privateChat(message: TelegramMessage): boolean {
@@ -68,6 +83,18 @@ async function telegramApi(env: Env, method: string, body: unknown): Promise<any
     return payload?.result ?? null;
   } catch {
     return null;
+  }
+}
+
+async function getLanguage(db: D1Database | undefined, telegramUserId: number): Promise<Language> {
+  if (!db) return "en";
+  try {
+    const row = await db.prepare(
+      `SELECT language FROM users WHERE telegram_user_id=?1`,
+    ).bind(telegramUserId).first<{ language: string | null }>();
+    return row?.language === "my" || row?.language === "zh" ? row.language : "en";
+  } catch {
+    return "en";
   }
 }
 
@@ -167,6 +194,82 @@ async function cleanupLatestButtonIfAi(env: Env, telegramUserId: number): Promis
   await setLatestControlMessage(env.DB, telegramUserId, staffChatId, null);
 }
 
+async function notifyPreviousClaimant(
+  env: Env,
+  claimantId: number,
+  telegramUserId: number,
+  callbackMessage?: TelegramMessage,
+): Promise<void> {
+  const text = [
+    "Bot Owner override",
+    `Conversation with user ${telegramUserId} was returned to AI by the Bot Owner.`,
+    "Your previous human-control claim is no longer active. Take Over again only if further staff handling is needed.",
+  ].join("\n");
+
+  const direct = await telegramApi(env, "sendMessage", {
+    chat_id: claimantId,
+    text,
+  });
+  if (direct) return;
+
+  if (callbackMessage) {
+    await telegramApi(env, "sendMessage", {
+      chat_id: callbackMessage.chat.id,
+      text: `${text}\nPrevious claimant ID: ${claimantId}`,
+      message_thread_id: callbackMessage.message_thread_id,
+    });
+  }
+}
+
+async function handleOwnerReturnOverride(
+  env: Env,
+  callback: TelegramCallbackQuery,
+  telegramUserId: number,
+): Promise<boolean> {
+  const configuredOwner = ownerId(env);
+  if (configuredOwner === null || callback.from.id !== configuredOwner || !env.DB) return false;
+
+  const current = await getConversationControl(env.DB, telegramUserId);
+  if (current.mode !== "human" || current.claimedBy === null || current.claimedBy === configuredOwner) {
+    return false;
+  }
+
+  const previousClaimant = current.claimedBy;
+  const result = await returnConversationToAi(
+    env.DB,
+    telegramUserId,
+    configuredOwner,
+    configuredOwner,
+  );
+
+  await telegramApi(env, "answerCallbackQuery", {
+    callback_query_id: callback.id,
+    text: result.ok ? "Owner override: returned to AI" : result.message,
+  });
+
+  if (!result.ok) return true;
+
+  await cleanupLatestButtonIfAi(env, telegramUserId);
+
+  const language = await getLanguage(env.DB, telegramUserId);
+  await telegramApi(env, "sendMessage", {
+    chat_id: telegramUserId,
+    text: AI_RETURNED_COPY[language],
+  });
+
+  await notifyPreviousClaimant(env, previousClaimant, telegramUserId, callback.message);
+
+  if (callback.message) {
+    await telegramApi(env, "sendMessage", {
+      chat_id: callback.message.chat.id,
+      text: `Owner override · User ${telegramUserId} returned to AI. Previous claimant: ${previousClaimant}.`,
+      message_thread_id: callback.message.message_thread_id,
+    });
+  }
+
+  return true;
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
@@ -191,6 +294,13 @@ export default {
     }
 
     const returnMatch = update.callback_query?.data?.match(/^conv:return:(\d+)$/);
+    if (returnMatch && update.callback_query) {
+      const telegramUserId = Number(returnMatch[1]);
+      if (Number.isSafeInteger(telegramUserId) && await handleOwnerReturnOverride(env, update.callback_query, telegramUserId)) {
+        return json({ ok: true });
+      }
+    }
+
     const resetUserId = update.message?.from && commandName(update.message.text ?? "") === "/reset"
       ? update.message.from.id
       : null;
