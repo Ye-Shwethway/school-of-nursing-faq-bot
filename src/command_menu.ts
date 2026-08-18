@@ -15,6 +15,7 @@ const ADMIN_COMMANDS: BotCommand[] = [
   { command: "admin", description: "Open administrator tools" },
   { command: "admins", description: "List authorized administrators" },
   { command: "faq", description: "Manage FAQ knowledge" },
+  { command: "adminmanual", description: "Read the Sudo Admin manual" },
 ];
 
 const OWNER_COMMANDS: BotCommand[] = [
@@ -22,6 +23,7 @@ const OWNER_COMMANDS: BotCommand[] = [
   { command: "sudo", description: "Manage Sudo Admin access" },
   { command: "ai", description: "Configure AI agent" },
   { command: "staff", description: "Configure staff and monitoring" },
+  { command: "ownermanual", description: "Read or edit the Bot Owner manual" },
   { command: "cancel", description: "Cancel the current setup flow" },
   { command: "reset", description: "Reset transient conversation state" },
 ];
