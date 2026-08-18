@@ -5053,6 +5053,21 @@ var deployment_notice_entry_default = {
 };
 
 // src/manual_store.ts
+function normalizeManualText(value) {
+  return value.replace(/\\n/g, "\n");
+}
+__name(normalizeManualText, "normalizeManualText");
+function mapSection(row) {
+  return {
+    manualKey: row.manual_key,
+    sectionKey: row.section_key,
+    title: row.title,
+    body: normalizeManualText(row.body),
+    sortOrder: row.sort_order,
+    version: row.version
+  };
+}
+__name(mapSection, "mapSection");
 async function listManualSections(db, manualKey) {
   if (!db) return [];
   const rows = await db.prepare(
@@ -5061,14 +5076,7 @@ async function listManualSections(db, manualKey) {
      WHERE manual_key=?1
      ORDER BY sort_order ASC, section_key ASC`
   ).bind(manualKey).all();
-  return (rows.results ?? []).map((row) => ({
-    manualKey: row.manual_key,
-    sectionKey: row.section_key,
-    title: row.title,
-    body: row.body,
-    sortOrder: row.sort_order,
-    version: row.version
-  }));
+  return (rows.results ?? []).map(mapSection);
 }
 __name(listManualSections, "listManualSections");
 async function getManualSection(db, manualKey, sectionKey) {
@@ -5078,19 +5086,13 @@ async function getManualSection(db, manualKey, sectionKey) {
      FROM manual_sections
      WHERE manual_key=?1 AND section_key=?2`
   ).bind(manualKey, sectionKey).first();
-  return row ? {
-    manualKey: row.manual_key,
-    sectionKey: row.section_key,
-    title: row.title,
-    body: row.body,
-    sortOrder: row.sort_order,
-    version: row.version
-  } : null;
+  return row ? mapSection(row) : null;
 }
 __name(getManualSection, "getManualSection");
 async function updateManualSection(db, manualKey, sectionKey, body, actorId) {
   const current = await getManualSection(db, manualKey, sectionKey);
   if (!current) return null;
+  const normalizedBody = normalizeManualText(body);
   await db.prepare(
     `INSERT INTO manual_revisions
       (manual_key, section_key, version, title, body, changed_by, changed_at)
@@ -5100,7 +5102,7 @@ async function updateManualSection(db, manualKey, sectionKey, body, actorId) {
     `UPDATE manual_sections
      SET body=?3, version=version+1, updated_by=?4, updated_at=CURRENT_TIMESTAMP
      WHERE manual_key=?1 AND section_key=?2`
-  ).bind(manualKey, sectionKey, body, actorId).run();
+  ).bind(manualKey, sectionKey, normalizedBody, actorId).run();
   return getManualSection(db, manualKey, sectionKey);
 }
 __name(updateManualSection, "updateManualSection");
