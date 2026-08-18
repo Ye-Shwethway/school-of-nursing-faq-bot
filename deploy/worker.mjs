@@ -2220,20 +2220,20 @@ function defaultPrivateScope() {
 __name(defaultPrivateScope, "defaultPrivateScope");
 
 // src/command_sync.ts
-async function setCommands(telegramApi7, commands, scope) {
+async function setCommands(telegramApi8, commands, scope) {
   try {
-    const result = await telegramApi7("setMyCommands", { commands, scope });
+    const result = await telegramApi8("setMyCommands", { commands, scope });
     return result === true;
   } catch {
     return false;
   }
 }
 __name(setCommands, "setCommands");
-async function syncUserCommandScope(db, telegramApi7, telegramUserId, ownerIdValue) {
+async function syncUserCommandScope(db, telegramApi8, telegramUserId, ownerIdValue) {
   try {
     const role = await getAdminRole(db, telegramUserId, ownerIdValue);
     await setCommands(
-      telegramApi7,
+      telegramApi8,
       commandsForRole(role),
       commandScopeForPrivateChat(telegramUserId)
     );
@@ -2241,7 +2241,7 @@ async function syncUserCommandScope(db, telegramApi7, telegramUserId, ownerIdVal
   }
 }
 __name(syncUserCommandScope, "syncUserCommandScope");
-async function syncCommandRegistryIfNeeded(db, telegramApi7, ownerIdValue) {
+async function syncCommandRegistryIfNeeded(db, telegramApi8, ownerIdValue) {
   if (!db) return;
   try {
     const current = await db.prepare(
@@ -2249,21 +2249,21 @@ async function syncCommandRegistryIfNeeded(db, telegramApi7, ownerIdValue) {
     ).first();
     if (current?.setting_value === COMMAND_SCHEMA_VERSION) return;
     const defaultOk = await setCommands(
-      telegramApi7,
+      telegramApi8,
       publicCommands(),
       defaultPrivateScope()
     );
     if (!defaultOk) return;
     const ownerId4 = ownerIdValue && /^\d+$/.test(ownerIdValue.trim()) ? Number(ownerIdValue.trim()) : null;
     if (ownerId4 && Number.isSafeInteger(ownerId4)) {
-      await syncUserCommandScope(db, telegramApi7, ownerId4, ownerIdValue);
+      await syncUserCommandScope(db, telegramApi8, ownerId4, ownerIdValue);
     }
     const admins = await db.prepare(
       `SELECT telegram_user_id FROM admin_roles
        WHERE role='sudo_admin' ORDER BY telegram_user_id`
     ).all();
     for (const row of admins.results ?? []) {
-      await syncUserCommandScope(db, telegramApi7, row.telegram_user_id, ownerIdValue);
+      await syncUserCommandScope(db, telegramApi8, row.telegram_user_id, ownerIdValue);
     }
     await db.prepare(
       `INSERT INTO bot_settings (setting_key, setting_value, updated_by, updated_at)
@@ -4733,7 +4733,175 @@ var monitoring_message_entry_default = {
     return staff_ux_entry_default.fetch(request, env);
   }
 };
-export {
-  monitoring_message_entry_default as default
+
+// src/latest_return_entry.ts
+function json7(body, status = 200) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "content-type": "application/json; charset=utf-8" }
+  });
+}
+__name(json7, "json");
+function privateChat5(message) {
+  return Boolean(message.from && (message.chat.type === "private" || message.chat.id === message.from.id));
+}
+__name(privateChat5, "privateChat");
+function commandName5(text) {
+  return text.trim().split(/\s+/, 1)[0].toLowerCase().replace(/@[^\s]+$/, "");
+}
+__name(commandName5, "commandName");
+function topicTitle3(user) {
+  const name = [user.first_name, user.last_name].filter(Boolean).join(" ").trim() || "User";
+  const username = user.username ? ` \xB7 @${user.username}` : "";
+  return `${name}${username} \xB7 ID ${user.id}`.slice(0, 120);
+}
+__name(topicTitle3, "topicTitle");
+async function telegramApi7(env, method, body) {
+  if (!env.TELEGRAM_BOT_TOKEN) return null;
+  try {
+    const response = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/${method}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body)
+    });
+    if (!response.ok) return null;
+    const payload = await response.json();
+    return payload?.result ?? null;
+  } catch {
+    return null;
+  }
+}
+__name(telegramApi7, "telegramApi");
+async function ensureMonitoringTarget4(env, user) {
+  if (!env.DB) return null;
+  const staffChatId = await getStaffInboxChatId(env.DB);
+  if (!staffChatId) return null;
+  const existing = await getMonitoringTopic(env.DB, user.id, staffChatId);
+  if (existing) {
+    await telegramApi7(env, "editForumTopic", {
+      chat_id: staffChatId,
+      message_thread_id: existing,
+      name: topicTitle3(user)
+    });
+    return { chatId: staffChatId, threadId: existing };
+  }
+  const topic = await telegramApi7(env, "createForumTopic", {
+    chat_id: staffChatId,
+    name: topicTitle3(user)
+  });
+  const threadId = Number(topic?.message_thread_id);
+  if (Number.isSafeInteger(threadId)) {
+    await saveMonitoringTopic(env.DB, user.id, staffChatId, threadId);
+    return { chatId: staffChatId, threadId };
+  }
+  return { chatId: staffChatId };
+}
+__name(ensureMonitoringTarget4, "ensureMonitoringTarget");
+async function getLatestControlMessage(db, telegramUserId, staffChatId) {
+  try {
+    const row = await db.prepare(
+      `SELECT latest_control_message_id FROM monitoring_topics
+       WHERE telegram_user_id=?1 AND staff_chat_id=?2`
+    ).bind(telegramUserId, staffChatId).first();
+    return row?.latest_control_message_id ?? null;
+  } catch {
+    return null;
+  }
+}
+__name(getLatestControlMessage, "getLatestControlMessage");
+async function setLatestControlMessage(db, telegramUserId, staffChatId, messageId) {
+  try {
+    await db.prepare(
+      `UPDATE monitoring_topics
+       SET latest_control_message_id=?3, updated_at=CURRENT_TIMESTAMP
+       WHERE telegram_user_id=?1 AND staff_chat_id=?2`
+    ).bind(telegramUserId, staffChatId, messageId).run();
+  } catch {
+  }
+}
+__name(setLatestControlMessage, "setLatestControlMessage");
+async function removeReturnButton(env, staffChatId, messageId) {
+  if (!messageId) return;
+  await telegramApi7(env, "editMessageReplyMarkup", {
+    chat_id: staffChatId,
+    message_id: messageId,
+    reply_markup: { inline_keyboard: [] }
+  });
+}
+__name(removeReturnButton, "removeReturnButton");
+async function moveReturnButtonToLatest(env, message) {
+  if (!env.DB || !message.from || !message.text || !privateChat5(message)) return false;
+  const text = message.text.trim();
+  if (!text || text.startsWith("/")) return false;
+  const control = await getConversationControl(env.DB, message.from.id);
+  if (control.mode !== "human") return false;
+  const target = await ensureMonitoringTarget4(env, message.from);
+  if (!target) return false;
+  const previous = await getLatestControlMessage(env.DB, message.from.id, target.chatId);
+  await removeReturnButton(env, target.chatId, previous);
+  const sent = await telegramApi7(env, "sendMessage", {
+    chat_id: target.chatId,
+    text: `${monitoringUserHeader(message.from)} \xB7 Human control
+${message.text}`,
+    message_thread_id: target.threadId,
+    reply_markup: {
+      inline_keyboard: [[
+        { text: "Return to AI", callback_data: `conv:return:${message.from.id}` }
+      ]]
+    }
+  });
+  const sentId = Number(sent?.message_id);
+  if (Number.isSafeInteger(sentId)) {
+    await setLatestControlMessage(env.DB, message.from.id, target.chatId, sentId);
+  }
+  return true;
+}
+__name(moveReturnButtonToLatest, "moveReturnButtonToLatest");
+async function cleanupLatestButtonIfAi(env, telegramUserId) {
+  if (!env.DB) return;
+  const control = await getConversationControl(env.DB, telegramUserId);
+  if (control.mode !== "ai") return;
+  const staffChatId = await getStaffInboxChatId(env.DB);
+  if (!staffChatId) return;
+  const latest = await getLatestControlMessage(env.DB, telegramUserId, staffChatId);
+  await removeReturnButton(env, staffChatId, latest);
+  await setLatestControlMessage(env.DB, telegramUserId, staffChatId, null);
+}
+__name(cleanupLatestButtonIfAi, "cleanupLatestButtonIfAi");
+var latest_return_entry_default = {
+  async fetch(request, env) {
+    const url = new URL(request.url);
+    if (request.method !== "POST" || url.pathname !== "/telegram/webhook") {
+      return monitoring_message_entry_default.fetch(request, env);
+    }
+    if (env.TELEGRAM_WEBHOOK_SECRET) {
+      const supplied = request.headers.get("X-Telegram-Bot-Api-Secret-Token");
+      if (supplied !== env.TELEGRAM_WEBHOOK_SECRET) return json7({ ok: false }, 401);
+    }
+    let update;
+    try {
+      update = await request.clone().json();
+    } catch {
+      return monitoring_message_entry_default.fetch(request, env);
+    }
+    if (update.message && await moveReturnButtonToLatest(env, update.message)) {
+      return json7({ ok: true });
+    }
+    const returnMatch = update.callback_query?.data?.match(/^conv:return:(\d+)$/);
+    const resetUserId = update.message?.from && commandName5(update.message.text ?? "") === "/reset" ? update.message.from.id : null;
+    const response = await monitoring_message_entry_default.fetch(request, env);
+    if (returnMatch) {
+      const telegramUserId = Number(returnMatch[1]);
+      if (Number.isSafeInteger(telegramUserId)) {
+        await cleanupLatestButtonIfAi(env, telegramUserId);
+      }
+    } else if (resetUserId !== null) {
+      await cleanupLatestButtonIfAi(env, resetUserId);
+    }
+    return response;
+  }
 };
-//# sourceMappingURL=monitoring_message_entry.js.map
+export {
+  latest_return_entry_default as default
+};
+//# sourceMappingURL=latest_return_entry.js.map
