@@ -125,23 +125,24 @@ async function answerCallback(env: Env, callbackId: string, text?: string): Prom
   });
 }
 
-async function verifyDeletePermission(env: Env, chatId: number): Promise<{ ok: boolean; reason?: string }> {
+async function verifyDeletePermission(env: Env, chatId: number): Promise<{ ok: boolean; reason?: string; readsAll?: boolean }> {
   const me = await telegramApi(env, "getMe", {});
   const botId = Number(me.result?.id);
   if (!me.ok || !Number.isSafeInteger(botId)) {
     return { ok: false, reason: me.description ?? "Could not resolve bot identity." };
   }
+  const readsAll = me.result?.can_read_all_group_messages === true;
   const member = await telegramApi(env, "getChatMember", { chat_id: chatId, user_id: botId });
-  if (!member.ok) return { ok: false, reason: member.description ?? "Could not read bot group permissions." };
+  if (!member.ok) return { ok: false, reason: member.description ?? "Could not read bot group permissions.", readsAll };
   const status = String(member.result?.status ?? "");
-  if (status === "creator") return { ok: true };
+  if (status === "creator") return { ok: true, readsAll };
   if (status !== "administrator") {
-    return { ok: false, reason: `Bot status is ${status || "unknown"}; make the bot a group administrator.` };
+    return { ok: false, reason: `Bot status is ${status || "unknown"}; make the bot a group administrator.`, readsAll };
   }
   if (member.result?.can_delete_messages !== true) {
-    return { ok: false, reason: "Bot administrator is missing the Delete messages permission." };
+    return { ok: false, reason: "Bot administrator is missing the Delete messages permission.", readsAll };
   }
-  return { ok: true };
+  return { ok: true, readsAll };
 }
 
 async function deleteIds(
@@ -149,23 +150,14 @@ async function deleteIds(
   chatId: number,
   ids: number[],
 ): Promise<{ deleted: number[]; failed: Array<{ id: number; reason: string }> }> {
-  if (!ids.length) return { deleted: [], failed: [] };
-  const bulk = await telegramApi(env, "deleteMessages", { chat_id: chatId, message_ids: ids });
-  if (bulk.ok) return { deleted: ids, failed: [] };
-  if (ids.length === 1) {
-    const single = await telegramApi(env, "deleteMessage", { chat_id: chatId, message_id: ids[0] });
-    return single.ok
-      ? { deleted: ids, failed: [] }
-      : { deleted: [], failed: [{ id: ids[0], reason: single.description ?? bulk.description ?? "delete failed" }] };
+  const deleted: number[] = [];
+  const failed: Array<{ id: number; reason: string }> = [];
+  for (const id of ids) {
+    const result = await telegramApi(env, "deleteMessage", { chat_id: chatId, message_id: id });
+    if (result.ok && result.result === true) deleted.push(id);
+    else failed.push({ id, reason: result.description ?? "deleteMessage did not return true" });
   }
-
-  const middle = Math.floor(ids.length / 2);
-  const left = await deleteIds(env, chatId, ids.slice(0, middle));
-  const right = await deleteIds(env, chatId, ids.slice(middle));
-  return {
-    deleted: [...left.deleted, ...right.deleted],
-    failed: [...left.failed, ...right.failed],
-  };
+  return { deleted, failed };
 }
 
 async function removeDeletedLedgerRows(db: D1Database, chatId: number, ids: number[]): Promise<void> {
@@ -218,7 +210,7 @@ async function handleClearCommand(env: Env, message: TelegramMessage): Promise<b
     [
       "Clear Staff Inbox messages?",
       "",
-      "This removes recent deletable messages that the bot has observed in this group.",
+      "This removes recent deletable messages that the bot has actually observed in this group.",
       "",
       "This action cannot be undone.",
     ].join("\n"),
@@ -300,8 +292,7 @@ async function handleClearCallback(env: Env, callback: TelegramCallbackQuery): P
   const deleted: number[] = [];
   const failed: Array<{ id: number; reason: string }> = [];
   for (let start = 0; start < ids.length; start += 100) {
-    const batch = ids.slice(start, start + 100);
-    const result = await deleteIds(env, chatId, batch);
+    const result = await deleteIds(env, chatId, ids.slice(start, start + 100));
     deleted.push(...result.deleted);
     failed.push(...result.failed);
   }
@@ -318,8 +309,12 @@ async function handleClearCallback(env: Env, callback: TelegramCallbackQuery): P
       owner,
       [
         "Staff Inbox cleanup result",
-        `Deleted: ${deleted.length}`,
-        `Could not delete: ${failed.length}`,
+        `Confirmed deleted: ${deleted.length}`,
+        `Could not confirm/delete: ${failed.length}`,
+        `Tracked IDs attempted: ${ids.length}`,
+        permission.readsAll === true
+          ? "Bot privacy mode: disabled (getMe can_read_all_group_messages=true)."
+          : "Bot privacy mode: enabled or not globally disabled; administrator status can still allow group updates.",
         ids.length === 5000 ? "Note: cleanup was limited to the newest 5,000 tracked messages." : null,
         firstFailure ? `First Telegram error: ${firstFailure}` : null,
       ].filter(Boolean).join("\n"),
