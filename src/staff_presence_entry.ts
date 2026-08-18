@@ -10,7 +10,7 @@ import {
   isStaffAvailable,
   markStaffActiveNow,
   setDailyAvailabilitySchedule,
-  setStaffAvailability,
+  setManualAvailability,
   setStaffNotificationsEnabled,
   setTemporaryUnavailable,
   staffNotificationsEnabled,
@@ -267,7 +267,7 @@ async function handleReturnPromptCallback(env: Env, callback: TelegramCallbackQu
 
   await acknowledgePendingPrompt(env.DB, callback.from.id, newestId);
   if (match[1] === "available") {
-    await setStaffAvailability(env.DB, callback.from.id, true);
+    await setManualAvailability(env.DB, callback.from.id, true);
     const pending = await pendingSummary(env.DB);
     await answerCallback(env, callback.id, "Marked available");
     await telegramApi(env, "editMessageText", {
@@ -314,12 +314,14 @@ async function handleAvailabilityCommand(env: Env, message: TelegramMessage, com
     }
 
     if (args.length === 0) {
-      await setStaffAvailability(env.DB, message.from.id, false);
+      const result = await setManualAvailability(env.DB, message.from.id, false);
       const count = await countAvailableStaff(env.DB);
       await publishAvailabilityResult(
         env,
         message,
-        `You are marked unavailable until you use /available. Available staff: ${count}`,
+        result.scheduled && result.overrideUntil
+          ? `You are temporarily marked UNAVAILABLE.\nRecurring schedule is preserved. Schedule control resumes at ${yangonDateTimeLabel(result.overrideUntil)} Asia/Yangon (UTC+06:30).\nAvailable staff: ${count}`
+          : `You are marked unavailable until you use /available. Available staff: ${count}`,
       );
       return true;
     }
@@ -361,12 +363,14 @@ async function handleAvailabilityCommand(env: Env, message: TelegramMessage, com
   }
 
   if (args.length === 0) {
-    await setStaffAvailability(env.DB, message.from.id, true);
+    const result = await setManualAvailability(env.DB, message.from.id, true);
     const count = await countAvailableStaff(env.DB);
     await publishAvailabilityResult(
       env,
       message,
-      `You are marked available. Any recurring availability schedule was cleared. Available staff: ${count}`,
+      result.scheduled && result.overrideUntil
+        ? `You are temporarily marked AVAILABLE.\nRecurring schedule is preserved. Schedule control resumes at ${yangonDateTimeLabel(result.overrideUntil)} Asia/Yangon (UTC+06:30).\nAvailable staff: ${count}`
+        : `You are marked available. Available staff: ${count}`,
     );
     return true;
   }
