@@ -41,6 +41,10 @@ Use these meanings consistently across privileged/configuration UI:
 
 ## Language selector
 Recommended order: `မြန်မာ` · `English` · `简体中文`. Persist the choice until `/language` changes it.
+- The language picker is a one-shot selector, not a persistent settings panel.
+- After a valid language is saved, acknowledge the choice with a short callback toast and delete the selector message so it does not remain as chat clutter.
+- Do not send a second persistent confirmation message after a successful language choice.
+- Users can reopen the selector at any time with `/language`.
 
 ## Public FAQ library
 - `/faq` is a public command and must be visible to normal users as well as privileged users.
@@ -91,7 +95,7 @@ Policy-sensitive answers must come from canonical data. Never creatively alter d
 
 ## Interaction defaults
 - `/start`: welcome + language selector for new users; concise home state for returning users.
-- `/language`: language selector.
+- `/language`: one-shot language selector; successful choice saves the language and auto-dismisses the selector.
 - `/faq`: role-aware FAQ surface — read-only localized library for normal users; management surface for Owner/Sudo.
 - Unknown command: short help path.
 - Free text: log → deterministic FAQ match → grounded fallback → escalation.
