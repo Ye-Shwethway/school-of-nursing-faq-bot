@@ -42,8 +42,21 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           if [ -z "$(git status --porcelain -- deploy/worker.mjs deploy/worker.sha256)" ]; then
             echo "Deployment artifact and checksum are already current."
-            exit 0
+          else
+            git add deploy/worker.mjs deploy/worker.sha256
+            git commit -m "build: refresh validated Worker artifact [skip ci]"
+            git push origin HEAD:test
           fi
-          git add deploy/worker.mjs deploy/worker.sha256
-          git commit -m "build: refresh validated Worker artifact [skip ci]"
-          git push origin HEAD:test
+      - name: Publish Cloudflare handoff bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: cloudflare-test-handoff
+          if-no-files-found: error
+          retention-days: 7
+          path: |
+            migrations/0002_ai_settings.sql
+            migrations/0003_handoff_persona.sql
+            migrations/0004_shadow_monitoring.sql
+            migrations/0005_dynamic_faq.sql
+            deploy/worker.mjs
+            deploy/worker.sha256
