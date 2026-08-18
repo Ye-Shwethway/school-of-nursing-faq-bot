@@ -2197,7 +2197,9 @@ var OWNER_COMMANDS = [
   { command: "cancel", description: "Cancel the current setup flow" },
   { command: "reset", description: "Reset transient conversation state" }
 ];
+var COMMAND_SYNC_REVISION = 2;
 var COMMAND_SCHEMA_VERSION = JSON.stringify({
+  revision: COMMAND_SYNC_REVISION,
   public: PUBLIC_COMMANDS,
   admin: ADMIN_COMMANDS,
   owner: OWNER_COMMANDS
@@ -2234,12 +2236,13 @@ __name(setCommands, "setCommands");
 async function syncUserCommandScope(db, telegramApi10, telegramUserId, ownerIdValue) {
   try {
     const role = await getAdminRole(db, telegramUserId, ownerIdValue);
-    await setCommands(
+    return await setCommands(
       telegramApi10,
       commandsForRole(role),
       commandScopeForPrivateChat(telegramUserId)
     );
   } catch {
+    return false;
   }
 }
 __name(syncUserCommandScope, "syncUserCommandScope");
@@ -2258,14 +2261,16 @@ async function syncCommandRegistryIfNeeded(db, telegramApi10, ownerIdValue) {
     if (!defaultOk) return;
     const ownerId5 = ownerIdValue && /^\d+$/.test(ownerIdValue.trim()) ? Number(ownerIdValue.trim()) : null;
     if (ownerId5 && Number.isSafeInteger(ownerId5)) {
-      await syncUserCommandScope(db, telegramApi10, ownerId5, ownerIdValue);
+      const ownerOk = await syncUserCommandScope(db, telegramApi10, ownerId5, ownerIdValue);
+      if (!ownerOk) return;
     }
     const admins = await db.prepare(
       `SELECT telegram_user_id FROM admin_roles
        WHERE role='sudo_admin' ORDER BY telegram_user_id`
     ).all();
     for (const row of admins.results ?? []) {
-      await syncUserCommandScope(db, telegramApi10, row.telegram_user_id, ownerIdValue);
+      const adminOk = await syncUserCommandScope(db, telegramApi10, row.telegram_user_id, ownerIdValue);
+      if (!adminOk) return;
     }
     await db.prepare(
       `INSERT INTO bot_settings (setting_key, setting_value, updated_by, updated_at)
