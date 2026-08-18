@@ -70,12 +70,8 @@ async function languageFor(db: D1Database | undefined, userId: number): Promise<
 }
 
 function transitionReason(transition: StaffAvailabilityTransition): string {
-  if (transition.reason === "timer_expired") {
-    return "Temporary unavailable timer ended.";
-  }
-  if (transition.reason === "schedule_started") {
-    return "Daily availability window started.";
-  }
+  if (transition.reason === "timer_expired") return "Temporary unavailable timer ended.";
+  if (transition.reason === "schedule_started") return "Daily availability window started.";
   return "Daily availability window ended.";
 }
 
@@ -174,11 +170,10 @@ export default {
   },
 
   async scheduled(_controller: ScheduledController, env: Env, _ctx: ExecutionContext): Promise<void> {
-    const results = await Promise.allSettled([
+    const [, staffSweep] = await Promise.allSettled([
       sweepExpiredHumanControls(env),
       sweepStaffAvailability(env.DB),
-    ]);
-    const staffSweep = results[1];
+    ] as const);
     if (staffSweep.status === "fulfilled") {
       await announceStaffAvailabilityTransitions(env, staffSweep.value);
     }
