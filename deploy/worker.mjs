@@ -4838,7 +4838,6 @@ async function moveReturnButtonToLatest(env, message) {
   const target = await ensureMonitoringTarget4(env, message.from);
   if (!target) return false;
   const previous = await getLatestControlMessage(env.DB, message.from.id, target.chatId);
-  await removeReturnButton(env, target.chatId, previous);
   const sent = await telegramApi7(env, "sendMessage", {
     chat_id: target.chatId,
     text: `${monitoringUserHeader(message.from)} \xB7 Human control
@@ -4852,6 +4851,7 @@ ${message.text}`,
   });
   const sentId = Number(sent?.message_id);
   if (Number.isSafeInteger(sentId)) {
+    await removeReturnButton(env, target.chatId, previous);
     await setLatestControlMessage(env.DB, message.from.id, target.chatId, sentId);
   }
   return true;
