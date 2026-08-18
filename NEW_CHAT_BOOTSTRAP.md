@@ -25,7 +25,7 @@ Treat live repository plus verified Cloudflare/Telegram evidence as authoritativ
 Wrangler entrypoint: `src/manual_entry.ts`
 
 Layer order:
-1. `manual_entry.ts` — Owner/Admin manuals, pager/edit UX, command sync before interception
+1. `manual_entry.ts` — Owner/Admin manuals, single-message pager/edit UX, command sync before interception
 2. `deployment_notice_entry.ts` — deploy-health command sync + revision-aware `🟢 Bot is Online!`
 3. `latest_return_entry.ts` — latest-message Return to AI control
 4. `monitoring_message_entry.ts` — identity/model-aware mirrors + isolated group handoff
@@ -73,31 +73,31 @@ Schema:
 - `manual_revisions`
 
 ### Current manual UX — single-message pager
-Manuals no longer emit one Telegram message per section.
+Opening a manual sends one section in one Telegram message only.
 
-Opening a manual renders one section in one message with:
+Controls:
 - `◀ Previous`
 - page indicator such as `2/8`
 - `Next ▶`
 - Owner-only `✎ Edit this section`
 - `✕ Close`
 
-Page navigation uses `editMessageText`, so browsing does not flood the chat.
+Page navigation uses `editMessageText`, so browsing reuses the same Telegram message instead of flooding chat. Sudo Admins can navigate `/adminmanual` pages but cannot edit.
 
 Owner edit flow:
 1. open manual
 2. navigate to section
 3. tap `Edit this section`
-4. send the complete replacement text
+4. send complete replacement text
 5. review Preview
-6. `Save` or `Discard`
+6. choose `Save` or `Discard`
 
 `/cancel` abandons a pending edit. Each save increments section version and archives the previous text.
 
 ### Manual line-break cleanup — migration 0010
-`migrations/0010_manual_linebreak_cleanup.sql` converts legacy literal `\\n` sequences from the initial manual seed into real Telegram line breaks.
+`migrations/0010_manual_newline_cleanup.sql` converts legacy literal `\\n` sequences from the initial manual seed into real line breaks in D1.
 
-`src/manual_store.ts` also normalizes `\\n` at read/save time, so existing or manually pasted legacy text renders correctly even before/after cleanup.
+`src/manual_store.ts` also normalizes `\\n` at read/save time, and manual edit preview normalizes pasted legacy sequences as an extra compatibility guard.
 
 ## Staff group / multiuser contract
 Preferred Staff Inbox: private Telegram supergroup with Topics enabled. Bot should have Manage Topics; Delete Messages is recommended.
@@ -157,7 +157,7 @@ Telegram runtime secrets remain Cloudflare Worker secrets, not GitHub secrets.
 - 0007 latest Return-to-AI control message
 - 0008 monitoring topic provision lock
 - 0009 editable operating manuals
-- 0010 manual line-break cleanup
+- 0010 manual newline cleanup
 
 ## Current live validation focus
 Before promoting `main`, validate when practical:
