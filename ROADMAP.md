@@ -22,11 +22,13 @@ Implemented/current:
 - `/cases` Owner/Sudo Escalation Inbox, Open/Claimed/Resolved/All, 6/page
 - case → Add as FAQ / Find Related FAQ
 - persisted escalation reason and linked FAQ
-- confirmed permanent deletion of typo/test/junk cases with confirmation; only case + escalation-message history are deleted
+- confirmed permanent deletion of typo/test/junk cases with confirmation
 - Staff Inbox Take Over / Resolve / Return-to-AI, presence, notifications, topic reply relay
-- `/limits` Owner/Sudo rate-limit management
+- `/limits` Owner/Sudo rate-limit management with pager and direct `/limits <telegram_id>` lookup
+- temporary testing exemption and manual temporary restriction
 - Owner-only permanent ban/unban
-- manuals and design rules covering FAQ authoring, cases, case deletion, spam protection, limits, and bans
+- repeated blocked-user warning throttled to at most once per 5 minutes
+- manuals and design rules synchronized with the current limits policy
 
 ## Spam protection policy
 Normal-user private free-text inquiries pass through the rate-limit gate before FAQ/AI/handoff processing.
@@ -37,25 +39,30 @@ Default policy:
 - repeat limit hits within 24h progress: 30 min → 2h → 12h
 - automatic permanent bans are forbidden
 - rejected spam text does not create escalation cases and does not call AI
+- blocked-user warning is sent at most once per 5 minutes while the block remains active
 - `/faq`, `/language`, `/start`, and other safe commands remain available during cooldown/restriction/ban
 - Owner/Sudo accounts do not consume the normal-user rate window
 
-Persistent state is stored in `user_rate_limits` from migration `0019_user_rate_limits.sql`.
+Persistent state is stored in `user_rate_limits` from migration `0019_user_rate_limits.sql`; `0021_rate_limit_notice_throttle.sql` adds blocked-notice throttling state.
 
 ## `/limits` admin surface
 Allowed only for Owner/Sudo in:
 - private bot chat
 - configured active Staff Inbox group
 
-Pager/detail controls:
+Entry points:
+- `/limits` — pager of users with limit history/active state
+- `/limits <telegram_user_id>` — direct lookup, useful for pre-exempting a normal QA/test account
+
+Owner/Sudo controls:
 - `🔓 Unlock Now` — clears cooldown/temporary restriction and resets the immediate window
 - `🧪 Exempt 1h` — temporary testing exemption
 - `⏳ Restrict 2h` — temporary manual restriction
 - `Reset Strikes` — clears progressive strike history/window counter
 
-Permanent controls:
-- `🚫 Permanently Ban` — Owner-only and confirmation-gated
-- `✅ Unban User` — Owner-only; clears ban and immediate cooldown/window state
+Owner-only controls:
+- `🚫 Permanently Ban` — confirmation-gated
+- `✅ Unban User` — clears ban and immediate cooldown/window state
 
 A banned user cannot submit free-text inquiries; AI and new escalation creation do not run. Read-only `/faq` remains available. Admin overrides and ban/unban actions are written to `admin_audit`.
 
@@ -82,11 +89,13 @@ Expected Owner total: **19**.
 Production read-back contract includes `/limits`.
 
 ## Migrations
-Current migrations: `0001` through `0020`.
+Current migrations: `0001` through `0022`.
 
-New spam-protection migrations:
+Latest spam-protection/manual migrations:
 - `0019_user_rate_limits.sql`
 - `0020_manual_spam_protection.sql`
+- `0021_rate_limit_notice_throttle.sql`
+- `0022_manual_limits_refinement.sql`
 
 ## Canonical Worker stack
 Wrangler entrypoint: `src/rate_limit_entry.ts`.
@@ -106,11 +115,12 @@ Do not declare this slice production-green until the latest production workflow 
 - exact 19-command Owner Telegram read-back
 
 Live acceptance after deploy:
-1. normal user sends 10 inquiries inside 10 min; 11th is blocked before AI/case creation
+1. normal user sends 10 inquiries inside 10 min; next inquiry is blocked before AI/case creation
 2. cooldown message shows approximate remaining time and `/faq`
-3. `/faq` remains usable while limited
-4. Owner/Sudo `/limits` can Unlock, Exempt 1h, Restrict 2h, Reset Strikes
-5. test account exemption allows continued normal-user QA
-6. Owner permanent-ban confirmation blocks free text but keeps `/faq`
-7. Owner Unban restores free-text access
-8. verify rejected spam did not create extra `/cases` records
+3. repeated blocked messages do not produce more than one warning per 5 minutes
+4. `/faq` remains usable while limited
+5. `/limits <test_user_id>` → `Exempt 1h` allows continued normal-user QA
+6. Owner/Sudo can Unlock, Restrict 2h, Reset Strikes
+7. Owner permanent-ban confirmation blocks free text but keeps `/faq`
+8. Owner Unban restores free-text access
+9. verify blocked spam did not create extra `/cases` records
