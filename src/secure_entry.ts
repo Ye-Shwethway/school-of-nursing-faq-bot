@@ -194,7 +194,23 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
     return json({ ok: true });
   }
 
-  const setup = await consumeAiSetupText(env, configuredOwner, text);
+  let setup: Awaited<ReturnType<typeof consumeAiSetupText>>;
+  try {
+    setup = await consumeAiSetupText(env, configuredOwner, text);
+  } catch (error) {
+    await deleteMessage(env, message.chat.id, message.message_id);
+    const detail = error instanceof Error ? error.message : "unknown error";
+    const masterKeyProblem = detail.includes("AI_CONFIG_MASTER_KEY");
+    await sendMessage(
+      env,
+      message.chat.id,
+      masterKeyProblem
+        ? "AI setup could not encrypt the API key because AI_CONFIG_MASTER_KEY is invalid. Configure it as Base64 for exactly 32 random bytes, then run /ai and try again."
+        : "AI setup could not save the API key because of a server-side configuration error. The submitted key was not stored. Run /ai and try again after the configuration is corrected.",
+    );
+    return json({ ok: true });
+  }
+
   if (!setup.handled) return forward(request, raw, env);
 
   if (setup.secretInput) {
