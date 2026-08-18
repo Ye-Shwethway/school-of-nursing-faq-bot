@@ -1,0 +1,115 @@
+name: Verify and resync PRODUCTION Owner commands
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-owner-command-resync
+  cancel-in-progress: false
+
+jobs:
+  resync:
+    if: contains(github.event.head_commit.message, '[production-command-resync]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: production
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      PRODUCTION_D1_DATABASE_ID: ${{ secrets.CLOUDFLARE_PRODUCTION_D1_DATABASE_ID }}
+      PRODUCTION_D1_DATABASE_NAME: school-of-nursing-faq-bot-prod-db
+      PRODUCTION_WORKER_NAME: school-of-nursing-faq-bot
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install --no-audit --no-fund
+      - run: npm run typecheck
+
+      - name: Build isolated production config
+        shell: bash
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+          const source = JSON.parse(fs.readFileSync('wrangler.jsonc', 'utf8'));
+          fs.writeFileSync('.wrangler.production.generated.json', JSON.stringify({
+            $schema: source.$schema,
+            name: process.env.PRODUCTION_WORKER_NAME,
+            main: source.main,
+            compatibility_date: source.compatibility_date,
+            workers_dev: true,
+            preview_urls: false,
+            vars: { APP_ENV: 'production' },
+            d1_databases: [{
+              binding: 'DB',
+              database_name: process.env.PRODUCTION_D1_DATABASE_NAME,
+              database_id: process.env.PRODUCTION_D1_DATABASE_ID,
+              migrations_dir: 'migrations'
+            }]
+          }, null, 2));
+          NODE
+
+      - name: Deploy current main to production
+        run: npx wrangler deploy --config .wrangler.production.generated.json --var "APP_ENV:production" --var "DEPLOY_REVISION:${GITHUB_SHA}"
+
+      - name: Resolve production origin
+        shell: bash
+        run: |
+          body="$(curl --fail --silent --show-error --connect-timeout 10 --max-time 20 \
+            -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+            "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/workers/subdomain")"
+          subdomain="$(node -e 'const b=JSON.parse(process.argv[1]); if(b.success!==true||!b.result?.subdomain)process.exit(1); process.stdout.write(b.result.subdomain)' "$body")"
+          echo "PRODUCTION_ORIGIN=https://${PRODUCTION_WORKER_NAME}.${subdomain}.workers.dev" >> "$GITHUB_ENV"
+
+      - name: Verify production health
+        shell: bash
+        run: |
+          response="$(curl --fail --silent --show-error --connect-timeout 10 --max-time 30 --retry 5 --retry-delay 2 "${PRODUCTION_ORIGIN}/health")"
+          echo "$response"
+          node -e 'const b=JSON.parse(process.argv[1]); if(b.ok!==true||b.environment!=="production")process.exit(1)' "$response"
+
+      - name: Arm one-time Owner command resync nonce
+        shell: bash
+        run: |
+          NONCE="$(node -e "process.stdout.write(require('crypto').randomBytes(32).toString('hex'))")"
+          echo "::add-mask::$NONCE"
+          echo "OPS_NONCE=$NONCE" >> "$GITHUB_ENV"
+          payload="$(node -e 'process.stdout.write(JSON.stringify({sql:`INSERT INTO bot_settings (setting_key, setting_value, updated_by, updated_at) VALUES ("owner_command_resync_nonce", ?1, 0, CURRENT_TIMESTAMP) ON CONFLICT(setting_key) DO UPDATE SET setting_value=excluded.setting_value, updated_by=0, updated_at=CURRENT_TIMESTAMP`,params:[process.argv[1]]}))' "$NONCE")"
+          response="$(curl --fail --silent --show-error --connect-timeout 10 --max-time 30 -X POST \
+            -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+            -H "Content-Type: application/json" --data "$payload" \
+            "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/d1/database/${PRODUCTION_D1_DATABASE_ID}/query")"
+          node -e 'const b=JSON.parse(process.argv[1]); if(b.success!==true){console.error(b);process.exit(1)}' "$response"
+
+      - name: Force Owner commands and verify Telegram read-back
+        shell: bash
+        run: |
+          response="$(curl --fail --silent --show-error --connect-timeout 10 --max-time 45 -X POST \
+            -H "X-Ops-Nonce: ${OPS_NONCE}" \
+            "${PRODUCTION_ORIGIN}/ops/telegram/owner-command-resync")"
+          echo "$response"
+          node -e '
+            const b=JSON.parse(process.argv[1]);
+            const expected=["start","whoami","admin","admins","faq","adminmanual","sudo","ai","staff","ownermanual","cancel","reset"];
+            if(b.ok!==true||b.environment!=="production"||b.command_count!==12||JSON.stringify(b.owner_commands)!==JSON.stringify(expected)){
+              console.error("Owner command verification failed", b); process.exit(1);
+            }
+          ' "$response"
+
+      - name: Cleanup
+        if: always()
+        run: rm -f .wrangler.production.generated.json
+
+      - name: Summary
+        if: success()
+        run: |
+          echo '## Production Owner command registry' >> "$GITHUB_STEP_SUMMARY"
+          echo '- setMyCommands: PASS' >> "$GITHUB_STEP_SUMMARY"
+          echo '- getMyCommands read-back: PASS' >> "$GITHUB_STEP_SUMMARY"
+          echo '- exact Owner command count: 12' >> "$GITHUB_STEP_SUMMARY"
