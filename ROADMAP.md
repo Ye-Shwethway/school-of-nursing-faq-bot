@@ -11,38 +11,60 @@ Production Telegram FAQ assistant for a university School of Nursing in Burmese,
 - relevant `main` pushes run `.github/workflows/deploy-production.yml`.
 
 ## Current checkpoint
-Status: **FAQ-FIRST + FALSE-ESCALATION GUARD LIVE; TOKEN/WEBHOOK ROTATION LIVE; AI CREDENTIAL SAVE LIVE; OWNER TAKEOVER OVERRIDE IMPLEMENTED ON MAIN; PRODUCTION/LIVE OVERRIDE VERIFICATION REQUIRED**.
+Status: **FAQ-FIRST + FALSE-ESCALATION GUARD LIVE; TOKEN/WEBHOOK ROTATION LIVE; AI CREDENTIAL SAVE LIVE; OWNER TAKEOVER OVERRIDE LIVE-ACCEPTED; 1-HOUR HUMAN-CONTROL LEASE + AUTO-RETURN IMPLEMENTED ON MAIN; PRODUCTION/LIVE TIMER VERIFICATION REQUIRED**.
 
-Live-confirmed:
+Live-confirmed before this newest slice:
 - rotated Telegram bot token works inbound/outbound
 - automatic production webhook cutover works
 - `/language`, `/faq`, normal commands and false-escalation filtering work
 - rotated `AI_CONFIG_MASTER_KEY` works after re-saving Gemini credentials
-- grounded AI is usable again
+- grounded Gemini AI is usable
+- Bot Owner can override another Admin's stale `Take Over` and return the user to AI
 
-Latest operational diagnosis:
-- a normal user appeared silent while Staff Inbox still received their message
-- the real cause was an earlier Sudo/Admin `Take Over` left active without `Return to AI`
-- while conversation mode is `human`, normal user text is intentionally relayed to Staff Inbox instead of FAQ/AI processing
-- the missing control was a reliable first-class Owner override of another Admin's stale takeover plus notification to that claimant
+## Human-control lease / auto-return
+A successful `Take Over` now starts a persisted **1-hour inactivity lease**.
+
+Lease semantics:
+1. `takeOverConversation()` sets `last_human_activity_at=CURRENT_TIMESTAMP` and `human_control_expires_at=now + 1 hour`.
+2. only the current claimant may renew the lease.
+3. an eligible claimant non-command staff reply in that user's Staff Inbox topic or claimed case reply renews expiry to `now + 1 hour`.
+4. the active claimant may explicitly press `Extend 1h` to renew without sending a user-facing message.
+5. unrelated admin activity, commands, other users' conversations, and other Admins do not renew the claim.
+6. manual claimant `Return to AI`, Owner override, resolve/reset, and automatic expiry clear lease timestamps.
+
+### Scheduled expiry
+- canonical `wrangler.jsonc` contains `triggers.crons = ["*/5 * * * *"]`.
+- top-level `interaction_guard_entry.ts` exposes a `scheduled()` handler.
+- `src/human_control_lease.ts` lists expired human claims, atomically expires each claim only if claimant + expiry still match, then performs best-effort notifications/cleanup.
+- practical expiry is therefore approximately **1h00m–1h05m after last claimant activity**.
+- no in-memory sleep/timer is used, so Worker restart/deploy does not erase takeover timing.
+
+### Auto-return notifications
+On successful expiry:
+- user receives localized notice that the automated assistant is active again
+- previous claimant receives a private expiry notification
+- if claimant DM is unavailable, the Staff Inbox topic note acts as fallback notification
+- Staff Inbox topic records the auto-return transition
+- latest stale `Return to AI` button is removed
+- case/question/user history remains intact
+
+### Rollout safety
+Migration `0028_human_control_lease.sql` adds:
+- `conversation_control.last_human_activity_at`
+- `conversation_control.human_control_expires_at`
+- expiry index
+- Owner/Admin manual sections
+
+Any human-control claim already active when migration 0028 is applied receives a fresh full one-hour lease instead of being immediately expired.
+
+## Production deployment support
+The production workflow builds an isolated Wrangler config. It now explicitly copies `source.triggers` into that generated config so the canonical Cron schedule is preserved during production deploy. Remote D1 migrations still run before Worker deploy.
 
 ## Owner takeover override
-Core `returnConversationToAi()` already recognizes Bot Owner as higher authority than the current claimant. The latest slice makes that authority explicit and reliable at the active `Return to AI` callback boundary in `src/latest_return_entry.ts`.
-
-When Owner presses `Return to AI` on a conversation currently claimed by another Admin:
-1. read current conversation-control state
-2. Owner force-returns the user to `ai` mode
-3. clear the active claimant/control button state
-4. send the user the localized “returned to automated assistant” notice
-5. notify the previous claimant Admin privately that Owner overrode the claim
-6. if direct claimant notification fails, post a fallback operational note in the Staff Inbox topic
-7. post a concise Owner-override note in the Staff Inbox topic for team visibility
-8. preserve case/question/user history; no deletion occurs
-
-The previous claimant may Take Over again later if human handling is still needed.
+Bot Owner remains higher authority than the current claimant and may force `Return to AI` immediately without waiting for lease expiry. Previous claimant notification and Staff Inbox transition visibility remain required.
 
 ## Handoff acknowledgement reliability
-`src/monitoring_message_entry.ts` also keeps the user-facing handoff acknowledgement resilient: reply to the original question first, then retry as a plain private message if Telegram rejects the reply-target form. Staff Inbox success must not substitute for user-facing acknowledgement during an actual AI→human escalation.
+During a true AI→human escalation, user acknowledgement remains reply-first with plain-private-message fallback. Staff Inbox success never substitutes for the user-facing acknowledgement.
 
 ## AI credential-entry hardening
 `src/ai_setup_entry.ts` intercepts active Owner-private `awaiting_ai_*` setup text before lower routing. Provider keys are encrypted by canonical `consumeAiSetupText()`, secret messages are deleted, and explicit success/error feedback is required.
@@ -51,7 +73,7 @@ The previous claimant may Take Over again later if human handling is still neede
 Wrangler entrypoint remains `src/interaction_guard_entry.ts`.
 
 Top flow:
-1. `interaction_guard_entry.ts`
+1. `interaction_guard_entry.ts` — webhook flood guard + scheduled human-control sweep entry
 2. `rate_limit_entry.ts`
 3. `ai_setup_entry.ts`
 4. `faq_ai_entry.ts`
@@ -59,34 +81,21 @@ Top flow:
 6. `cases_entry.ts`
 7. Staff/manual/deploy/latest-return/monitoring/UX/security/runtime layers
 
-`latest_return_entry.ts` owns latest Return-to-AI button cleanup and the explicit Owner override path.
+`latest_return_entry.ts` owns latest `Return to AI` / `Extend 1h` controls, claimant-activity renewal, and explicit Owner override handling.
 
 ## Existing product contracts
-- FAQ-first `/start`/`/language` onboarding with localized Browse FAQ
+- FAQ-first `/start`/`/language`
 - public localized `/faq`
 - Owner/Sudo FAQ management + multilingual AI-assisted drafting
 - `/cases` escalation archive
 - Staff Inbox Take Over / Resolve / Return-to-AI
 - Owner override of stale Admin takeover
+- 1-hour inactivity lease + claimant renewal + auto-return
 - `/limits`, progressive inquiry rate limit, Interaction Flood Guard, Owner-only ban/unban
 - deterministic Input Quality Gate
 - grounded AI `answer | clarify | handoff`
 - reliable handoff acknowledgement fallback
 - editable Owner/Admin manuals
-
-## Human-control authority
-- Sudo/Admin may Take Over an AI conversation.
-- While human mode is active, user messages relay to Staff Inbox and AI must stay out.
-- Active claimant may Return to AI.
-- Bot Owner may Return to AI regardless of claimant identity.
-- Owner override must notify the displaced claimant and visibly record the transition in Staff Inbox.
-- Owner override does not resolve/delete historical cases automatically.
-
-## Telegram deployment / token rotation
-Every production deploy validates/deploys Worker, checks bindings + `/health`, performs nonce-gated `setWebhook` cutover/read-back using current bot token/webhook secret, then verifies exact Owner command registry 19/19.
-
-## Deployment online notice
-Owner is the authoritative deploy-notice recipient. Owner delivery failure releases the revision claim for retry; Sudo success cannot suppress an Owner retry. Notice failure never fails health.
 
 ## Command registry
 Public (4): `/start`, `/language`, `/faq`, `/whoami`.
@@ -95,20 +104,22 @@ Owner adds: `/sudo`, `/ai`, `/staff`, `/clearmessage`, `/ownermanual`, `/cancel`
 Command schema revision: **9**. Sudo total: **12**. Owner total: **19**.
 
 ## Migrations
-Current migrations: `0001` through `0027`.
+Current migrations: `0001` through `0028`.
 
 Newest migration:
-- `0027_manual_owner_takeover_override.sql` — documents Owner override semantics for Owner/Admin manuals
+- `0028_human_control_lease.sql` — persisted 1-hour takeover lease, rollout backfill, expiry index, Owner/Admin manual documentation.
 
 ## Validation boundary
-Do not call the newest Owner-override slice production-green until the production workflow passes and live Telegram acceptance confirms:
-1. Sudo/Admin takes over a normal user
-2. user messages are relayed under human control
-3. without the claimant returning control, Bot Owner presses `Return to AI`
-4. Owner action succeeds even though another Admin is claimant
-5. user receives localized AI-return notice
-6. previous claimant receives private override notification, or Staff Inbox fallback note if private DM is unavailable
-7. Staff Inbox topic shows the Owner-override transition
-8. next normal-user question proceeds through FAQ/AI again rather than remaining trapped in human mode
-9. case/question history remains intact
-10. existing FAQ, AI, handoff, limits/flood guard and manuals remain operational
+Do not call the newest lease slice production-green until production workflow + live Telegram acceptance confirms:
+1. typecheck, migration 0028, dry-run bundle, remote migration, deploy and health pass
+2. production deployment preserves the `*/5 * * * *` Cron trigger
+3. Sudo/Admin Take Over starts human mode
+4. `Extend 1h` works only for the active claimant
+5. claimant staff reply renews expiry another hour
+6. another Admin's activity does not renew the lease
+7. manual claimant Return to AI still works
+8. Owner override still works immediately and notifies displaced claimant
+9. an inactivity-expired test claim is auto-returned by scheduled sweep
+10. user receives localized auto-return notice and next question enters FAQ/AI
+11. previous claimant receives expiry notification or Staff Inbox fallback
+12. case/question/user history remains intact
