@@ -1,6 +1,7 @@
 import app from "./rate_limit_entry";
 import type { Language } from "./faq";
 import { checkInteractionFlood, interactionFloodMessage } from "./interaction_flood";
+import { sweepExpiredHumanControls } from "./human_control_lease";
 
 interface Env {
   APP_ENV: string;
@@ -116,5 +117,9 @@ export default {
       return handleWebhook(request, env);
     }
     return app.fetch(request, env);
+  },
+
+  async scheduled(_controller: ScheduledController, env: Env, _ctx: ExecutionContext): Promise<void> {
+    await sweepExpiredHumanControls(env);
   },
 };
