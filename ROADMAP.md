@@ -11,10 +11,12 @@ Production Telegram FAQ assistant for a university School of Nursing in Burmese,
 - relevant `main` pushes run `.github/workflows/deploy-production.yml`.
 
 ## Current checkpoint
-Status: **TWO-LAYER SPAM PROTECTION + USER LIMIT ADMIN CONTROLS IMPLEMENTED ON MAIN; PRODUCTION WORKFLOW VERIFICATION REQUIRED**.
+Status: **TWO-LAYER SPAM PROTECTION + FAQ-FIRST ONBOARDING + USER LIMIT ADMIN CONTROLS IMPLEMENTED ON MAIN; PRODUCTION WORKFLOW VERIFICATION REQUIRED**.
 
 Implemented/current:
 - public localized `/faq` library for normal users
+- FAQ-first onboarding after `/start` or `/language`: language selection → picker removal → localized confirmation promoting `/faq` → direct `📚 Browse FAQ` button
+- free-text inquiry explicitly positioned as the path for questions not covered by `/faq`
 - Owner/Sudo FAQ management
 - one-language multilingual FAQ authoring with Primary→Fallback AI draft generation
 - manual translation fallback and explicit `✅ Approve & Save`
@@ -30,6 +32,16 @@ Implemented/current:
 - inquiry blocked-warning throttled to at most once per 5 minutes
 - private Interaction Flood Guard for command/button/message spam
 - manuals and design rules synchronized with Exempt/Restrict semantics and flood protection
+
+## FAQ-first onboarding
+`/start` and `/language` open the existing one-shot language picker. After a language is saved:
+- delete the picker message
+- send one localized confirmation
+- tell the user to check `/faq` first for common questions
+- explain that free-text inquiry is for questions not covered there
+- show one localized `📚 Browse FAQ` inline button that opens the public FAQ list directly
+
+This UX intentionally steers common questions toward deterministic approved FAQ content before free-text/AI usage.
 
 ## Spam protection architecture
 Spam protection has two separate gates.
@@ -138,14 +150,16 @@ Do not declare this slice production-green until the latest production workflow 
 - exact 19-command Owner Telegram read-back
 
 Live acceptance after deploy:
-1. normal user sends 10 inquiries inside 10 min; next inquiry is blocked before AI/case creation
-2. cooldown message shows approximate remaining time and `/faq`
-3. repeated blocked free-text messages do not produce more than one warning per 5 minutes
-4. `/faq` remains usable while limited under the interaction flood threshold
-5. normal user exceeds 20 private interactions/60s → 5-minute flood block
-6. restricted/banned user exceeds 6 private interactions/60s → 5-minute flood block
-7. first flood block warns once; repeated blocked commands/callbacks/messages are silently dropped
-8. `/limits <test_user_id>` → `Exempt 1h` allows continued inquiry QA but does not bypass flood protection
-9. applying `Restrict 2h` removes active Exempt and blocks free-text inquiries
-10. Owner/Sudo can Unlock and Reset Strikes; Owner can confirm permanent ban/unban
-11. verify blocked inquiry/flood traffic did not create extra `/cases` records or AI calls
+1. `/start` or `/language` → choose MY/EN/ZH → old picker disappears → FAQ-first localized confirmation appears
+2. `📚 Browse FAQ` opens the public FAQ list directly
+3. normal user sends 10 inquiries inside 10 min; next inquiry is blocked before AI/case creation
+4. cooldown message shows approximate remaining time and `/faq`
+5. repeated blocked free-text messages do not produce more than one warning per 5 minutes
+6. `/faq` remains usable while limited under the interaction flood threshold
+7. normal user exceeds 20 private interactions/60s → 5-minute flood block
+8. restricted/banned user exceeds 6 private interactions/60s → 5-minute flood block
+9. first flood block warns once; repeated blocked commands/callbacks/messages are silently dropped
+10. `/limits <test_user_id>` → `Exempt 1h` allows continued inquiry QA but does not bypass flood protection
+11. applying `Restrict 2h` removes active Exempt and blocks free-text inquiries
+12. Owner/Sudo can Unlock and Reset Strikes; Owner can confirm permanent ban/unban
+13. verify blocked inquiry/flood traffic did not create extra `/cases` records or AI calls
