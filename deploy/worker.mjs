@@ -4461,6 +4461,78 @@ function monitoringBotHeader(kind = "faq") {
 }
 __name(monitoringBotHeader, "monitoringBotHeader");
 
+// src/monitoring_target.ts
+function topicTitle2(user) {
+  const name = [user.first_name, user.last_name].filter(Boolean).join(" ").trim() || "User";
+  const username = user.username ? ` \xB7 @${user.username}` : "";
+  return `${name}${username} \xB7 ID ${user.id}`.slice(0, 120);
+}
+__name(topicTitle2, "topicTitle");
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+__name(sleep, "sleep");
+async function refreshTopicTitle(telegramApi9, staffChatId, threadId, user) {
+  await telegramApi9("editForumTopic", {
+    chat_id: staffChatId,
+    message_thread_id: threadId,
+    name: topicTitle2(user)
+  });
+}
+__name(refreshTopicTitle, "refreshTopicTitle");
+async function ensureIsolatedMonitoringTarget(env, user, telegramApi9) {
+  if (!env.DB) return null;
+  const staffChatId = await getStaffInboxChatId(env.DB);
+  if (!staffChatId) return null;
+  const existing = await getMonitoringTopic(env.DB, user.id, staffChatId);
+  if (existing) {
+    await refreshTopicTitle(telegramApi9, staffChatId, existing, user);
+    return { chatId: staffChatId, threadId: existing };
+  }
+  await env.DB.prepare(
+    `DELETE FROM monitoring_topic_provision_locks
+     WHERE telegram_user_id=?1 AND staff_chat_id=?2
+       AND datetime(acquired_at) < datetime('now', '-30 seconds')`
+  ).bind(user.id, staffChatId).run();
+  const claim = await env.DB.prepare(
+    `INSERT OR IGNORE INTO monitoring_topic_provision_locks
+      (telegram_user_id, staff_chat_id, acquired_at)
+     VALUES (?1, ?2, CURRENT_TIMESTAMP)`
+  ).bind(user.id, staffChatId).run();
+  if ((claim.meta.changes ?? 0) !== 1) {
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      await sleep(125);
+      const provisioned = await getMonitoringTopic(env.DB, user.id, staffChatId);
+      if (provisioned) {
+        await refreshTopicTitle(telegramApi9, staffChatId, provisioned, user);
+        return { chatId: staffChatId, threadId: provisioned };
+      }
+    }
+    return null;
+  }
+  try {
+    const afterClaim = await getMonitoringTopic(env.DB, user.id, staffChatId);
+    if (afterClaim) {
+      await refreshTopicTitle(telegramApi9, staffChatId, afterClaim, user);
+      return { chatId: staffChatId, threadId: afterClaim };
+    }
+    const topic = await telegramApi9("createForumTopic", {
+      chat_id: staffChatId,
+      name: topicTitle2(user)
+    });
+    const threadId = Number(topic?.message_thread_id);
+    if (!Number.isSafeInteger(threadId)) return null;
+    await saveMonitoringTopic(env.DB, user.id, staffChatId, threadId);
+    return { chatId: staffChatId, threadId };
+  } finally {
+    await env.DB.prepare(
+      `DELETE FROM monitoring_topic_provision_locks
+       WHERE telegram_user_id=?1 AND staff_chat_id=?2`
+    ).bind(user.id, staffChatId).run();
+  }
+}
+__name(ensureIsolatedMonitoringTarget, "ensureIsolatedMonitoringTarget");
+
 // src/monitoring_message_entry.ts
 var HANDOFF_COPY3 = {
   my: "\u1012\u102E\u1019\u1031\u1038\u1001\u103D\u1014\u103A\u1038\u1000\u102D\u102F \u1021\u1010\u100A\u103A\u1015\u103C\u102F\u1011\u102C\u1038\u101E\u1031\u102C \u1021\u1001\u103B\u1000\u103A\u1021\u101C\u1000\u103A\u1019\u103B\u102C\u1038\u1016\u103C\u1004\u1037\u103A \u101A\u102F\u1036\u1000\u103C\u100A\u103A\u1005\u102D\u1010\u103A\u1001\u103B\u1005\u103D\u102C \u1019\u1016\u103C\u1031\u1014\u102D\u102F\u1004\u103A\u101E\u1031\u1038\u1015\u102B\u104B \u1019\u1031\u1038\u1001\u103D\u1014\u103A\u1038\u1000\u102D\u102F School of Nursing \u101D\u1014\u103A\u1011\u1019\u103A\u1038\u1019\u103B\u102C\u1038 \u1015\u103C\u1014\u103A\u101C\u100A\u103A\u1005\u1005\u103A\u1006\u1031\u1038\u1014\u102D\u102F\u1004\u103A\u101B\u1014\u103A \u101C\u103D\u103E\u1032\u1015\u102D\u102F\u1037\u1011\u102C\u1038\u1015\u102B\u101E\u100A\u103A\u104B",
@@ -4529,35 +4601,12 @@ async function hasInteractiveSession2(db, userId) {
   }
 }
 __name(hasInteractiveSession2, "hasInteractiveSession");
-function topicTitle2(user) {
-  const name = [user.first_name, user.last_name].filter(Boolean).join(" ").trim() || "User";
-  const username = user.username ? ` \xB7 @${user.username}` : "";
-  return `${name}${username} \xB7 ID ${user.id}`.slice(0, 120);
-}
-__name(topicTitle2, "topicTitle");
 async function ensureMonitoringTarget3(env, user) {
-  if (!env.DB) return null;
-  const staffChatId = await getStaffInboxChatId(env.DB);
-  if (!staffChatId) return null;
-  const existing = await getMonitoringTopic(env.DB, user.id, staffChatId);
-  if (existing) {
-    await telegramApi6(env, "editForumTopic", {
-      chat_id: staffChatId,
-      message_thread_id: existing,
-      name: topicTitle2(user)
-    });
-    return { chatId: staffChatId, threadId: existing };
-  }
-  const topic = await telegramApi6(env, "createForumTopic", {
-    chat_id: staffChatId,
-    name: topicTitle2(user)
-  });
-  const threadId = Number(topic?.message_thread_id);
-  if (Number.isSafeInteger(threadId)) {
-    await saveMonitoringTopic(env.DB, user.id, staffChatId, threadId);
-    return { chatId: staffChatId, threadId };
-  }
-  return { chatId: staffChatId };
+  return ensureIsolatedMonitoringTarget(
+    env,
+    user,
+    (method, body) => telegramApi6(env, method, body)
+  );
 }
 __name(ensureMonitoringTarget3, "ensureMonitoringTarget");
 async function mirrorRoutine3(env, user, header, text) {
@@ -4648,6 +4697,21 @@ async function humanHandoff3(env, message, language, questionId, reason) {
     staffChatId: destination?.chatId ?? null
   });
   if (!caseId || !destination) return;
+  if (destination.route === "group") {
+    const target = await ensureMonitoringTarget3(env, message.from);
+    if (!target) return;
+    const sent2 = await sendMessage5(
+      env,
+      target.chatId,
+      caseText3(caseId, message, language, destination.route, reason),
+      { inline_keyboard: [[{ text: "Take Over", callback_data: `case:claim:${caseId}` }]] },
+      { messageThreadId: target.threadId }
+    );
+    if (sent2?.message_id) {
+      await attachStaffMessage(env.DB, caseId, target.chatId, Number(sent2.message_id));
+    }
+    return;
+  }
   const sent = await sendMessage5(
     env,
     destination.chatId,
@@ -4733,78 +4797,6 @@ var monitoring_message_entry_default = {
     return staff_ux_entry_default.fetch(request, env);
   }
 };
-
-// src/monitoring_target.ts
-function topicTitle3(user) {
-  const name = [user.first_name, user.last_name].filter(Boolean).join(" ").trim() || "User";
-  const username = user.username ? ` \xB7 @${user.username}` : "";
-  return `${name}${username} \xB7 ID ${user.id}`.slice(0, 120);
-}
-__name(topicTitle3, "topicTitle");
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-__name(sleep, "sleep");
-async function refreshTopicTitle(telegramApi9, staffChatId, threadId, user) {
-  await telegramApi9("editForumTopic", {
-    chat_id: staffChatId,
-    message_thread_id: threadId,
-    name: topicTitle3(user)
-  });
-}
-__name(refreshTopicTitle, "refreshTopicTitle");
-async function ensureIsolatedMonitoringTarget(env, user, telegramApi9) {
-  if (!env.DB) return null;
-  const staffChatId = await getStaffInboxChatId(env.DB);
-  if (!staffChatId) return null;
-  const existing = await getMonitoringTopic(env.DB, user.id, staffChatId);
-  if (existing) {
-    await refreshTopicTitle(telegramApi9, staffChatId, existing, user);
-    return { chatId: staffChatId, threadId: existing };
-  }
-  await env.DB.prepare(
-    `DELETE FROM monitoring_topic_provision_locks
-     WHERE telegram_user_id=?1 AND staff_chat_id=?2
-       AND datetime(acquired_at) < datetime('now', '-30 seconds')`
-  ).bind(user.id, staffChatId).run();
-  const claim = await env.DB.prepare(
-    `INSERT OR IGNORE INTO monitoring_topic_provision_locks
-      (telegram_user_id, staff_chat_id, acquired_at)
-     VALUES (?1, ?2, CURRENT_TIMESTAMP)`
-  ).bind(user.id, staffChatId).run();
-  if ((claim.meta.changes ?? 0) !== 1) {
-    for (let attempt = 0; attempt < 8; attempt += 1) {
-      await sleep(125);
-      const provisioned = await getMonitoringTopic(env.DB, user.id, staffChatId);
-      if (provisioned) {
-        await refreshTopicTitle(telegramApi9, staffChatId, provisioned, user);
-        return { chatId: staffChatId, threadId: provisioned };
-      }
-    }
-    return null;
-  }
-  try {
-    const afterClaim = await getMonitoringTopic(env.DB, user.id, staffChatId);
-    if (afterClaim) {
-      await refreshTopicTitle(telegramApi9, staffChatId, afterClaim, user);
-      return { chatId: staffChatId, threadId: afterClaim };
-    }
-    const topic = await telegramApi9("createForumTopic", {
-      chat_id: staffChatId,
-      name: topicTitle3(user)
-    });
-    const threadId = Number(topic?.message_thread_id);
-    if (!Number.isSafeInteger(threadId)) return null;
-    await saveMonitoringTopic(env.DB, user.id, staffChatId, threadId);
-    return { chatId: staffChatId, threadId };
-  } finally {
-    await env.DB.prepare(
-      `DELETE FROM monitoring_topic_provision_locks
-       WHERE telegram_user_id=?1 AND staff_chat_id=?2`
-    ).bind(user.id, staffChatId).run();
-  }
-}
-__name(ensureIsolatedMonitoringTarget, "ensureIsolatedMonitoringTarget");
 
 // src/latest_return_entry.ts
 function json7(body, status = 200) {
