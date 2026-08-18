@@ -15,7 +15,7 @@ Read in order:
 Treat live repository plus verified Cloudflare/Telegram evidence as authoritative over remembered chat context.
 
 ## Current checkpoint
-Production infrastructure, operational data, Telegram webhook, Owner identity binding, AI provider setup and the main-only deployment pipeline are working. `/language` is visible for all users. The latest behavior slice connects Sudo Admin grants to Staff Inbox access and makes Staff Inbox group switching explicit in `/staff`.
+Production infrastructure, operational data, Telegram webhook, Owner identity binding, AI provider setup and the main-only deployment pipeline are working. `/language` is visible for all users. Sudo grants provision Staff Inbox access, Staff Inbox switching is explicit, and the latest slice adds Owner-only `/clearmessage` cleanup for the active Staff Inbox.
 
 ## Main-only operating model
 - `main` is the only active development/canonical/production branch.
@@ -52,16 +52,25 @@ On `/sudo revoke <telegram_user_id>`:
 - current implementation does not auto-kick an already joined user from the Telegram group; that remains a deliberate future policy choice
 
 ## Staff Inbox switching
-`/staff` in a Telegram group now exposes `Use / Switch to this Staff Inbox`.
-
-The panel displays whether:
-- this group is already active
-- another Staff Inbox is currently bound
-- no Staff Inbox exists yet
+`/staff` in a Telegram group exposes `Use / Switch to this Staff Inbox`.
 
 Switching replaces `staff_inbox_chat_id`, sets handoff routing to `group`, and sends all new handoff/monitoring traffic to the new group. Monitoring topic identity is keyed by both user and staff chat, so new group topics are isolated naturally. Old group messages/mappings remain historical and are no longer active routing targets.
 
-Deleting or leaving the old Telegram group is not required for the bot-side switch and remains an Owner-side Telegram action.
+## Staff Inbox message cleanup
+Wrangler now enters `src/clear_message_entry.ts`, which wraps the existing runtime.
+
+Migration `0011_group_message_cleanup.sql` creates `group_message_ledger` and records observed group message IDs without storing message bodies.
+
+Owner command `/clearmessage`:
+- works only in the active Staff Inbox group
+- requires explicit confirmation before deletion
+- uses Telegram `deleteMessages` in batches of at most 100 message IDs
+- recursively narrows failed batches so one undeletable ID does not prevent cleanup of the rest
+- attempts at most the newest 5,000 message IDs per cleanup
+- includes the command/confirmation range so normal successful cleanup leaves no extra status message in the group
+- reports truncation or undeletable IDs to the Owner privately
+
+Telegram Bot API deletion is limited to messages younger than 48 hours and requires the bot to have the appropriate delete-message administrator permission. The Bot API does not expose general chat-history retrieval, so messages that predate the ledger cannot be guaranteed to be discovered retroactively.
 
 ## Single production pipeline
 The production workflow performs:
@@ -76,7 +85,7 @@ The production workflow performs:
 - runtime-binding postflight
 - production health verification
 - one-time Owner command resync
-- exact Telegram read-back of all 13 Owner commands
+- exact Telegram read-back of all 14 Owner commands
 
 Required production runtime bindings include:
 - `DB` (`d1`)
@@ -104,9 +113,9 @@ Sudo Admin inherits public commands and adds:
 `/admin`, `/admins`, `/faq`, `/adminmanual`.
 
 Expected Owner menu:
-`/start`, `/language`, `/whoami`, `/admin`, `/admins`, `/faq`, `/adminmanual`, `/sudo`, `/ai`, `/staff`, `/ownermanual`, `/cancel`, `/reset`.
+`/start`, `/language`, `/whoami`, `/admin`, `/admins`, `/faq`, `/adminmanual`, `/sudo`, `/ai`, `/staff`, `/clearmessage`, `/ownermanual`, `/cancel`, `/reset`.
 
-`src/command_menu.ts` command schema revision is `3`. Production deployment verification expects exact Owner read-back of 13 commands.
+`src/command_menu.ts` command schema revision is `4`. Production deployment verification expects exact Owner read-back of 14 commands.
 
 ## Environment isolation
 Historical TEST and production used the same Telegram bot token, which previously allowed TEST health checks to send misleading deployment notices to the live Owner chat.
@@ -117,27 +126,27 @@ Canonical runtime suppresses deployment-online notices unless `APP_ENV === "prod
 `Dynamic FAQ -> Primary AI -> Fallback AI -> Human Handoff`
 
 ## Canonical Worker stack
-Wrangler entrypoint: `src/manual_entry.ts`
+Wrangler entrypoint: `src/clear_message_entry.ts`
 
-1. `manual_entry.ts` — Owner/Admin manuals + command sync
-2. `deployment_notice_entry.ts` — production-only notice + production ops endpoints
-3. `latest_return_entry.ts`
-4. `monitoring_message_entry.ts`
-5. `staff_ux_entry.ts` — Staff Inbox UX + Sudo-to-staff invite lifecycle
-6. `ux_entry.ts`
-7. `secure_entry.ts` — private Owner AI setup interception + setup error handling
-8. `runtime_entry.ts`
-9. `index.ts` — fallback + `/health`
+1. `clear_message_entry.ts` — Staff Inbox message ledger + Owner cleanup control
+2. `manual_entry.ts` — Owner/Admin manuals + command sync
+3. `deployment_notice_entry.ts` — production-only notice + production ops endpoints
+4. `latest_return_entry.ts`
+5. `monitoring_message_entry.ts`
+6. `staff_ux_entry.ts` — Staff Inbox UX + Sudo-to-staff invite lifecycle
+7. `ux_entry.ts`
+8. `secure_entry.ts` — private Owner AI setup interception + setup error handling
+9. `runtime_entry.ts`
+10. `index.ts` — fallback + `/health`
 
 ## Next exact sequence
-1. verify the production pipeline carrying the Sudo/Staff Inbox slice is green
-2. grant Sudo to a real user who has already started the bot and verify invite delivery
-3. verify the one-use private Staff Inbox join succeeds
-4. test Staff Inbox switching only when a replacement group is desired
-5. continue directly on `main`
+1. verify migration 0011 + `/clearmessage` production deployment green
+2. put a few disposable messages in the active Staff Inbox and run `/clearmessage`
+3. confirm deletion and verify bot `can_delete_messages` permission if any recent messages remain
+4. continue directly on `main`
 
 ## Current migrations
-0001 through 0010; canonical 0010 is `migrations/0010_manual_newline_cleanup.sql`.
+0001 through 0011; canonical 0011 is `migrations/0011_group_message_cleanup.sql`.
 
 ## Documentation rule
 After every meaningful runtime/deployment/architecture slice, update this file before stopping.
