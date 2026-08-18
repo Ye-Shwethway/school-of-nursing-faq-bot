@@ -1,0 +1,173 @@
+name: One-time PRODUCTION Telegram cutover
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cloudflare-production-telegram-cutover
+  cancel-in-progress: false
+
+jobs:
+  cutover:
+    name: Deploy current main and cut Telegram webhook to PRODUCTION
+    if: contains(github.event.head_commit.message, '[production-cutover]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: production
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      PRODUCTION_D1_DATABASE_ID: ${{ secrets.CLOUDFLARE_PRODUCTION_D1_DATABASE_ID }}
+      PRODUCTION_D1_DATABASE_NAME: school-of-nursing-faq-bot-prod-db
+      PRODUCTION_WORKER_NAME: school-of-nursing-faq-bot
+
+    steps:
+      - name: Checkout main source
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Verify Cloudflare deployment inputs
+        shell: bash
+        run: |
+          test -n "$CLOUDFLARE_API_TOKEN" || { echo "Missing CLOUDFLARE_API_TOKEN"; exit 1; }
+          test -n "$CLOUDFLARE_ACCOUNT_ID" || { echo "Missing CLOUDFLARE_ACCOUNT_ID"; exit 1; }
+          test -n "$PRODUCTION_D1_DATABASE_ID" || { echo "Missing CLOUDFLARE_PRODUCTION_D1_DATABASE_ID"; exit 1; }
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build isolated production Wrangler config
+        shell: bash
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+          const source = JSON.parse(fs.readFileSync('wrangler.jsonc', 'utf8'));
+          fs.writeFileSync('.wrangler.production.generated.json', JSON.stringify({
+            $schema: source.$schema,
+            name: process.env.PRODUCTION_WORKER_NAME,
+            main: source.main,
+            compatibility_date: source.compatibility_date,
+            workers_dev: true,
+            preview_urls: false,
+            vars: { APP_ENV: 'production' },
+            d1_databases: [{
+              binding: 'DB',
+              database_name: process.env.PRODUCTION_D1_DATABASE_NAME,
+              database_id: process.env.PRODUCTION_D1_DATABASE_ID,
+              migrations_dir: 'migrations'
+            }]
+          }, null, 2));
+          NODE
+
+      - name: Apply production migrations
+        run: npx wrangler d1 migrations apply DB --remote --config .wrangler.production.generated.json
+
+      - name: Deploy production cutover-capable Worker
+        run: npx wrangler deploy --config .wrangler.production.generated.json --var "APP_ENV:production" --var "DEPLOY_REVISION:${GITHUB_SHA}"
+
+      - name: Resolve production Worker URL
+        shell: bash
+        run: |
+          subdomain_json="$(curl --fail --silent --show-error --connect-timeout 10 --max-time 20 \
+            -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+            "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/workers/subdomain")"
+          ACCOUNT_SUBDOMAIN="$(node -e '
+            const body = JSON.parse(process.argv[1]);
+            if (body.success !== true || !body.result?.subdomain) process.exit(1);
+            process.stdout.write(body.result.subdomain);
+          ' "$subdomain_json")"
+          echo "PRODUCTION_ORIGIN=https://${PRODUCTION_WORKER_NAME}.${ACCOUNT_SUBDOMAIN}.workers.dev" >> "$GITHUB_ENV"
+
+      - name: Verify production health before cutover
+        shell: bash
+        run: |
+          response="$(curl --fail --silent --show-error --connect-timeout 10 --max-time 30 --retry 5 --retry-delay 2 "${PRODUCTION_ORIGIN}/health")"
+          echo "$response"
+          node -e '
+            const body = JSON.parse(process.argv[1]);
+            if (body.ok !== true || body.environment !== "production") process.exit(1);
+          ' "$response"
+
+      - name: Arm one-time production cutover nonce
+        shell: bash
+        run: |
+          CUTOVER_NONCE="$(node -e "process.stdout.write(require('crypto').randomBytes(32).toString('hex'))")"
+          echo "::add-mask::$CUTOVER_NONCE"
+          echo "CUTOVER_NONCE=$CUTOVER_NONCE" >> "$GITHUB_ENV"
+          payload="$(node -e '
+            process.stdout.write(JSON.stringify({
+              sql: `INSERT INTO bot_settings (setting_key, setting_value, updated_by, updated_at)
+                    VALUES (\"telegram_cutover_nonce\", ?1, 0, CURRENT_TIMESTAMP)
+                    ON CONFLICT(setting_key) DO UPDATE SET setting_value=excluded.setting_value, updated_by=0, updated_at=CURRENT_TIMESTAMP`,
+              params: [process.argv[1]],
+            }))
+          ' "$CUTOVER_NONCE")"
+          response="$(curl --fail --silent --show-error --connect-timeout 10 --max-time 30 \
+            -X POST \
+            -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+            -H "Content-Type: application/json" \
+            --data "$payload" \
+            "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/d1/database/${PRODUCTION_D1_DATABASE_ID}/query")"
+          node -e '
+            const body = JSON.parse(process.argv[1]);
+            if (body.success !== true) { console.error(body); process.exit(1); }
+          ' "$response"
+
+      - name: Cut Telegram webhook to PRODUCTION and verify read-back
+        shell: bash
+        run: |
+          response="$(curl --fail --silent --show-error --connect-timeout 10 --max-time 45 \
+            -X POST \
+            -H "X-Cutover-Nonce: ${CUTOVER_NONCE}" \
+            "${PRODUCTION_ORIGIN}/ops/telegram/cutover")"
+          echo "$response"
+          node -e '
+            const body = JSON.parse(process.argv[1]);
+            const expected = `${process.env.PRODUCTION_ORIGIN}/telegram/webhook`;
+            if (body.ok !== true || body.environment !== "production" || body.webhook_url !== expected) {
+              console.error("Unexpected cutover response", body);
+              process.exit(1);
+            }
+          ' "$response"
+
+      - name: Final production health check
+        shell: bash
+        run: |
+          response="$(curl --fail --silent --show-error --connect-timeout 10 --max-time 30 --retry 3 --retry-delay 2 "${PRODUCTION_ORIGIN}/health")"
+          echo "$response"
+          node -e '
+            const body = JSON.parse(process.argv[1]);
+            if (body.ok !== true || body.environment !== "production") process.exit(1);
+          ' "$response"
+
+      - name: Remove generated config
+        if: always()
+        run: rm -f .wrangler.production.generated.json
+
+      - name: Cutover summary
+        if: success()
+        run: |
+          {
+            echo "## Telegram PRODUCTION cutover"
+            echo ""
+            echo "- Production Worker deployed from main: PASS"
+            echo "- Production health before cutover: PASS"
+            echo "- One-time D1 nonce authorization: PASS"
+            echo "- Telegram setWebhook: PASS"
+            echo "- Telegram getWebhookInfo read-back: PASS"
+            echo "- Production command-scope refresh: requested"
+            echo "- Final production health: PASS"
+            echo ""
+            echo "Telegram user traffic now targets the PRODUCTION Worker."
+          } >> "$GITHUB_STEP_SUMMARY"
