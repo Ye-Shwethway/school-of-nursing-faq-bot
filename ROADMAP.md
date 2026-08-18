@@ -15,9 +15,9 @@ Production Telegram FAQ assistant for a university School of Nursing in Burmese,
 
 ## Current production checkpoint
 
-Status: **PRODUCTION LIVE; MAIN-ONLY PIPELINE ACTIVE; PUBLIC FAQ LIBRARY UX SLICE IMPLEMENTED**
+Status: **PRODUCTION LIVE; MAIN-ONLY PIPELINE ACTIVE; PUBLIC FAQ LIBRARY + NORMAL-USER COMMAND-SCOPE FIX IMPLEMENTED**
 
-Implemented and live/current:
+Implemented/current:
 
 - multilingual dynamic FAQ
 - public `/faq` command for normal users
@@ -25,6 +25,7 @@ Implemented and live/current:
 - localized FAQ labels using approved questions instead of internal slugs
 - paginated FAQ browsing with compact two-column rows only when labels are short
 - public FAQ detail view limited to the user's selected language
+- normal users inherit the global private-chat command scope; stale per-chat command overrides are removed during command-schema synchronization
 - visible `/language` for all users
 - Owner/Sudo roles and scoped command menus
 - encrypted configurable AI Primary/Fallback
@@ -42,17 +43,36 @@ Implemented and live/current:
 - editable/addable Owner/Admin manuals
 - Owner/Admin manuals updated for current staff operations
 - stale TEST deployment guidance removed from Owner manual
-- repository documentation reconciled to the main-only production architecture
 
 ## FAQ library UX
 
-`/faq` is now public. Normal users can browse only active FAQ entries and never receive Add/Edit/Disable/Restore controls, inactive entries, internal FAQ keys, or revision metadata.
+`/faq` is public. Normal users can browse only active FAQ entries and never receive Add/Edit/Disable/Restore controls, inactive entries, internal FAQ keys, or revision metadata.
 
-FAQ browsing uses the user's saved Burmese, English, or Simplified Chinese language. Lists are paginated at 8 items per page. Two compact labels may share a row; longer labels receive their own row. Callback navigation continues through the existing Telegram UX layer, which prefers edit-in-place and provides `✕ Close`.
+FAQ browsing uses the user's saved Burmese, English, or Simplified Chinese language. Lists are paginated at 8 items per page. Two compact labels may share a row; longer labels receive their own row. Callback navigation uses edit-in-place first and provides `✕ Close`.
 
 Owner/Sudo `/faq` remains the FAQ management entry point with Browse, Add, Inactive, Help, Edit, Disable, and Restore controls.
 
-No schema migration was required; the existing `faq_entries` data remains canonical.
+No schema migration was required; existing `faq_entries` data remains canonical.
+
+## Command registry
+
+Public (4):
+
+`/start`, `/language`, `/faq`, `/whoami`
+
+Sudo Admin additionally:
+
+`/admin`, `/admins`, `/adminmanual`, `/noti`, `/available`, `/unavailable`
+
+Owner additionally:
+
+`/sudo`, `/ai`, `/staff`, `/clearmessage`, `/ownermanual`, `/cancel`, `/reset`
+
+Expected Owner total remains **17**. Command schema revision: **7**.
+
+Normal users must not retain chat-specific command lists. `syncUserCommandScope()` clears a normal user's per-chat scope so Telegram falls back to the global `all_private_chats` public registry. Schema synchronization also removes stale overrides for already-known normal users, fixing command menus that were created before `/faq` became public.
+
+Privileged command ordering remains compatible with the production exact Owner read-back contract.
 
 ## Staff notifications and availability
 
@@ -64,8 +84,6 @@ Active Staff Inbox commands:
 - `/noti off` — keep messages/cases visible but send them silently
 - `/available` — mark current authorized staff available
 - `/unavailable` — mark current authorized staff unavailable
-
-These commands are accepted from Owner, Sudo Admins, and active staff inside the active Staff Inbox where server-side authorization/context checks pass.
 
 Active staff without an explicit presence row default to available until they mark unavailable.
 
@@ -81,18 +99,7 @@ Authorized staff can later reply inside that user's Staff Inbox topic. The bot m
 
 ## Returning unavailable staff prompt
 
-When an authorized staff member is still marked unavailable and later interacts with the bot privately, the bot checks for open escalation cases.
-
-If new pending cases exist since that staff member last acknowledged the reminder, it shows:
-
-- `✅ Mark me Available & Review`
-- `⏸ Stay Unavailable`
-
-The newest pending case ID is stored as a per-staff acknowledgement so the same pending set does not repeatedly generate reminders. A newly-created open case can trigger a fresh reminder.
-
-## Staff Inbox notification semantics
-
-`/noti off` is notification-only. It does not disable monitoring, delete messages, or discard escalation cases.
+When an authorized staff member is still marked unavailable and later interacts with the bot privately, the bot checks for open escalation cases. New pending cases can trigger the inline `Mark me Available & Review` / `Stay Unavailable` reminder, with per-staff acknowledgement preventing repeated spam for an unchanged pending set.
 
 ## Manuals
 
@@ -100,9 +107,6 @@ Manual storage/revision foundation:
 
 - `0009_manuals.sql`
 - `0010_manual_newline_cleanup.sql`
-
-Current manual sync migrations:
-
 - `0013_manual_staff_operations.sql`
 - `0014_manual_returning_staff_prompt.sql`
 - `0015_owner_manual_main_only_cleanup.sql`
@@ -123,40 +127,13 @@ Owner `/sudo grant <telegram_user_id>` grants Sudo authority, enables staff auth
 
 `/clearmessage` is Owner-only and best-effort. It must not be treated as a guaranteed full-history purge.
 
-## Command registry
-
-Public (4):
-
-`/start`, `/language`, `/faq`, `/whoami`
-
-Sudo Admin additionally:
-
-`/admin`, `/admins`, `/adminmanual`, `/noti`, `/available`, `/unavailable`
-
-Owner additionally:
-
-`/sudo`, `/ai`, `/staff`, `/clearmessage`, `/ownermanual`, `/cancel`, `/reset`
-
-Expected Owner total remains **17**. Command schema revision: **6**.
-
 ## Single production workflow
 
 Canonical workflow: `.github/workflows/deploy-production.yml`.
 
-Relevant `main` pushes perform:
+Relevant `main` pushes perform production binding preflight, install/typecheck, local migration validation, Worker dry-run, remote migrations, deploy, binding postflight, `/health`, nonce-gated Owner command resync, and exact 17-command Owner read-back.
 
-1. production credentials/runtime-binding preflight
-2. dependency install
-3. typecheck
-4. isolated production config generation
-5. local migration validation
-6. Worker dry-run validation
-7. remote production migrations
-8. production Worker deploy
-9. runtime-binding postflight
-10. production `/health`
-11. nonce-gated Owner command resync
-12. exact Telegram Owner command read-back
+The production `/health` path invokes command-registry synchronization, so command schema revision 7 applies the public registry and stale normal-user scope cleanup during deployment validation.
 
 ## Canonical Worker stack
 
@@ -180,15 +157,11 @@ Wrangler entrypoint: `src/staff_presence_entry.ts`.
 
 Latest canonical migration: `migrations/0015_owner_manual_main_only_cleanup.sql`.
 
-## Documentation checkpoint
-
-Repository docs were reconciled on 2026-08-18. Current docs describe the main-only production model and the role-aware public FAQ library. Retired TEST deployment/promote workflows are historical only and must not be reintroduced as active architecture.
-
 ## Next work
 
-No additional required feature slice is active after the public FAQ library UX change. Continue only from a new explicit product requirement or a verified production defect.
+No additional feature slice is active after the normal-user command-scope correction. Verify the public `/faq` command appears for an already-existing normal user after the production deployment completes; if Telegram client UI remains stale, reopen the bot chat/menu before treating it as a runtime defect.
 
-When new work begins, use the live repository and verified production evidence as authority, implement on `main` in small bounded slices, and update this file plus `NEW_CHAT_BOOTSTRAP.md` after meaningful changes.
+When new work begins, use live repository and verified production evidence as authority, implement on `main` in small bounded slices, and update this file plus `NEW_CHAT_BOOTSTRAP.md` after meaningful changes.
 
 ## Deferred validation / optional future work
 
