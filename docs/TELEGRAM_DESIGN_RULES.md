@@ -103,6 +103,23 @@ Order: `မြန်မာ` · `English` · `简体中文`.
 - Bot Owner manual `Return to AI` remains immediately available and takes precedence over waiting for lease expiry.
 - Existing human claims at the moment this feature is deployed receive a fresh full 1-hour lease rather than being expired immediately.
 
+### Staff availability timer and daily schedule
+- `/available` and `/unavailable` remain authorized-staff commands in the active Staff Inbox.
+- Plain `/available` means immediately available and clears any recurring availability schedule.
+- Plain `/unavailable` means unavailable indefinitely until the staff member explicitly changes state.
+- `/unavailable <hours>` creates a temporary unavailable override. Example: `/unavailable 3` means unavailable for three hours.
+- Temporary-unavailable durations may be fractional and are capped at 168 hours.
+- When a temporary override expires and no recurring schedule exists, the staff member returns to available automatically.
+- If a recurring daily schedule exists, temporary unavailable overrides it only until expiry; after expiry, effective state returns to the recurring schedule.
+- `/available <start> <end>` creates a recurring daily availability window using **Asia/Yangon (UTC+06:30)**.
+- Accept 24-hour forms such as `/available 09:00 17:00` and 12-hour aliases such as `/available 9am 5pm` or `/available 9:30am 5:30pm`.
+- Overnight windows such as `/available 20:00 08:00` are valid.
+- Start and end times must differ.
+- Effective staff counts must respect temporary-unavailable overrides and recurring schedules, not only the stored legacy boolean.
+- Existing 5-minute Cloudflare Cron applies expiry/schedule transitions, so persisted state may update within 0–5 minutes of the boundary; availability queries should calculate the effective state immediately.
+- A staff reply may clear a temporary-unavailable override because it proves the staff member is actively responding, but it must not silently destroy a recurring daily schedule.
+- Scheduled off-hours must not trigger the old “become available now?” return prompt, because that would undermine the recurring schedule.
+
 ## Input quality and false escalation
 - Before normal FAQ/AI/handoff processing, obvious low-information private text must pass an Input Quality Gate.
 - Obvious low-information examples include numbers-only input, punctuation/symbol-only input, single-character noise, URL-only input, username-only input, phone-number-only input, repeated-character garbage, and acknowledgement-only text such as `ok`/`yes` when no usable question is present.
