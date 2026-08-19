@@ -1,6 +1,9 @@
 import app from "./input_quality_entry";
 import { consumeFaqAdminText, handleFaqCallback, type FaqUiResponse } from "./faq_admin";
 import { notifyFaqChange } from "./faq_notify";
+import { findFaqDynamic } from "./faq_store";
+import { getConversationControl } from "./monitoring";
+import type { Language } from "./faq";
 
 interface Env {
   APP_ENV: string;
@@ -35,6 +38,10 @@ function json(body: unknown, status = 200): Response {
   });
 }
 
+function isPrivate(message: TelegramMessage): boolean {
+  return Boolean(message.from && (message.chat.type === "private" || message.chat.id === message.from.id));
+}
+
 async function telegramApi(env: Env, method: string, body: unknown): Promise<any | null> {
   if (!env.TELEGRAM_BOT_TOKEN) return null;
   try {
@@ -56,7 +63,7 @@ async function sendMessage(
   chatId: number,
   text: string,
   keyboard?: unknown,
-  options?: { disableNotification?: boolean; messageThreadId?: number },
+  options?: { disableNotification?: boolean; messageThreadId?: number; replyToMessageId?: number },
 ): Promise<any | null> {
   return telegramApi(env, "sendMessage", {
     chat_id: chatId,
@@ -64,6 +71,7 @@ async function sendMessage(
     reply_markup: keyboard,
     disable_notification: options?.disableNotification,
     message_thread_id: options?.messageThreadId,
+    reply_parameters: options?.replyToMessageId ? { message_id: options.replyToMessageId } : undefined,
   });
 }
 
@@ -99,6 +107,68 @@ async function activeFaqDraftState(db: D1Database | undefined, userId: number): 
     return row?.state ?? null;
   } catch {
     return null;
+  }
+}
+
+async function hasInteractiveSession(db: D1Database | undefined, userId: number): Promise<boolean> {
+  if (!db) return false;
+  try {
+    const row = await db.prepare(
+      `SELECT state FROM admin_sessions WHERE telegram_user_id=?1`,
+    ).bind(userId).first<{ state: string }>();
+    return Boolean(row?.state);
+  } catch {
+    return false;
+  }
+}
+
+async function userLanguage(db: D1Database, userId: number): Promise<Language | null> {
+  const row = await db.prepare(
+    `SELECT language FROM users WHERE telegram_user_id=?1`,
+  ).bind(userId).first<{ language: string | null }>();
+  return row?.language === "my" || row?.language === "en" || row?.language === "zh"
+    ? row.language
+    : null;
+}
+
+async function serveDynamicFaqFastPath(env: Env, message: TelegramMessage): Promise<boolean> {
+  if (!env.DB || !message.from || !message.text || !isPrivate(message)) return false;
+  const text = message.text.trim();
+  if (!text || text.startsWith("/") || await hasInteractiveSession(env.DB, message.from.id)) return false;
+
+  try {
+    const control = await getConversationControl(env.DB, message.from.id);
+    if (control.mode === "human") return false;
+
+    const language = await userLanguage(env.DB, message.from.id);
+    if (!language) return false;
+    const faq = await findFaqDynamic(env.DB, text, language);
+    if (!faq) return false;
+
+    await env.DB.prepare(
+      `INSERT INTO questions
+        (telegram_user_id, chat_id, message_id, question, language, resolution, matched_faq_key, answer_source)
+       VALUES (?1, ?2, ?3, ?4, ?5, 'answered', ?6, 'canonical_faq')`,
+    ).bind(
+      message.from.id,
+      message.chat.id,
+      message.message_id,
+      text,
+      language,
+      faq.key,
+    ).run();
+
+    await sendMessage(
+      env,
+      message.chat.id,
+      faq.answer[language],
+      undefined,
+      { replyToMessageId: message.message_id },
+    );
+    return true;
+  } catch {
+    // On transient D1 failure, preserve the existing lower fallback path.
+    return false;
   }
 }
 
@@ -169,6 +239,8 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
     } catch {
       // Let the canonical lower stack handle non-authoring messages or transient failures.
     }
+
+    if (message && await serveDynamicFaqFastPath(env, message)) return json({ ok: true });
   }
 
   return app.fetch(request, env);
