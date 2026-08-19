@@ -14,55 +14,67 @@ Historical branch: `test` (dormant/reference-only)
 Live repository plus verified production evidence outranks remembered chat context.
 
 ## Current checkpoint
-Main-only production Telegram FAQ assistant. FAQ and Human Staff are the primary continuity paths; grounded AI is supplementary.
+Main-only production Telegram FAQ assistant. FAQ and Human Staff are primary continuity; grounded AI is supplementary.
 
 Staff recurring availability schedule/manual override is live-accepted.
 
-Latest unresolved production issue: Owner/Admin FAQ mutations appeared updated to operators, but normal users still observed older FAQ wording through both `/faq` and free-text. The first free-text-only fix was insufficient.
+Newest unresolved/live-validation item is FAQ integrity recovery. Production evidence showed the live `official-info-channel` row itself was corrupted at Version 8: `MY A` contained `/faq`, while other fields contained nested rendered FAQ-management text. This was not multiple live FAQ rows being shown.
 
-Newest `main` slice therefore centralizes every Telegram FAQ surface on one live D1 runtime path and forbids stale static FAQ fallback. Do not call this newest slice live-accepted until Telegram verification succeeds.
+Newest `main` slice adds prevention plus Owner recovery. Do not call it live-accepted until repair + fresh public verification succeed.
+
+## Confirmed corruption mechanism
+Legacy lower FAQ handling could invoke `consumeFaqAdminText()` before normal command routing. If an authorized Admin was waiting for an FAQ field value and sent `/faq`, that command could be treated as text and saved to the field. This explains the observed `MY A: /faq` exactly.
+
+The older store also accepted arbitrary field text without a final structural integrity check, so rendered FAQ-management blocks could become nested canonical field content.
 
 ## FAQ live/current/history model
 - `faq_entries` = one current published row per stable `faq_key`
 - `faq_key` is PRIMARY KEY
-- approved edits overwrite current row and increment `version`
-- `faq_revisions` separately archives before/after JSON for audit/history/recovery
-- archived revisions are not public FAQ rows and are never selected for normal-user answers
-- old revisions should not be deleted merely to make the current FAQ visible
-- `src/faq.ts` is seed/bootstrap data only after D1 is established
+- approved edits overwrite the current row and increment `version`
+- `faq_revisions` separately archives before/after JSON snapshots
+- archived revisions are history/recovery only, never normal-user answer rows
+- deleting revision history is not the fix for stale/corrupt current content
 
-Migration `0005_dynamic_faq.sql` already provides this current-row + revision-history structure. No new schema migration is required for the latest runtime fix.
+## Integrity prevention
+`src/faq_store.ts` now rejects canonical create/update when any multilingual question/answer contains:
+- a command-only value such as `/faq` or `/start`
+- multiple rendered FAQ-card markers such as `FAQ ·`, `Key:`, `Version:`, `MY Q:`, `MY A:`, `EN Q:`, `EN A:`, `ZH Q:`, `ZH A:`
+- draft-preview control text
 
-## Authoritative FAQ runtime owner
-`src/faq_ai_entry.ts` now intercepts FAQ interaction before lower legacy layers and owns:
-1. `/faq` command for all roles
-2. all `faq:*` callbacks
-3. FAQ draft generate/approve/edit flows
-4. authorized FAQ authoring text
-5. normal-user deterministic free-text matching
+The validator sits at the store boundary, so individual edits, manual translations, and AI-generated drafts all pass through the same final guard.
 
-It routes UI through the existing `handleFaqCommand` / `handleFaqCallback` and all knowledge reads through `faq_store` / D1.
+Dynamic deterministic matching and grounded AI context skip rows that fail integrity validation.
 
-### Fail-closed rule
-A successfully-read D1 FAQ answer is authoritative and terminal.
+`src/faq_ai_entry.ts` remains the authoritative FAQ router and prevents slash commands from becoming FAQ authoring values through lower legacy wrappers.
 
-If live D1 FAQ access fails:
-- do not answer from static seed content
-- `/faq` and FAQ callbacks return a temporary-unavailable response/alert
-- deterministic FAQ path returns temporary-unavailable rather than stale policy knowledge
-- question logging is best-effort and cannot suppress an otherwise valid D1 FAQ answer
+## Owner recovery
+Owner-only maintenance subcommand: `/faq repair`.
 
-## FAQ write path
-`updateFaq/createFaq` already:
-- writes current D1 entry
-- increments version on update
-- reads saved row back before returning success
-- archives before/after state in `faq_revisions`
+Behavior:
+1. scan current live rows
+2. act only on rows detected as structurally corrupt
+3. search `faq_revisions` newest-first for the latest clean same-key snapshot
+4. restore that content as a new live version
+5. preserve the corrupt version and all historical revisions
+6. append the repair itself as another before/after revision
+7. report any key with no recoverable clean snapshot as `Needs manual review`
 
-Operator notification is based on the mutation result. For acceptance, always reopen Browse from scratch after saving; do not treat notification text alone as proof of the public live row.
+No static FAQ answer is silently substituted during normal user traffic.
+
+Migration `0035_manual_faq_integrity_recovery.sql` adds Owner/Admin manual guidance.
+
+## Single FAQ runtime owner
+`src/faq_ai_entry.ts` owns:
+- `/faq` for all roles
+- all `faq:*` callbacks
+- FAQ authoring text/actions
+- `/faq repair`
+- normal-user deterministic D1 FAQ fast path
+
+D1 `faq_entries` is the live source. `src/faq.ts` is seed/bootstrap only once D1 exists.
 
 ## Manual navigation
-Long Owner/Admin manuals include First/Last direct jump buttons in addition to Previous/Next. This earlier slice remains pending explicit Telegram acceptance unless separately confirmed.
+Long Owner/Admin manuals include Previous/Next plus First/Last jumps.
 
 ## Staff availability durable contract
 Timezone: Asia/Yangon / UTC+06:30.
@@ -73,11 +85,9 @@ Timezone: Asia/Yangon / UTC+06:30.
 - private mutations mirror to Staff Inbox
 - automatic effective transitions declare to private + Staff Inbox
 
-Migration `0034_staff_manual_schedule_override.sql` persists schedule-aware overrides. Cron remains `*/5 * * * *`.
-
 ## Migrations / commands
-Current migration range remains `0001` through `0034`.
-Command schema revision remains 11. Public 4; Sudo 12; Owner 19.
+Current migration range: `0001` through `0035`.
+Registered command schema revision remains 11. Public 4; Sudo 12; Owner 19. `/faq repair` is a maintenance subcommand under `/faq`, not a new registered menu command.
 
 ## Other durable contracts
 - Human Staff continuity remains available when AI is down
@@ -88,14 +98,16 @@ Command schema revision remains 11. Public 4; Sudo 12; Owner 19.
 
 ## Next exact FAQ validation
 After production workflow green:
-1. open an existing FAQ in Owner/Admin Browse and record key/version/current wording
-2. edit + approve it and confirm version increments
-3. close FAQ UI completely, reopen `/faq`, browse from scratch as Owner/Admin, and verify saved wording
-4. on a normal account open `/faq` from scratch and verify the exact same current wording
-5. ask the matching question as free text and verify the exact same D1 answer
-6. confirm old seed wording does not appear anywhere
-7. verify an FAQ miss still proceeds to AI/human fallback
-8. controlled live-store failure, if tested, must show temporary-unavailable rather than static seed content
+1. Owner sends `/faq repair` privately.
+2. Save the repair report.
+3. Reopen `official-info-channel` through Owner/Admin Browse from scratch.
+4. Confirm `/faq` and nested `FAQ · / Key: / Version:` blocks are no longer canonical field values.
+5. Confirm the repaired FAQ becomes a new higher live version; history is not rewound/deleted.
+6. Open the same FAQ from a normal account via `/faq`; wording must match Owner/Admin fresh Browse.
+7. Ask a deterministic matching free-text question; answer must match the same current D1 row.
+8. Begin an FAQ field edit and send `/faq`; verify the command navigates/restarts rather than becoming the field value.
+9. Try to submit a copied rendered FAQ management block; verify it is rejected.
+10. FAQ miss still goes to grounded AI/human fallback.
 
 ## Documentation rule
-After behavior/schema/deployment work, keep ROADMAP, this file, and relevant manuals/design rules synchronized with repository reality.
+After behavior/schema/deployment work, keep ROADMAP, this file, FAQ content policy, and relevant manuals synchronized with repository reality.
