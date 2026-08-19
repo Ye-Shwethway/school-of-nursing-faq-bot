@@ -32,6 +32,11 @@ type TelegramCallbackQuery = {
 type TelegramUpdate = { message?: TelegramMessage; callback_query?: TelegramCallbackQuery };
 type InlineKeyboard = { inline_keyboard: Array<Array<{ text: string; callback_data?: string; url?: string }>> };
 
+type FaqEditContext = {
+  key: string;
+  liveVersion: number | null;
+};
+
 const FAQ_STORAGE_UNAVAILABLE: Record<Language, string> = {
   my: "FAQ အချက်အလက်များကို လောလောဆယ် မဖတ်နိုင်သေးပါ။ ခဏနောက် ပြန်စမ်းကြည့်ပါ။ အဟောင်း FAQ အချက်အလက်ကို အစားထိုးပြသမည်မဟုတ်ပါ။",
   en: "FAQ data is temporarily unavailable. Please try again shortly. The bot will not substitute older FAQ content.",
@@ -67,6 +72,18 @@ function withClose(keyboard?: unknown): InlineKeyboard | undefined {
   const rows = [...(keyboard as InlineKeyboard).inline_keyboard];
   if (!rows.some((row) => row.some((button) => button.callback_data === "ui:close"))) {
     rows.push([{ text: "✕ Close", callback_data: "ui:close" }]);
+  }
+  return { inline_keyboard: rows };
+}
+
+function withCancelEdit(keyboard?: unknown): InlineKeyboard {
+  const rows = keyboard && typeof keyboard === "object" && Array.isArray((keyboard as InlineKeyboard).inline_keyboard)
+    ? [...(keyboard as InlineKeyboard).inline_keyboard]
+    : [];
+  const alreadyCancelable = rows.some((row) => row.some((button) =>
+    button.callback_data === "faq:editcancel" || button.callback_data === "faq:draft:discard"));
+  if (!alreadyCancelable) {
+    rows.push([{ text: "✕ Cancel Edit", callback_data: "faq:editcancel" }]);
   }
   return { inline_keyboard: rows };
 }
@@ -137,6 +154,51 @@ async function activeFaqSession(db: D1Database | undefined, userId: number): Pro
   } catch {
     return null;
   }
+}
+
+async function activeFaqEditContext(db: D1Database | undefined, userId: number): Promise<FaqEditContext | null> {
+  if (!db) return null;
+  try {
+    const row = await db.prepare(
+      `SELECT state, provider, payload FROM admin_sessions
+       WHERE telegram_user_id=?1 AND (state LIKE 'faq_%' OR state LIKE 'awaiting_faq_%')`,
+    ).bind(userId).first<{ state: string; provider: string | null; payload: string | null }>();
+    if (!row) return null;
+
+    let key: string | null = null;
+    if (row.state === "awaiting_faq_edit_value") {
+      key = row.provider?.trim() || null;
+    } else if (row.payload) {
+      try {
+        const payload = JSON.parse(row.payload) as { mode?: string; key?: string };
+        if (payload.mode === "edit" && typeof payload.key === "string") key = payload.key.trim();
+      } catch {
+        return null;
+      }
+    }
+    if (!key) return null;
+
+    const live = await db.prepare(`SELECT version FROM faq_entries WHERE faq_key=?1`).bind(key).first<{ version: number }>();
+    return { key, liveVersion: Number.isFinite(live?.version) ? Number(live?.version) : null };
+  } catch {
+    return null;
+  }
+}
+
+async function decorateFaqEditResponse(
+  db: D1Database | undefined,
+  userId: number,
+  result: FaqUiResponse,
+): Promise<FaqUiResponse> {
+  const context = await activeFaqEditContext(db, userId);
+  if (!context) return result;
+  const liveLabel = context.liveVersion === null ? "the current live version" : `live v${context.liveVersion}`;
+  const status = `Draft only · ${liveLabel} remains unchanged until Approve & Save.`;
+  return {
+    ...result,
+    text: result.text && !result.text.includes("Draft only ·") ? `${result.text}\n\n${status}` : result.text,
+    keyboard: withCancelEdit(result.keyboard),
+  };
 }
 
 async function clearFaqSession(db: D1Database | undefined, userId: number): Promise<void> {
@@ -257,13 +319,31 @@ async function handleFaqSurface(env: Env, update: TelegramUpdate): Promise<boole
   const callback = update.callback_query;
   if (callback?.data?.startsWith("faq:")) {
     try {
-      const result = await handleFaqCallback(
+      if (callback.data === "faq:editcancel") {
+        const context = await activeFaqEditContext(env.DB, callback.from.id);
+        await clearFaqSession(env.DB, callback.from.id);
+        await telegramApi(env, "answerCallbackQuery", { callback_query_id: callback.id, text: "FAQ edit cancelled" });
+        if (callback.message) {
+          await editOrSend(
+            env,
+            callback.message,
+            context
+              ? `FAQ edit cancelled: ${context.key}\nLive FAQ content was not changed.`
+              : "No FAQ edit is currently active.",
+            withClose({ inline_keyboard: [[{ text: "← FAQ Management", callback_data: "faq:menu" }]] }),
+          );
+        }
+        return true;
+      }
+
+      let result = await handleFaqCallback(
         env.DB,
         callback.from.id,
         env.BOT_OWNER_TELEGRAM_ID,
         callback.data,
         { DB: env.DB, AI_CONFIG_MASTER_KEY: env.AI_CONFIG_MASTER_KEY },
       );
+      result = await decorateFaqEditResponse(env.DB, callback.from.id, result);
       await telegramApi(env, "answerCallbackQuery", { callback_query_id: callback.id });
       if (callback.message && result.text) {
         await editOrSend(env, callback.message, result.text, withClose(result.keyboard));
@@ -328,13 +408,14 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
   // Only ordinary text is intercepted for FAQ authoring.
   if (message?.from && text && !text.startsWith("/")) {
     try {
-      const result = await consumeFaqAdminText(
+      let result = await consumeFaqAdminText(
         env.DB,
         message.from.id,
         env.BOT_OWNER_TELEGRAM_ID,
         text,
       );
       if (result.handled) {
+        result = await decorateFaqEditResponse(env.DB, message.from.id, result);
         if (result.text) {
           await sendMessage(
             env,
