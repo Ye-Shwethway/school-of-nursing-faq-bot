@@ -17,6 +17,13 @@ export type FaqMutationResult = {
   before: StoredFaqEntry | null;
 };
 
+export type FaqRepairResult = {
+  key: string;
+  corruptVersion: number;
+  restoredFromVersion: number;
+  newVersion: number;
+};
+
 const normalize = (value: string) =>
   value
     .toLocaleLowerCase()
@@ -24,6 +31,46 @@ const normalize = (value: string) =>
     .replace(/[.,!?;:()\[\]{}'\"“”‘’၊။—–_-]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+
+const ADMIN_CARD_MARKERS = [
+  "FAQ ·",
+  "Key:",
+  "Version:",
+  "MY Q:",
+  "MY A:",
+  "EN Q:",
+  "EN A:",
+  "ZH Q:",
+  "ZH A:",
+];
+
+function suspiciousFaqValue(value: string): string | null {
+  const trimmed = value.trim();
+  if (!trimmed) return "FAQ question/answer cannot be empty";
+  if (/^\/[a-z0-9_]+(?:@[a-z0-9_]+)?$/i.test(trimmed)) {
+    return "Telegram command text cannot be saved as FAQ content";
+  }
+  const markerCount = ADMIN_CARD_MARKERS.filter((marker) => trimmed.includes(marker)).length;
+  if (markerCount >= 3 || trimmed.includes("Nothing becomes canonical until Approve & Save is pressed.")) {
+    return "Rendered FAQ management text cannot be saved as FAQ content";
+  }
+  return null;
+}
+
+export function faqContentValidationError(entry: Pick<FaqEntry, "question" | "answer">): string | null {
+  for (const language of ["my", "en", "zh"] as Language[]) {
+    const questionError = suspiciousFaqValue(entry.question[language]);
+    if (questionError) return `${language.toUpperCase()} question: ${questionError}`;
+    const answerError = suspiciousFaqValue(entry.answer[language]);
+    if (answerError) return `${language.toUpperCase()} answer: ${answerError}`;
+  }
+  return null;
+}
+
+function assertValidFaqContent(entry: Pick<FaqEntry, "question" | "answer">): void {
+  const error = faqContentValidationError(entry);
+  if (error) throw new Error(`FAQ content rejected: ${error}`);
+}
 
 function parseKeywords(raw: string | null): string[] {
   if (!raw) return [];
@@ -69,6 +116,17 @@ function rowToFaq(row: {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
+}
+
+function parseRevisionSnapshot(raw: string | null, key: string): StoredFaqEntry | null {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as StoredFaqEntry;
+    if (!parsed || parsed.key !== key || !parsed.question || !parsed.answer || !parsed.keywords) return null;
+    return faqContentValidationError(parsed) ? null : parsed;
+  } catch {
+    return null;
+  }
 }
 
 const SELECT_FIELDS = `faq_key, question_my, answer_my, question_en, answer_en, question_zh, answer_zh,
@@ -137,6 +195,7 @@ export async function findFaqDynamic(
   const entries = await listFaqs(db, false);
   let best: { entry: StoredFaqEntry; score: number } | null = null;
   for (const entry of entries) {
+    if (faqContentValidationError(entry)) continue;
     const score = scoreEntry(entry, input, language);
     if (!best || score > best.score) best = { entry, score };
   }
@@ -144,7 +203,7 @@ export async function findFaqDynamic(
 }
 
 export async function buildApprovedFaqContext(db: D1Database): Promise<string> {
-  const entries = await listFaqs(db, false);
+  const entries = (await listFaqs(db, false)).filter((entry) => !faqContentValidationError(entry));
   return entries.map((entry) => [
     `[FAQ:${entry.key}; version:${entry.version}]`,
     `MY Q: ${entry.question.my}`,
@@ -181,6 +240,7 @@ export async function createFaq(
   actorId: number,
   entry: FaqEntry,
 ): Promise<FaqMutationResult> {
+  assertValidFaqContent(entry);
   await ensureFaqSeeded(db);
   const existing = await getFaq(db, entry.key);
   if (existing) throw new Error("FAQ key already exists");
@@ -225,6 +285,7 @@ export async function updateFaq(
     answer: patch.answer ?? before.answer,
     keywords: patch.keywords ?? before.keywords,
   };
+  assertValidFaqContent(next);
 
   await db.prepare(
     `UPDATE faq_entries SET
@@ -271,4 +332,85 @@ export async function setFaqActive(
   if (!updated) throw new Error("FAQ state verification failed");
   await writeRevision(db, key, action, before, updated, actorId);
   return { action, entry: updated, before };
+}
+
+export async function repairCorruptedFaqs(
+  db: D1Database,
+  actorId: number,
+): Promise<{ repaired: FaqRepairResult[]; unrecoverable: string[] }> {
+  const currentEntries = await listFaqs(db, true);
+  const repaired: FaqRepairResult[] = [];
+  const unrecoverable: string[] = [];
+
+  for (const current of currentEntries) {
+    if (!faqContentValidationError(current)) continue;
+
+    const revisions = await db.prepare(
+      `SELECT before_json, after_json FROM faq_revisions
+       WHERE faq_key=?1 ORDER BY id DESC`,
+    ).bind(current.key).all<{ before_json: string | null; after_json: string | null }>();
+
+    let snapshot: StoredFaqEntry | null = null;
+    for (const revision of revisions.results ?? []) {
+      snapshot = parseRevisionSnapshot(revision.after_json, current.key)
+        ?? parseRevisionSnapshot(revision.before_json, current.key);
+      if (snapshot) break;
+    }
+
+    if (!snapshot) {
+      const seed = FAQS.find((entry) => entry.key === current.key);
+      if (seed && !faqContentValidationError(seed)) {
+        snapshot = {
+          ...seed,
+          active: true,
+          version: 1,
+          createdBy: null,
+          updatedBy: null,
+          createdAt: current.createdAt,
+          updatedAt: current.updatedAt,
+        };
+      }
+    }
+
+    if (!snapshot) {
+      unrecoverable.push(current.key);
+      continue;
+    }
+
+    await db.prepare(
+      `UPDATE faq_entries SET
+         question_my=?2, answer_my=?3, question_en=?4, answer_en=?5, question_zh=?6, answer_zh=?7,
+         keywords_my=?8, keywords_en=?9, keywords_zh=?10, active=?11,
+         version=version+1, updated_by=?12, updated_at=CURRENT_TIMESTAMP
+       WHERE faq_key=?1`,
+    ).bind(
+      current.key,
+      snapshot.question.my,
+      snapshot.answer.my,
+      snapshot.question.en,
+      snapshot.answer.en,
+      snapshot.question.zh,
+      snapshot.answer.zh,
+      JSON.stringify(snapshot.keywords.my),
+      JSON.stringify(snapshot.keywords.en),
+      JSON.stringify(snapshot.keywords.zh),
+      snapshot.active ? 1 : 0,
+      actorId,
+    ).run();
+
+    const after = await getFaq(db, current.key);
+    if (!after) {
+      unrecoverable.push(current.key);
+      continue;
+    }
+    await writeRevision(db, current.key, "update", current, after, actorId);
+    repaired.push({
+      key: current.key,
+      corruptVersion: current.version,
+      restoredFromVersion: snapshot.version,
+      newVersion: after.version,
+    });
+  }
+
+  return { repaired, unrecoverable };
 }
