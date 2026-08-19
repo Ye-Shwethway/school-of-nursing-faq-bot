@@ -11,61 +11,65 @@ Production Telegram FAQ assistant for a university School of Nursing in Burmese,
 - relevant main pushes run the production workflow.
 
 ## Current checkpoint
-The recurring staff availability schedule/manual-override behavior is live-accepted by Creator.
+Staff recurring availability schedule/manual override is live-accepted.
 
-A deeper FAQ consistency issue was reported after the first stale-read fix: normal users could still see older FAQ wording through `/faq` and free-text even though Owner/Admin mutation results showed the newer content.
+A production FAQ integrity incident is now understood more precisely. The live FAQ row itself became corrupted: for example `official-info-channel` reached Version 8 with `MY A: /faq` and rendered FAQ management text nested inside other language fields. This was not multiple live DB versions being displayed.
 
-Newest `main` slice hardens FAQ architecture around a **single live D1 source and one authoritative Telegram FAQ router**. Production/live acceptance is required before calling this fixed.
+Confirmed cause for command corruption: a legacy FAQ edit path could call `consumeFaqAdminText()` before command routing, so an Admin waiting for an FAQ field value could send `/faq` and have that command saved as the field value. The store also lacked a final integrity validator capable of rejecting rendered management-card text.
 
-The earlier manual First/Last pagination slice remains pending explicit Telegram acceptance unless separately confirmed.
+Newest `main` slice adds store-level prevention plus Owner recovery from revision history. Production/live acceptance is required.
 
 ## FAQ current-row and archive contract
 - D1 `faq_entries` is the only live canonical FAQ store.
-- `faq_key` is the primary key, so one current published row exists per FAQ key.
+- `faq_key` is PRIMARY KEY: one current published row per FAQ key.
 - approved update overwrites that current row and increments `version`.
-- old versions are preserved separately in `faq_revisions.before_json/after_json` for audit/history/recovery.
-- `faq_revisions` is never a public answer source and old revisions do not need deletion to expose the current version.
-- `src/faq.ts` is initial seed/bootstrap data only, not a production answer source after D1 exists.
+- `faq_revisions.before_json/after_json` separately stores historical snapshots for audit/recovery.
+- old revisions are not duplicate public FAQ rows and must not be deleted to expose current content.
+- `src/faq.ts` is seed/bootstrap data, not normal production answer traffic after D1 exists.
+
+## FAQ integrity guard
+`src/faq_store.ts` now validates every create/update before canonical write.
+
+Rejected as question/answer content:
+- command-only values such as `/faq` or `/start`
+- rendered FAQ-management blocks containing multiple markers such as `FAQ ·`, `Key:`, `Version:`, `MY Q:`, `EN A:`, `ZH A:`
+- draft-preview control text
+
+The same store validation protects individual edits, manual multilingual drafts, and AI-generated drafts at final approval.
+
+Dynamic FAQ matching and grounded AI context skip rows that fail the integrity detector.
+
+`src/faq_ai_entry.ts` also clears/leaves pending FAQ text-input state before lower command handling so slash commands cannot become canonical FAQ field values through legacy wrappers.
+
+## Owner repair
+Owner-only `/faq repair` scans current FAQ rows and acts only on detected corruption.
+
+For each corrupt row it searches `faq_revisions` newest-first and restores the newest clean same-key snapshot as a **new live version**. It does not rewind the version counter or delete history. The corrupt-before and repaired-after states are archived as another revision.
+
+If no clean archived snapshot can be found, the FAQ is reported as `Needs manual review` rather than guessed silently.
+
+Migration `0035_manual_faq_integrity_recovery.sql` documents prevention/recovery in Owner/Admin manuals.
 
 ## Single FAQ runtime owner
-`src/faq_ai_entry.ts` now handles all Telegram FAQ surfaces before lower legacy layers:
-1. `/faq` command for Owner/Sudo/normal users
-2. every `faq:*` callback
-3. AI/manual FAQ authoring actions
-4. authorized FAQ edit text input
-5. normal-user deterministic free-text FAQ matching
-
-All these surfaces use the same `handleFaqCommand` / `handleFaqCallback` / `faq_store` D1 path.
-
-A live D1 FAQ match is terminal and must not fall through to static `FAQS` matching. If a live FAQ read fails, FAQ surfaces fail closed with a temporary-unavailable message instead of substituting old static seed content.
-
-Question logging for a valid FAQ hit is best-effort; a logging failure must not suppress a successfully-read canonical D1 answer.
-
-## FAQ write contract
-Approved mutations continue to use `updateFaq/createFaq`:
-- current `faq_entries` row is saved
-- saved row is read back from D1 before success is returned
-- mutation version is returned
-- before/after revision is archived in `faq_revisions`
-- operator notification occurs from the mutation result
+`src/faq_ai_entry.ts` remains authoritative for `/faq`, `faq:*` callbacks, authoring input, repair, and normal-user deterministic matching. D1 live data is terminal; static FAQ fallback must not answer stale production knowledge.
 
 ## Manual pagination UX
-For multi-page Owner/Admin manuals, existing Previous/Next navigation now also includes First/Last direct jumps. No schema change.
+Multi-page Owner/Admin manuals include Previous/Next plus First/Last direct jumps.
 
 ## Staff availability contract
 Timezone: **Asia/Yangon / UTC+06:30**.
-- `/available <start> <end>` creates/updates recurring schedule
-- plain `/available` or `/unavailable` only overrides until the next schedule boundary
+- recurring schedule survives plain `/available` and `/unavailable`
+- plain state command overrides only until next schedule boundary
 - `/unavailable <hours>` preserves recurring schedule
-- `/available cancel|clear` explicitly removes recurring schedule
-- private state mutations mirror to Staff Inbox
+- `/available cancel|clear` explicitly removes schedule
+- private mutations mirror to Staff Inbox
 - automatic effective transitions declare to private + Staff Inbox
 
 ## Migrations
-Current range remains `0001` through `0034`. This FAQ hardening slice has no schema migration.
+Current range: `0001` through `0035`.
 
 ## Command registry
-Command names/order/count unchanged. Schema revision remains **11**. Public 4, Sudo 12, Owner 19.
+Registered command names/order/count unchanged. Schema revision remains **11**. Public 4, Sudo 12, Owner 19. `/faq repair` is an Owner-only maintenance subcommand, not a separate Telegram menu command.
 
 ## Existing continuity contracts
 - FAQ and Human Staff are primary continuity; AI outage never severs staff handoff.
@@ -75,14 +79,14 @@ Command names/order/count unchanged. Schema revision remains **11**. Public 4, S
 - deployment online notice shows revision + change summary.
 
 ## Validation boundary
-Newest FAQ hardening requires:
-1. production workflow green
-2. reopen an existing FAQ in Owner/Admin management and note its key/version/current wording
-3. edit + approve that FAQ and confirm version increments
-4. reopen Owner/Admin browse from scratch and confirm the saved wording, not merely the success notification
-5. normal-user `/faq` list/detail must show the exact same wording
-6. normal-user deterministic free-text question must return the same D1 answer
-7. old static seed wording must never reappear
-8. if live FAQ storage is intentionally unavailable in controlled QA, the bot must show temporary-unavailable instead of old FAQ content
-9. FAQ miss still proceeds to grounded AI/human fallback
-10. existing staff availability, takeover lease, Owner override, manuals, and AI outage behavior remain operational
+After production workflow green:
+1. Owner runs `/faq repair` once.
+2. Record its repaired/unrecoverable report.
+3. Reopen `official-info-channel` from scratch and confirm `/faq` and nested management-card text are gone.
+4. Confirm repaired row version increments rather than reverting the live version number.
+5. Confirm revision history remains intact.
+6. Owner/Admin fresh Browse, normal-user `/faq`, and normal-user free-text all show identical repaired content.
+7. Start an individual FAQ edit, then send `/faq`; verify the command is not saved as the field value.
+8. Attempt to save a management-card block as an FAQ field; verify the integrity guard rejects it.
+9. FAQ miss still proceeds to grounded AI/human fallback.
+10. Existing staff availability, takeover lease, Owner override, manuals, and AI outage behavior remain operational.
