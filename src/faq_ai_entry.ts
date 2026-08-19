@@ -1,5 +1,5 @@
 import app from "./input_quality_entry";
-import { consumeFaqAdminText, handleFaqCallback, type FaqUiResponse } from "./faq_admin";
+import { consumeFaqAdminText, handleFaqCallback, handleFaqCommand, type FaqUiResponse } from "./faq_admin";
 import { notifyFaqChange } from "./faq_notify";
 import { findFaqDynamic } from "./faq_store";
 import { getConversationControl } from "./monitoring";
@@ -30,6 +30,7 @@ type TelegramCallbackQuery = {
   message?: TelegramMessage;
 };
 type TelegramUpdate = { message?: TelegramMessage; callback_query?: TelegramCallbackQuery };
+type InlineKeyboard = { inline_keyboard: Array<Array<{ text: string; callback_data?: string; url?: string }>> };
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -38,8 +39,23 @@ function json(body: unknown, status = 200): Response {
   });
 }
 
+function commandName(text: string): string {
+  return text.trim().split(/\s+/, 1)[0].toLowerCase().replace(/@[^\s]+$/, "");
+}
+
 function isPrivate(message: TelegramMessage): boolean {
   return Boolean(message.from && (message.chat.type === "private" || message.chat.id === message.from.id));
+}
+
+function withClose(keyboard?: unknown): InlineKeyboard | undefined {
+  if (!keyboard || typeof keyboard !== "object" || !Array.isArray((keyboard as InlineKeyboard).inline_keyboard)) {
+    return keyboard as InlineKeyboard | undefined;
+  }
+  const rows = [...(keyboard as InlineKeyboard).inline_keyboard];
+  if (!rows.some((row) => row.some((button) => button.callback_data === "ui:close"))) {
+    rows.push([{ text: "✕ Close", callback_data: "ui:close" }]);
+  }
+  return { inline_keyboard: rows };
 }
 
 async function telegramApi(env: Env, method: string, body: unknown): Promise<any | null> {
@@ -167,9 +183,40 @@ async function serveDynamicFaqFastPath(env: Env, message: TelegramMessage): Prom
     );
     return true;
   } catch {
-    // On transient D1 failure, preserve the existing lower fallback path.
+    // Never answer from the static seed after a live-store failure. A later
+    // canonical layer may provide a safe operational fallback, but stale FAQ
+    // content must not be served as approved production knowledge.
     return false;
   }
+}
+
+async function handleFaqSurface(env: Env, update: TelegramUpdate): Promise<boolean> {
+  const callback = update.callback_query;
+  if (callback?.data?.startsWith("faq:")) {
+    const result = await handleFaqCallback(
+      env.DB,
+      callback.from.id,
+      env.BOT_OWNER_TELEGRAM_ID,
+      callback.data,
+      { DB: env.DB, AI_CONFIG_MASTER_KEY: env.AI_CONFIG_MASTER_KEY },
+    );
+    await telegramApi(env, "answerCallbackQuery", { callback_query_id: callback.id });
+    if (callback.message && result.text) {
+      await editOrSend(env, callback.message, result.text, withClose(result.keyboard));
+    }
+    await notifyMutation(env, callback.from.id, result);
+    return true;
+  }
+
+  const message = update.message;
+  if (!message?.from || !message.text || commandName(message.text) !== "/faq") return false;
+  const result = await handleFaqCommand(env.DB, message.from.id, env.BOT_OWNER_TELEGRAM_ID, message.text);
+  if (result.handled && result.text) {
+    await sendMessage(env, message.chat.id, result.text, withClose(result.keyboard), {
+      messageThreadId: message.message_thread_id,
+    });
+  }
+  return result.handled;
 }
 
 async function handleWebhook(request: Request, env: Env): Promise<Response> {
@@ -185,19 +232,7 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
     return app.fetch(request, env);
   }
 
-  const callback = update.callback_query;
-  if (callback?.data === "faq:draft:generate") {
-    const result = await handleFaqCallback(
-      env.DB,
-      callback.from.id,
-      env.BOT_OWNER_TELEGRAM_ID,
-      callback.data,
-      { DB: env.DB, AI_CONFIG_MASTER_KEY: env.AI_CONFIG_MASTER_KEY },
-    );
-    await telegramApi(env, "answerCallbackQuery", { callback_query_id: callback.id });
-    if (callback.message && result.text) await editOrSend(env, callback.message, result.text, result.keyboard);
-    return json({ ok: true });
-  }
+  if (await handleFaqSurface(env, update)) return json({ ok: true });
 
   const message = update.message;
   const text = message?.text?.trim() ?? "";
@@ -240,7 +275,7 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
       // Let the canonical lower stack handle non-authoring messages or transient failures.
     }
 
-    if (message && await serveDynamicFaqFastPath(env, message)) return json({ ok: true });
+    if (await serveDynamicFaqFastPath(env, message)) return json({ ok: true });
   }
 
   return app.fetch(request, env);
