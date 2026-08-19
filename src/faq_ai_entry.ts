@@ -1,7 +1,7 @@
 import app from "./input_quality_entry";
 import { consumeFaqAdminText, handleFaqCallback, handleFaqCommand, type FaqUiResponse } from "./faq_admin";
 import { notifyFaqChange } from "./faq_notify";
-import { findFaqDynamic } from "./faq_store";
+import { findFaqDynamic, repairCorruptedFaqs } from "./faq_store";
 import { getConversationControl } from "./monitoring";
 import type { Language } from "./faq";
 
@@ -47,6 +47,13 @@ function json(body: unknown, status = 200): Response {
 
 function commandName(text: string): string {
   return text.trim().split(/\s+/, 1)[0].toLowerCase().replace(/@[^\s]+$/, "");
+}
+
+function ownerId(env: Env): number | null {
+  const raw = env.BOT_OWNER_TELEGRAM_ID?.trim();
+  if (!raw || !/^\d+$/.test(raw)) return null;
+  const value = Number(raw);
+  return Number.isSafeInteger(value) ? value : null;
 }
 
 function isPrivate(message: TelegramMessage): boolean {
@@ -120,15 +127,26 @@ async function notifyMutation(env: Env, actorId: number, result: FaqUiResponse):
   );
 }
 
-async function activeFaqDraftState(db: D1Database | undefined, userId: number): Promise<string | null> {
+async function activeFaqSession(db: D1Database | undefined, userId: number): Promise<string | null> {
   if (!db) return null;
   try {
     const row = await db.prepare(
-      `SELECT state FROM admin_sessions WHERE telegram_user_id=?1 AND state LIKE 'faq_draft_%'`,
+      `SELECT state FROM admin_sessions WHERE telegram_user_id=?1 AND (state LIKE 'faq_%' OR state LIKE 'awaiting_faq_%')`,
     ).bind(userId).first<{ state: string }>();
     return row?.state ?? null;
   } catch {
     return null;
+  }
+}
+
+async function clearFaqSession(db: D1Database | undefined, userId: number): Promise<void> {
+  if (!db) return;
+  try {
+    await db.prepare(
+      `DELETE FROM admin_sessions WHERE telegram_user_id=?1 AND (state LIKE 'faq_%' OR state LIKE 'awaiting_faq_%')`,
+    ).bind(userId).run();
+  } catch {
+    // Lower command handling remains available even if cleanup fails transiently.
   }
 }
 
@@ -203,6 +221,38 @@ async function serveDynamicFaqFastPath(env: Env, message: TelegramMessage): Prom
   }
 }
 
+async function handleFaqRepair(env: Env, message: TelegramMessage): Promise<boolean> {
+  if (!message.from || !message.text || !/^\/faq(?:@[^\s]+)?\s+repair$/i.test(message.text.trim())) return false;
+  if (message.from.id !== ownerId(env)) {
+    await sendMessage(env, message.chat.id, "FAQ repair is available to the Bot Owner only.");
+    return true;
+  }
+  if (!env.DB) {
+    await sendMessage(env, message.chat.id, "FAQ storage is temporarily unavailable.");
+    return true;
+  }
+
+  try {
+    await clearFaqSession(env.DB, message.from.id);
+    const result = await repairCorruptedFaqs(env.DB, message.from.id);
+    const lines = ["FAQ integrity repair complete."];
+    if (!result.repaired.length && !result.unrecoverable.length) {
+      lines.push("No corrupted live FAQ rows were detected.");
+    }
+    for (const item of result.repaired) {
+      lines.push(`${item.key}: corrupt v${item.corruptVersion} → clean snapshot v${item.restoredFromVersion} → new live v${item.newVersion}`);
+    }
+    if (result.unrecoverable.length) {
+      lines.push(`Needs manual review: ${result.unrecoverable.join(", ")}`);
+    }
+    lines.push("Revision history was preserved; no archive rows were deleted.");
+    await sendMessage(env, message.chat.id, lines.join("\n"));
+  } catch {
+    await sendMessage(env, message.chat.id, "FAQ integrity repair failed safely. No static FAQ fallback was published.");
+  }
+  return true;
+}
+
 async function handleFaqSurface(env: Env, update: TelegramUpdate): Promise<boolean> {
   const callback = update.callback_query;
   if (callback?.data?.startsWith("faq:")) {
@@ -232,7 +282,9 @@ async function handleFaqSurface(env: Env, update: TelegramUpdate): Promise<boole
 
   const message = update.message;
   if (!message?.from || !message.text || commandName(message.text) !== "/faq") return false;
+  if (await handleFaqRepair(env, message)) return true;
   try {
+    await clearFaqSession(env.DB, message.from.id);
     const result = await handleFaqCommand(env.DB, message.from.id, env.BOT_OWNER_TELEGRAM_ID, message.text);
     if (result.handled && result.text) {
       await sendMessage(env, message.chat.id, result.text, withClose(result.keyboard), {
@@ -264,9 +316,16 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
 
   const message = update.message;
   const text = message?.text?.trim() ?? "";
-  // Commands such as /cancel and /reset belong to the canonical lower UX layer.
-  // Only ordinary text is intercepted here so FAQ authoring inside Staff Inbox
-  // cannot be mistaken for a staff reply to a user topic.
+
+  // Any command exits a pending FAQ text-input state before lower command
+  // handling. This prevents /faq, /start, /cancel, etc. from ever becoming
+  // canonical FAQ field values in legacy lower wrappers.
+  if (message?.from && text.startsWith("/") && await activeFaqSession(env.DB, message.from.id)) {
+    await clearFaqSession(env.DB, message.from.id);
+    return app.fetch(request, env);
+  }
+
+  // Only ordinary text is intercepted for FAQ authoring.
   if (message?.from && text && !text.startsWith("/")) {
     try {
       const result = await consumeFaqAdminText(
@@ -289,7 +348,7 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
         return json({ ok: true });
       }
 
-      if (await activeFaqDraftState(env.DB, message.from.id)) {
+      if (await activeFaqSession(env.DB, message.from.id)) {
         await sendMessage(
           env,
           message.chat.id,
@@ -299,8 +358,10 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
         );
         return json({ ok: true });
       }
-    } catch {
-      // Let non-FAQ operational text continue; FAQ surfaces themselves fail closed above.
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : "FAQ content was rejected.";
+      await sendMessage(env, message.chat.id, detail.startsWith("FAQ content rejected:") ? detail : "FAQ edit could not be saved safely. Review the draft and try again.");
+      return json({ ok: true });
     }
 
     if (await serveDynamicFaqFastPath(env, message)) return json({ ok: true });
