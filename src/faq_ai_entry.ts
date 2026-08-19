@@ -32,6 +32,12 @@ type TelegramCallbackQuery = {
 type TelegramUpdate = { message?: TelegramMessage; callback_query?: TelegramCallbackQuery };
 type InlineKeyboard = { inline_keyboard: Array<Array<{ text: string; callback_data?: string; url?: string }>> };
 
+const FAQ_STORAGE_UNAVAILABLE: Record<Language, string> = {
+  my: "FAQ အချက်အလက်များကို လောလောဆယ် မဖတ်နိုင်သေးပါ။ ခဏနောက် ပြန်စမ်းကြည့်ပါ။ အဟောင်း FAQ အချက်အလက်ကို အစားထိုးပြသမည်မဟုတ်ပါ။",
+  en: "FAQ data is temporarily unavailable. Please try again shortly. The bot will not substitute older FAQ content.",
+  zh: "暂时无法读取常见问题数据，请稍后重试。系统不会用旧版常见问题内容替代。",
+};
+
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
@@ -147,32 +153,41 @@ async function userLanguage(db: D1Database, userId: number): Promise<Language | 
     : null;
 }
 
+async function safeUserLanguage(db: D1Database | undefined, userId: number): Promise<Language> {
+  if (!db) return "en";
+  try { return await userLanguage(db, userId) ?? "en"; } catch { return "en"; }
+}
+
 async function serveDynamicFaqFastPath(env: Env, message: TelegramMessage): Promise<boolean> {
   if (!env.DB || !message.from || !message.text || !isPrivate(message)) return false;
   const text = message.text.trim();
   if (!text || text.startsWith("/") || await hasInteractiveSession(env.DB, message.from.id)) return false;
 
+  let language: Language = "en";
   try {
     const control = await getConversationControl(env.DB, message.from.id);
     if (control.mode === "human") return false;
 
-    const language = await userLanguage(env.DB, message.from.id);
-    if (!language) return false;
+    language = await userLanguage(env.DB, message.from.id) ?? "en";
     const faq = await findFaqDynamic(env.DB, text, language);
     if (!faq) return false;
 
-    await env.DB.prepare(
-      `INSERT INTO questions
-        (telegram_user_id, chat_id, message_id, question, language, resolution, matched_faq_key, answer_source)
-       VALUES (?1, ?2, ?3, ?4, ?5, 'answered', ?6, 'canonical_faq')`,
-    ).bind(
-      message.from.id,
-      message.chat.id,
-      message.message_id,
-      text,
-      language,
-      faq.key,
-    ).run();
+    try {
+      await env.DB.prepare(
+        `INSERT INTO questions
+          (telegram_user_id, chat_id, message_id, question, language, resolution, matched_faq_key, answer_source)
+         VALUES (?1, ?2, ?3, ?4, ?5, 'answered', ?6, 'canonical_faq')`,
+      ).bind(
+        message.from.id,
+        message.chat.id,
+        message.message_id,
+        text,
+        language,
+        faq.key,
+      ).run();
+    } catch {
+      // Logging is operational metadata; it must not suppress a valid live FAQ answer.
+    }
 
     await sendMessage(
       env,
@@ -183,40 +198,53 @@ async function serveDynamicFaqFastPath(env: Env, message: TelegramMessage): Prom
     );
     return true;
   } catch {
-    // Never answer from the static seed after a live-store failure. A later
-    // canonical layer may provide a safe operational fallback, but stale FAQ
-    // content must not be served as approved production knowledge.
-    return false;
+    await sendMessage(env, message.chat.id, FAQ_STORAGE_UNAVAILABLE[language]);
+    return true;
   }
 }
 
 async function handleFaqSurface(env: Env, update: TelegramUpdate): Promise<boolean> {
   const callback = update.callback_query;
   if (callback?.data?.startsWith("faq:")) {
-    const result = await handleFaqCallback(
-      env.DB,
-      callback.from.id,
-      env.BOT_OWNER_TELEGRAM_ID,
-      callback.data,
-      { DB: env.DB, AI_CONFIG_MASTER_KEY: env.AI_CONFIG_MASTER_KEY },
-    );
-    await telegramApi(env, "answerCallbackQuery", { callback_query_id: callback.id });
-    if (callback.message && result.text) {
-      await editOrSend(env, callback.message, result.text, withClose(result.keyboard));
+    try {
+      const result = await handleFaqCallback(
+        env.DB,
+        callback.from.id,
+        env.BOT_OWNER_TELEGRAM_ID,
+        callback.data,
+        { DB: env.DB, AI_CONFIG_MASTER_KEY: env.AI_CONFIG_MASTER_KEY },
+      );
+      await telegramApi(env, "answerCallbackQuery", { callback_query_id: callback.id });
+      if (callback.message && result.text) {
+        await editOrSend(env, callback.message, result.text, withClose(result.keyboard));
+      }
+      await notifyMutation(env, callback.from.id, result);
+    } catch {
+      const language = await safeUserLanguage(env.DB, callback.from.id);
+      await telegramApi(env, "answerCallbackQuery", {
+        callback_query_id: callback.id,
+        text: FAQ_STORAGE_UNAVAILABLE[language],
+        show_alert: true,
+      });
     }
-    await notifyMutation(env, callback.from.id, result);
     return true;
   }
 
   const message = update.message;
   if (!message?.from || !message.text || commandName(message.text) !== "/faq") return false;
-  const result = await handleFaqCommand(env.DB, message.from.id, env.BOT_OWNER_TELEGRAM_ID, message.text);
-  if (result.handled && result.text) {
-    await sendMessage(env, message.chat.id, result.text, withClose(result.keyboard), {
-      messageThreadId: message.message_thread_id,
-    });
+  try {
+    const result = await handleFaqCommand(env.DB, message.from.id, env.BOT_OWNER_TELEGRAM_ID, message.text);
+    if (result.handled && result.text) {
+      await sendMessage(env, message.chat.id, result.text, withClose(result.keyboard), {
+        messageThreadId: message.message_thread_id,
+      });
+    }
+    return result.handled;
+  } catch {
+    const language = await safeUserLanguage(env.DB, message.from.id);
+    await sendMessage(env, message.chat.id, FAQ_STORAGE_UNAVAILABLE[language]);
+    return true;
   }
-  return result.handled;
 }
 
 async function handleWebhook(request: Request, env: Env): Promise<Response> {
@@ -272,7 +300,7 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
         return json({ ok: true });
       }
     } catch {
-      // Let the canonical lower stack handle non-authoring messages or transient failures.
+      // Let non-FAQ operational text continue; FAQ surfaces themselves fail closed above.
     }
 
     if (await serveDynamicFaqFastPath(env, message)) return json({ ok: true });
