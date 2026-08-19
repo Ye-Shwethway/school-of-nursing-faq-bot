@@ -13,7 +13,20 @@ Production Telegram FAQ assistant for a university School of Nursing in Burmese,
 ## Current checkpoint
 The recurring staff availability schedule/manual-override behavior is live-accepted by Creator.
 
-Newest `main` slice improves long Owner/Admin manual navigation with direct **First** and **Last** page jump buttons. Production/live acceptance is still required for this newest pagination slice.
+A newly identified FAQ consistency bug is fixed on `main`: normal-user deterministic free-text FAQ answers could fall through from the dynamic D1 matcher to the legacy static `FAQS` matcher, causing users to receive pre-update content while Owner/Admin views showed the latest D1 version.
+
+Newest fix makes the latest active D1 FAQ entry authoritative for normal-user deterministic FAQ answers. Production/live acceptance is still required for this fix.
+
+The earlier manual-pagination First/Last jump slice also remains pending Telegram acceptance unless separately confirmed.
+
+## FAQ live canonical contract
+- D1 `faq_entries` is the live canonical FAQ store after seeding.
+- Owner/Sudo approved updates must be visible to normal users immediately.
+- `/faq` list/detail already read from dynamic `listFaqs/getFaq`.
+- normal-user deterministic free-text matching must answer the matched `findFaqDynamic` result directly.
+- a dynamic FAQ match must not fall through to the legacy static matcher in `src/index.ts`.
+- `src/faq.ts` remains seed/fallback baseline only when dynamic storage is unavailable.
+- grounded AI approved context is built from active D1 FAQ entries.
 
 ## Manual pagination UX
 `src/manual_entry.ts` owns Owner/Admin manual rendering and pagination.
@@ -21,27 +34,23 @@ Newest `main` slice improves long Owner/Admin manual navigation with direct **Fi
 For manuals with more than one page:
 - existing row remains `◀ Previous | current/total | Next ▶`
 - a second jump row provides `⏮ First` and/or `⏭ Last`
-- `⏮ First` is omitted while already on page 1
-- `⏭ Last` is omitted while already on the final page
+- First is hidden on page 1
+- Last is hidden on final page
 - single-page manuals do not show a jump row
-- existing `manual:page:<key>:<index>` callbacks are reused; no new callback namespace or schema is required
-- authorization, edit-in-place behavior, Owner edit/add controls, and `✕ Close` remain unchanged
+- existing page callbacks are reused; authorization/edit controls remain unchanged
 
 ## Staff availability contract
 Timezone: **Asia/Yangon / UTC+06:30**.
 
-Supported syntax:
-- `/available 09:00 17:00` or `/available 9am 5pm` — create/update recurring daily schedule
-- `/available` — if a recurring schedule exists, immediately force AVAILABLE only until the next schedule start/end boundary; otherwise set manual AVAILABLE indefinitely
-- `/unavailable` — if a recurring schedule exists, immediately force UNAVAILABLE only until the next schedule start/end boundary; otherwise set manual UNAVAILABLE indefinitely
-- `/unavailable 3` — temporary unavailable timer; recurring schedule remains stored and resumes after timer expiry
-- `/unavailable cancel|clear` — cancel active temporary timer
-- `/available cancel|clear` — explicitly remove recurring daily schedule and preserve current effective state as manual state
-
-Plain availability commands never silently delete a recurring schedule.
+- `/available <start> <end>` creates/updates a recurring daily schedule
+- plain `/available` or `/unavailable` overrides a recurring schedule only until its next boundary
+- `/unavailable <hours>` preserves recurring schedule and resumes it after timer expiry
+- `/available cancel|clear` explicitly removes recurring schedule
+- private successful mutations mirror to Staff Inbox when configured
+- effective automatic state transitions are declared to staff private chat + Staff Inbox
 
 ## Migrations
-Current range remains `0001` through `0034`. The manual pagination slice has no schema change.
+Current range remains `0001` through `0034`. The FAQ stale-read fix and manual pagination slice require no schema change.
 
 ## Command registry
 Command names/order/count unchanged. Schema revision remains **11**. Public 4, Sudo 12, Owner 19.
@@ -55,12 +64,13 @@ Command names/order/count unchanged. Schema revision remains **11**. Public 4, S
 - deployment online notice shows revision + deployed change summary.
 
 ## Validation boundary
-Newest manual pagination slice requires:
+Newest FAQ consistency fix requires:
 1. production workflow green
-2. open `/ownermanual` and `/adminmanual` with multiple pages
-3. first page shows `⏭ Last` but not `⏮ First`
-4. middle page shows both jump buttons
-5. final page shows `⏮ First` but not `⏭ Last`
-6. First and Last jump directly to correct endpoints using edit-in-place
-7. Previous/Next/page counter/Edit/Add/Close behavior remains unchanged
-8. existing FAQ, staff availability, human handoff, takeover lease, Owner override, and AI fallback continue working
+2. Owner/Sudo edit and approve an existing FAQ answer in all intended languages
+3. Owner/Admin management view shows the new D1 version
+4. normal-user `/faq` detail shows the same new version
+5. normal user asks a deterministic matching free-text question and receives the same new D1 answer, not the old static seed answer
+6. question log records the matched FAQ key with `canonical_faq`
+7. FAQ miss still proceeds to grounded AI/human fallback normally
+8. human-controlled conversations remain human-controlled and are not intercepted by the FAQ fast path
+9. existing staff availability, takeover lease, Owner override, manuals, and AI outage behavior continue working
