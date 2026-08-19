@@ -16,76 +16,86 @@ Live repository plus verified production evidence outranks remembered chat conte
 ## Current checkpoint
 Main-only production Telegram FAQ assistant. FAQ and Human Staff are the primary continuity paths; grounded AI is supplementary.
 
-The recurring staff availability schedule/manual-override behavior is live-accepted by Creator.
+Staff recurring availability schedule/manual override is live-accepted.
 
-Newest `main` fix resolves a **normal-user stale FAQ read**. Root cause was not permission scope: the dynamic D1 matcher could find a current FAQ and then return control to a lower legacy static matcher, allowing normal-user free-text answers to come from old `src/faq.ts` seed content while Owner/Admin management showed the latest D1 version.
+Latest unresolved production issue: Owner/Admin FAQ mutations appeared updated to operators, but normal users still observed older FAQ wording through both `/faq` and free-text. The first free-text-only fix was insufficient.
 
-Production/live acceptance is still required for this newest FAQ consistency fix.
+Newest `main` slice therefore centralizes every Telegram FAQ surface on one live D1 runtime path and forbids stale static FAQ fallback. Do not call this newest slice live-accepted until Telegram verification succeeds.
 
-The earlier Owner/Admin manual First/Last pagination slice also remains pending Telegram acceptance unless separately confirmed.
+## FAQ live/current/history model
+- `faq_entries` = one current published row per stable `faq_key`
+- `faq_key` is PRIMARY KEY
+- approved edits overwrite current row and increment `version`
+- `faq_revisions` separately archives before/after JSON for audit/history/recovery
+- archived revisions are not public FAQ rows and are never selected for normal-user answers
+- old revisions should not be deleted merely to make the current FAQ visible
+- `src/faq.ts` is seed/bootstrap data only after D1 is established
 
-## FAQ live canonical contract
-- D1 `faq_entries` is the live canonical FAQ source after initial seeding.
-- `src/faq.ts` is seed/fallback baseline only.
-- Owner/Sudo approved mutations update D1 and must become immediately visible to normal-user FAQ surfaces.
-- public `/faq` list/detail uses dynamic `listFaqs/getFaq`.
-- normal-user deterministic free-text matching now terminates on `findFaqDynamic` and returns that latest active D1 answer directly.
-- dynamic FAQ hits must not fall through to the legacy static `findFaq()` path in `src/index.ts`.
-- grounded AI approved context is also built from active D1 FAQ entries.
-- inactive FAQs must never be shown or answered to normal users.
+Migration `0005_dynamic_faq.sql` already provides this current-row + revision-history structure. No new schema migration is required for the latest runtime fix.
 
-## Latest source change
-`src/faq_ai_entry.ts` now owns an early dynamic FAQ fast path after rate limiting/AI setup but before the lower static legacy runtime:
-1. private non-command text only
-2. skip active admin/setup sessions
-3. skip conversations currently in human-control mode
-4. load saved user language
-5. run `findFaqDynamic`
-6. on match, log `canonical_faq` + matched key and reply with the latest D1 answer
-7. on no match or transient D1 failure, continue to the existing lower FAQ/AI/handoff stack
+## Authoritative FAQ runtime owner
+`src/faq_ai_entry.ts` now intercepts FAQ interaction before lower legacy layers and owns:
+1. `/faq` command for all roles
+2. all `faq:*` callbacks
+3. FAQ draft generate/approve/edit flows
+4. authorized FAQ authoring text
+5. normal-user deterministic free-text matching
 
-No migration or command schema change is required.
+It routes UI through the existing `handleFaqCommand` / `handleFaqCallback` and all knowledge reads through `faq_store` / D1.
+
+### Fail-closed rule
+A successfully-read D1 FAQ answer is authoritative and terminal.
+
+If live D1 FAQ access fails:
+- do not answer from static seed content
+- `/faq` and FAQ callbacks return a temporary-unavailable response/alert
+- deterministic FAQ path returns temporary-unavailable rather than stale policy knowledge
+- question logging is best-effort and cannot suppress an otherwise valid D1 FAQ answer
+
+## FAQ write path
+`updateFaq/createFaq` already:
+- writes current D1 entry
+- increments version on update
+- reads saved row back before returning success
+- archives before/after state in `faq_revisions`
+
+Operator notification is based on the mutation result. For acceptance, always reopen Browse from scratch after saving; do not treat notification text alone as proof of the public live row.
 
 ## Manual navigation
-For multi-page Owner/Admin manuals:
-- primary nav remains Previous / current-total / Next
-- second row provides First and/or Last direct jumps
-- First hidden on page 1; Last hidden on final page
-- existing callbacks, authorization, edit/add and Close behavior remain unchanged
+Long Owner/Admin manuals include First/Last direct jump buttons in addition to Previous/Next. This earlier slice remains pending explicit Telegram acceptance unless separately confirmed.
 
 ## Staff availability durable contract
-Timezone: **Asia/Yangon / UTC+06:30**.
-
+Timezone: Asia/Yangon / UTC+06:30.
 - recurring schedules survive plain `/available` and `/unavailable`
-- plain state commands override only until the next schedule boundary
+- plain state commands override only until next schedule boundary
 - `/available cancel|clear` explicitly removes schedule
 - `/unavailable <hours>` preserves schedule
-- private mutations mirror to Staff Inbox when configured
+- private mutations mirror to Staff Inbox
 - automatic effective transitions declare to private + Staff Inbox
 
-Migration `0034_staff_manual_schedule_override.sql` persists schedule-aware manual overrides. Existing Cloudflare Cron remains `*/5 * * * *`.
+Migration `0034_staff_manual_schedule_override.sql` persists schedule-aware overrides. Cron remains `*/5 * * * *`.
 
 ## Migrations / commands
 Current migration range remains `0001` through `0034`.
-Command schema revision remains **11**. Public 4; Sudo 12; Owner 19.
+Command schema revision remains 11. Public 4; Sudo 12; Owner 19.
 
 ## Other durable contracts
-- deterministic FAQ first; Human Staff continuity always available
-- AI outage notices are state-transition-only and AI outage never reduces service to FAQ-only
+- Human Staff continuity remains available when AI is down
+- AI outage alert is state-transition-only
 - Take Over uses persisted 1-hour inactivity lease; Owner can override immediately
-- deployment online notice shows revision + deployed change summary
-- production workflow validates typecheck, migrations, dry-run, bindings, health, webhook cutover and exact Owner command read-back
+- deployment online notice shows revision + change summary
+- production workflow validates typecheck, migrations, dry-run, bindings, health, webhook cutover, and exact Owner command read-back
 
-## Next exact validation
+## Next exact FAQ validation
 After production workflow green:
-1. edit and approve an existing FAQ using Owner/Sudo management
-2. verify Owner/Admin management shows the new version
-3. verify normal-user `/faq` detail shows exactly the same updated content
-4. ask a normal-user free-text question that deterministically matches that FAQ and verify the response is the updated D1 answer
-5. verify the old seed wording is not returned
-6. verify FAQ miss still proceeds to grounded AI/human handoff
-7. verify a human-controlled user conversation is not intercepted by the dynamic FAQ fast path
-8. verify existing staff availability, takeover lease, Owner override and manuals remain operational
+1. open an existing FAQ in Owner/Admin Browse and record key/version/current wording
+2. edit + approve it and confirm version increments
+3. close FAQ UI completely, reopen `/faq`, browse from scratch as Owner/Admin, and verify saved wording
+4. on a normal account open `/faq` from scratch and verify the exact same current wording
+5. ask the matching question as free text and verify the exact same D1 answer
+6. confirm old seed wording does not appear anywhere
+7. verify an FAQ miss still proceeds to AI/human fallback
+8. controlled live-store failure, if tested, must show temporary-unavailable rather than static seed content
 
 ## Documentation rule
-After behavior/schema/deployment work, keep ROADMAP, this file and relevant manuals/design rules synchronized with repository reality.
+After behavior/schema/deployment work, keep ROADMAP, this file, and relevant manuals/design rules synchronized with repository reality.
