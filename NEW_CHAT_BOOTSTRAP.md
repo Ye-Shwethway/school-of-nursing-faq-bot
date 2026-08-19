@@ -18,12 +18,14 @@ Main-only production Telegram FAQ assistant. FAQ and Human Staff are primary con
 
 Staff recurring availability schedule/manual override is live-accepted.
 
-Newest unresolved/live-validation item is FAQ integrity recovery. Production evidence showed the live `official-info-channel` row itself was corrupted at Version 8: `MY A` contained `/faq`, while other fields contained nested rendered FAQ-management text. This was not multiple live FAQ rows being shown.
+FAQ integrity repair is live-verified for `official-info-channel`: Owner `/faq repair` reported `corrupt v8 → clean snapshot v5 → new live v9`, and revision history was preserved.
 
-Newest `main` slice adds prevention plus Owner recovery. Do not call it live-accepted until repair + fresh public verification succeed.
+Newest `main` slice improves edit safety/clarity for existing FAQs. During `✨ Edit from one language`, the current live FAQ remains unchanged until approval, text-input stages keep a visible `✕ Cancel Edit` control, and draft UI states which live version remains in force.
+
+Do not call this newest edit-UX slice live-accepted until Telegram verification succeeds.
 
 ## Confirmed corruption mechanism
-Legacy lower FAQ handling could invoke `consumeFaqAdminText()` before normal command routing. If an authorized Admin was waiting for an FAQ field value and sent `/faq`, that command could be treated as text and saved to the field. This explains the observed `MY A: /faq` exactly.
+Legacy lower FAQ handling could invoke `consumeFaqAdminText()` before normal command routing. If an authorized Admin was waiting for an FAQ field value and sent `/faq`, that command could be treated as text and saved to the field. This explained the observed `MY A: /faq` exactly.
 
 The older store also accepted arbitrary field text without a final structural integrity check, so rendered FAQ-management blocks could become nested canonical field content.
 
@@ -34,9 +36,10 @@ The older store also accepted arbitrary field text without a final structural in
 - `faq_revisions` separately archives before/after JSON snapshots
 - archived revisions are history/recovery only, never normal-user answer rows
 - deleting revision history is not the fix for stale/corrupt current content
+- multiple live FAQ versions must never be displayed for the same key
 
 ## Integrity prevention
-`src/faq_store.ts` now rejects canonical create/update when any multilingual question/answer contains:
+`src/faq_store.ts` rejects canonical create/update when any multilingual question/answer contains:
 - a command-only value such as `/faq` or `/start`
 - multiple rendered FAQ-card markers such as `FAQ ·`, `Key:`, `Version:`, `MY Q:`, `MY A:`, `EN Q:`, `EN A:`, `ZH Q:`, `ZH A:`
 - draft-preview control text
@@ -63,12 +66,28 @@ No static FAQ answer is silently substituted during normal user traffic.
 
 Migration `0035_manual_faq_integrity_recovery.sql` adds Owner/Admin manual guidance.
 
+## FAQ edit UX
+`src/faq_ai_entry.ts` now decorates active existing-FAQ edit sessions centrally.
+
+For `✨ Edit from one language`:
+- after a source language is selected, Step 1/2 shows `✕ Cancel Edit`
+- subsequent text-input stages keep the cancel control
+- UI states `Draft only · live vN remains unchanged until Approve & Save.`
+- `faq:editcancel` clears only the current FAQ edit session/draft
+- cancelling does not mutate the current live `faq_entries` row
+- draft preview may keep the existing `✕ Discard Draft` instead of duplicating Cancel
+- only `✅ Approve & Save` publishes the next live version
+- previous live content moves to revision history only
+
+The same central decorator also makes individual-field edit text-input stages cancelable without changing the live row before a value is actually saved.
+
 ## Single FAQ runtime owner
 `src/faq_ai_entry.ts` owns:
 - `/faq` for all roles
 - all `faq:*` callbacks
 - FAQ authoring text/actions
 - `/faq repair`
+- edit cancel/session UI
 - normal-user deterministic D1 FAQ fast path
 
 D1 `faq_entries` is the live source. `src/faq.ts` is seed/bootstrap only once D1 exists.
@@ -98,16 +117,16 @@ Registered command schema revision remains 11. Public 4; Sudo 12; Owner 19. `/fa
 
 ## Next exact FAQ validation
 After production workflow green:
-1. Owner sends `/faq repair` privately.
-2. Save the repair report.
-3. Reopen `official-info-channel` through Owner/Admin Browse from scratch.
-4. Confirm `/faq` and nested `FAQ · / Key: / Version:` blocks are no longer canonical field values.
-5. Confirm the repaired FAQ becomes a new higher live version; history is not rewound/deleted.
-6. Open the same FAQ from a normal account via `/faq`; wording must match Owner/Admin fresh Browse.
-7. Ask a deterministic matching free-text question; answer must match the same current D1 row.
-8. Begin an FAQ field edit and send `/faq`; verify the command navigates/restarts rather than becoming the field value.
-9. Try to submit a copied rendered FAQ management block; verify it is rejected.
-10. FAQ miss still goes to grounded AI/human fallback.
+1. open repaired `official-info-channel` from Owner/Admin Browse and note current live version/content
+2. choose `✨ Edit from one language`
+3. select a language and verify Step 1/2 shows `✕ Cancel Edit` plus live-version-preserved copy
+4. send a replacement question; Step 2/2 must remain cancelable
+5. press Cancel and confirm the live FAQ/version/content did not change
+6. restart edit, complete the draft, and verify draft preview clearly remains non-canonical until approval
+7. Approve & Save and verify one next live version only
+8. Owner/Admin fresh Browse, normal-user `/faq`, and normal-user free-text must show identical current content
+9. revision history must remain intact
+10. copied management-card blocks and slash commands must still be rejected as FAQ content
 
 ## Documentation rule
 After behavior/schema/deployment work, keep ROADMAP, this file, FAQ content policy, and relevant manuals synchronized with repository reality.
