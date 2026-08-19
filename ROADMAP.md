@@ -13,11 +13,11 @@ Production Telegram FAQ assistant for a university School of Nursing in Burmese,
 ## Current checkpoint
 Staff recurring availability schedule/manual override is live-accepted.
 
-A production FAQ integrity incident is now understood more precisely. The live FAQ row itself became corrupted: for example `official-info-channel` reached Version 8 with `MY A: /faq` and rendered FAQ management text nested inside other language fields. This was not multiple live DB versions being displayed.
+FAQ integrity recovery is now live-verified by Creator for `official-info-channel`: `/faq repair` detected corrupt v8, restored the newest clean revision snapshot v5, and published it as new live v9 while preserving revision history.
 
-Confirmed cause for command corruption: a legacy FAQ edit path could call `consumeFaqAdminText()` before command routing, so an Admin waiting for an FAQ field value could send `/faq` and have that command saved as the field value. The store also lacked a final integrity validator capable of rejecting rendered management-card text.
+A production FAQ integrity incident is now understood more precisely. The live FAQ row itself had become corrupted: `MY A: /faq` and rendered FAQ management text were nested inside other language fields. This was not multiple live DB versions being displayed.
 
-Newest `main` slice adds store-level prevention plus Owner recovery from revision history. Production/live acceptance is required.
+Newest `main` UX slice improves FAQ editing safety: while an existing FAQ is being edited from one language, every text-input/draft stage keeps an explicit `✕ Cancel Edit` control when no existing discard control is present. The UI also states that the current live version remains unchanged until `Approve & Save`.
 
 ## FAQ current-row and archive contract
 - D1 `faq_entries` is the only live canonical FAQ store.
@@ -28,7 +28,7 @@ Newest `main` slice adds store-level prevention plus Owner recovery from revisio
 - `src/faq.ts` is seed/bootstrap data, not normal production answer traffic after D1 exists.
 
 ## FAQ integrity guard
-`src/faq_store.ts` now validates every create/update before canonical write.
+`src/faq_store.ts` validates every create/update before canonical write.
 
 Rejected as question/answer content:
 - command-only values such as `/faq` or `/start`
@@ -50,6 +50,16 @@ If no clean archived snapshot can be found, the FAQ is reported as `Needs manual
 
 Migration `0035_manual_faq_integrity_recovery.sql` documents prevention/recovery in Owner/Admin manuals.
 
+## FAQ edit UX contract
+For an existing FAQ edited through `✨ Edit from one language`:
+- the current live row remains visible to users during the whole draft workflow
+- draft prompts explicitly state `Draft only · live vN remains unchanged until Approve & Save.`
+- text-input stages include `✕ Cancel Edit`
+- pressing Cancel clears only the current FAQ edit session/draft and does not mutate the live FAQ
+- draft preview may use its existing `✕ Discard Draft` control instead of showing a duplicate Cancel button
+- only `✅ Approve & Save` publishes the replacement content as the next live version
+- old live content becomes revision history only; multiple live versions are never displayed
+
 ## Single FAQ runtime owner
 `src/faq_ai_entry.ts` remains authoritative for `/faq`, `faq:*` callbacks, authoring input, repair, and normal-user deterministic matching. D1 live data is terminal; static FAQ fallback must not answer stale production knowledge.
 
@@ -61,7 +71,7 @@ Timezone: **Asia/Yangon / UTC+06:30**.
 - recurring schedule survives plain `/available` and `/unavailable`
 - plain state command overrides only until next schedule boundary
 - `/unavailable <hours>` preserves recurring schedule
-- `/available cancel|clear` explicitly removes schedule
+- `/available cancel|clear` explicitly removes recurring schedule
 - private mutations mirror to Staff Inbox
 - automatic effective transitions declare to private + Staff Inbox
 
@@ -79,14 +89,14 @@ Registered command names/order/count unchanged. Schema revision remains **11**. 
 - deployment online notice shows revision + change summary.
 
 ## Validation boundary
-After production workflow green:
-1. Owner runs `/faq repair` once.
-2. Record its repaired/unrecoverable report.
-3. Reopen `official-info-channel` from scratch and confirm `/faq` and nested management-card text are gone.
-4. Confirm repaired row version increments rather than reverting the live version number.
-5. Confirm revision history remains intact.
-6. Owner/Admin fresh Browse, normal-user `/faq`, and normal-user free-text all show identical repaired content.
-7. Start an individual FAQ edit, then send `/faq`; verify the command is not saved as the field value.
-8. Attempt to save a management-card block as an FAQ field; verify the integrity guard rejects it.
-9. FAQ miss still proceeds to grounded AI/human fallback.
-10. Existing staff availability, takeover lease, Owner override, manuals, and AI outage behavior remain operational.
+Newest edit-UX slice requires:
+1. deploy production green
+2. open an existing FAQ at live v9 (or current version)
+3. choose `✨ Edit from one language` and a source language
+4. verify Step 1/2 shows `✕ Cancel Edit` and states the live version remains unchanged
+5. enter the new question and verify Step 2/2 still exposes Cancel
+6. press Cancel and confirm live FAQ content/version is unchanged
+7. restart edit, complete draft, approve, and verify exactly one new live version appears
+8. Owner/Admin fresh Browse, normal-user `/faq`, and normal-user free-text all show identical new content
+9. revision history remains preserved
+10. FAQ miss still proceeds to grounded AI/human fallback
