@@ -1,4 +1,4 @@
-import app from "./faq_ai_entry";
+import app from "./pre_faq_quality_entry";
 import { consumeAiSetupText } from "./ai";
 
 interface Env {
