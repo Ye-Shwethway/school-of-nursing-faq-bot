@@ -1,6 +1,6 @@
 # NEW CHAT BOOTSTRAP
 
-Last updated: 2026-08-19
+Last updated: 2026-08-20
 Repository: `Ye-Shwethway/school-of-nursing-faq-bot`
 Active branch: `main`
 Historical branch: `test` (dormant/reference-only)
@@ -17,116 +17,91 @@ Live repository plus verified production evidence outranks remembered chat conte
 Main-only production Telegram FAQ assistant. FAQ and Human Staff are primary continuity; grounded AI is supplementary.
 
 Staff recurring availability schedule/manual override is live-accepted.
+FAQ integrity repair is live-verified for `official-info-channel`: corrupt v8 → clean snapshot v5 → new live v9, revision history preserved.
 
-FAQ integrity repair is live-verified for `official-info-channel`: Owner `/faq repair` reported `corrupt v8 → clean snapshot v5 → new live v9`, and revision history was preserved.
+Newest issue: a normal user sending `Hi` could receive an unrelated FAQ answer even though `hello` correctly received the incomplete-question clarification. The word `hi` was already present in the old low-information set; the real defect was runtime ordering. `faq_ai_entry.ts` could attempt deterministic FAQ matching before the lower `input_quality_entry.ts` gate.
 
-Newest `main` slice improves edit safety/clarity for existing FAQs. During `✨ Edit from one language`, the current live FAQ remains unchanged until approval, text-input stages keep a visible `✕ Cancel Edit` control, and draft UI states which live version remains in force.
+Newest `main` slice moves low-information protection ahead of FAQ matching with a dedicated pre-FAQ guard and broadens greeting/acknowledgement normalization. Do not call this slice live-accepted until Telegram verification succeeds.
 
-Do not call this newest edit-UX slice live-accepted until Telegram verification succeeds.
+## Pre-FAQ quality guard
+New `src/pre_faq_quality_entry.ts` runs after Owner AI-setup interception and before `src/faq_ai_entry.ts`.
 
-## Confirmed corruption mechanism
-Legacy lower FAQ handling could invoke `consumeFaqAdminText()` before normal command routing. If an authorized Admin was waiting for an FAQ field value and sent `/faq`, that command could be treated as text and saved to the field. This explained the observed `MY A: /faq` exactly.
+Normal private free-text flow is now:
+1. AI setup interception when applicable
+2. **pre-FAQ low-information gate**
+3. FAQ management/deterministic D1 FAQ fast path
+4. lower input-quality safety net
+5. AI / human fallback as applicable
 
-The older store also accepted arbitrary field text without a final structural integrity check, so rendered FAQ-management blocks could become nested canonical field content.
+This guarantees greetings/noise cannot be consumed by the deterministic FAQ matcher first.
+
+The existing lower `src/input_quality_entry.ts` remains as a secondary guard and has the same expanded lexical behavior.
+
+## Low-information scope
+Normalized case-insensitive greeting/acknowledgement coverage includes:
+- `hi`, `hi!`, `hii`, `hiii`, and similar stretched `hi`
+- `hello`, punctuation/stretched variants
+- `hey`, `hiya`, `yo`, `hi there`, `hello there`, `hey there`
+- `ok`, `okay`, `yes`, `no`, `yep`, `yeah`, `nope`, `thanks`, `thank you`, `thx`
+- Burmese: `မင်္ဂလာပါ`, `ဟယ်လို`, `ဟိုင်း`, `ဟုတ်`, `ဟုတ်ကဲ့`, `အင်း`, `အေး`, thanks variants
+- Chinese: `你好`, `您好`, `嗨`, `好的`, `谢谢`, and simple yes/no acknowledgements
+
+Existing noise detection remains for numeric-only, punctuation-only, URL-only, @username-only, phone-like, repeated-character, and almost-empty input.
+
+Short meaningful School terms remain allowed, including `fee`, `fees`, `tuition`, `admission`, `apply`, `exam`, `cdm`, `accreditation`, `scholarship`, `loan`, `bond`, `campus`, `address`, `eligibility`, `calendar`.
+
+Filtered low-information input gets localized clarification plus the FAQ browse button. It must not generate a deterministic FAQ answer, AI answer, or escalation case.
+
+### Bypass contract
+The quality gate bypasses:
+- active authorized admin/setup/edit sessions expecting free text
+- conversations currently in Human Take Over mode
 
 ## FAQ live/current/history model
 - `faq_entries` = one current published row per stable `faq_key`
 - `faq_key` is PRIMARY KEY
-- approved edits overwrite the current row and increment `version`
-- `faq_revisions` separately archives before/after JSON snapshots
-- archived revisions are history/recovery only, never normal-user answer rows
-- deleting revision history is not the fix for stale/corrupt current content
-- multiple live FAQ versions must never be displayed for the same key
+- approved edits overwrite current row and increment `version`
+- `faq_revisions` archives history/recovery snapshots only
+- multiple live versions must never be displayed for the same key
+- `src/faq.ts` is seed/bootstrap only once D1 exists
 
-## Integrity prevention
-`src/faq_store.ts` rejects canonical create/update when any multilingual question/answer contains:
-- a command-only value such as `/faq` or `/start`
-- multiple rendered FAQ-card markers such as `FAQ ·`, `Key:`, `Version:`, `MY Q:`, `MY A:`, `EN Q:`, `EN A:`, `ZH Q:`, `ZH A:`
-- draft-preview control text
+## FAQ integrity prevention/recovery
+`src/faq_store.ts` rejects command-only values and rendered FAQ-management blocks from canonical question/answer fields. Dynamic FAQ and AI grounding skip structurally corrupt rows.
 
-The validator sits at the store boundary, so individual edits, manual translations, and AI-generated drafts all pass through the same final guard.
+Owner-only `/faq repair` restores the newest clean archived snapshot as a new live version while preserving revision history.
 
-Dynamic deterministic matching and grounded AI context skip rows that fail integrity validation.
-
-`src/faq_ai_entry.ts` remains the authoritative FAQ router and prevents slash commands from becoming FAQ authoring values through lower legacy wrappers.
-
-## Owner recovery
-Owner-only maintenance subcommand: `/faq repair`.
-
-Behavior:
-1. scan current live rows
-2. act only on rows detected as structurally corrupt
-3. search `faq_revisions` newest-first for the latest clean same-key snapshot
-4. restore that content as a new live version
-5. preserve the corrupt version and all historical revisions
-6. append the repair itself as another before/after revision
-7. report any key with no recoverable clean snapshot as `Needs manual review`
-
-No static FAQ answer is silently substituted during normal user traffic.
-
-Migration `0035_manual_faq_integrity_recovery.sql` adds Owner/Admin manual guidance.
+Migration range remains `0001` through `0035`.
 
 ## FAQ edit UX
-`src/faq_ai_entry.ts` now decorates active existing-FAQ edit sessions centrally.
-
-For `✨ Edit from one language`:
-- after a source language is selected, Step 1/2 shows `✕ Cancel Edit`
-- subsequent text-input stages keep the cancel control
-- UI states `Draft only · live vN remains unchanged until Approve & Save.`
-- `faq:editcancel` clears only the current FAQ edit session/draft
-- cancelling does not mutate the current live `faq_entries` row
-- draft preview may keep the existing `✕ Discard Draft` instead of duplicating Cancel
-- only `✅ Approve & Save` publishes the next live version
-- previous live content moves to revision history only
-
-The same central decorator also makes individual-field edit text-input stages cancelable without changing the live row before a value is actually saved.
-
-## Single FAQ runtime owner
-`src/faq_ai_entry.ts` owns:
-- `/faq` for all roles
-- all `faq:*` callbacks
-- FAQ authoring text/actions
-- `/faq repair`
-- edit cancel/session UI
-- normal-user deterministic D1 FAQ fast path
-
-D1 `faq_entries` is the live source. `src/faq.ts` is seed/bootstrap only once D1 exists.
-
-## Manual navigation
-Long Owner/Admin manuals include Previous/Next plus First/Last jumps.
+During `✨ Edit from one language`:
+- current live FAQ remains unchanged until approval
+- prompts show `Draft only · live vN remains unchanged until Approve & Save.`
+- text-input stages expose `✕ Cancel Edit`
+- cancel clears only the edit session/draft
+- only Approve & Save publishes the next live version
 
 ## Staff availability durable contract
 Timezone: Asia/Yangon / UTC+06:30.
 - recurring schedules survive plain `/available` and `/unavailable`
 - plain state commands override only until next schedule boundary
-- `/available cancel|clear` explicitly removes schedule
+- `/available cancel|clear` removes schedule explicitly
 - `/unavailable <hours>` preserves schedule
 - private mutations mirror to Staff Inbox
 - automatic effective transitions declare to private + Staff Inbox
 
-## Migrations / commands
-Current migration range: `0001` through `0035`.
-Registered command schema revision remains 11. Public 4; Sudo 12; Owner 19. `/faq repair` is a maintenance subcommand under `/faq`, not a new registered menu command.
+## Commands
+Command schema revision remains 11. Public 4; Sudo 12; Owner 19.
 
-## Other durable contracts
-- Human Staff continuity remains available when AI is down
-- AI outage alert is state-transition-only
-- Take Over uses persisted 1-hour inactivity lease; Owner can override immediately
-- deployment online notice shows revision + change summary
-- production workflow validates typecheck, migrations, dry-run, bindings, health, webhook cutover, and exact Owner command read-back
-
-## Next exact FAQ validation
+## Next exact validation
 After production workflow green:
-1. open repaired `official-info-channel` from Owner/Admin Browse and note current live version/content
-2. choose `✨ Edit from one language`
-3. select a language and verify Step 1/2 shows `✕ Cancel Edit` plus live-version-preserved copy
-4. send a replacement question; Step 2/2 must remain cancelable
-5. press Cancel and confirm the live FAQ/version/content did not change
-6. restart edit, complete the draft, and verify draft preview clearly remains non-canonical until approval
-7. Approve & Save and verify one next live version only
-8. Owner/Admin fresh Browse, normal-user `/faq`, and normal-user free-text must show identical current content
-9. revision history must remain intact
-10. copied management-card blocks and slash commands must still be rejected as FAQ content
+1. normal user sends: `Hi`, `hi`, `HI`, `hi!`, `hii`, `hiii`, `hello`, `hey`, `hiya`, `hi there`
+2. all must receive clarification + Browse FAQ only
+3. none may receive FAQ/AI content or create an escalation
+4. repeat with selected Burmese/Chinese greeting variants
+5. send `fee`, `exam`, `cdm`, `loan`, `bond`; these must still pass through to normal FAQ/AI handling
+6. verify an active FAQ edit/AI setup session still accepts its expected free text
+7. verify a Human Take Over conversation is not blocked by the quality gate
+8. verify existing FAQ repair/edit safety, staff availability, human-control lease, and AI outage behavior remain intact
 
 ## Documentation rule
-After behavior/schema/deployment work, keep ROADMAP, this file, FAQ content policy, and relevant manuals synchronized with repository reality.
+After behavior/schema/deployment work, keep ROADMAP, this file, FAQ policy, manuals, and relevant design rules synchronized with repository reality.
