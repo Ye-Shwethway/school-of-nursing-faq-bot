@@ -40,9 +40,12 @@ const SHORT_MEANINGFUL = new Set([
 ]);
 
 const LOW_INFORMATION = new Set([
-  "ok", "okay", "yes", "no", "hi", "hello", "hey", "thanks", "thank you",
-  "ဟုတ်", "ဟုတ်ကဲ့", "အင်း", "ကျေးဇူး", "ကျေးဇူးတင်ပါတယ်",
-  "好", "好的", "是", "不是", "谢谢", "你好",
+  "ok", "okay", "yes", "no", "yep", "yeah", "nope",
+  "hi", "hello", "hey", "hiya", "yo", "hello there", "hi there", "hey there",
+  "thanks", "thank you", "thankyou", "thx", "ty",
+  "ဟုတ်", "ဟုတ်ကဲ့", "အင်း", "အေး", "မင်္ဂလာပါ", "ဟယ်လို", "ဟိုင်း",
+  "ကျေးဇူး", "ကျေးဇူးတင်ပါတယ်",
+  "好", "好的", "是", "不是", "谢谢", "你好", "嗨", "您好",
 ]);
 
 function json(body: unknown, status = 200): Response {
@@ -54,6 +57,41 @@ function json(body: unknown, status = 200): Response {
 
 function privateChat(message: TelegramMessage): boolean {
   return Boolean(message.from && (message.chat.type === "private" || message.chat.id === message.from.id));
+}
+
+function normalizeLowInfo(text: string): string {
+  return text
+    .trim()
+    .toLocaleLowerCase()
+    .replace(/[\u200B-\u200D\uFEFF]/g, "")
+    .replace(/[!?.,;:၊။…]+$/gu, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function collapseGreetingStretch(value: string): string {
+  return value
+    .replace(/^h+i+$/u, "hi")
+    .replace(/^h+e+l+o+$/u, "hello")
+    .replace(/^h+e+y+$/u, "hey");
+}
+
+function isLowInformation(text: string): boolean {
+  const trimmed = text.trim();
+  if (!trimmed) return false;
+  const normalized = normalizeLowInfo(trimmed);
+  if (SHORT_MEANINGFUL.has(normalized)) return false;
+  if (LOW_INFORMATION.has(normalized) || LOW_INFORMATION.has(collapseGreetingStretch(normalized))) return true;
+  if (/^\d+(?:[\s,._-]*\d+)*$/u.test(trimmed)) return true;
+  if (/^[\p{P}\p{S}\s]+$/u.test(trimmed)) return true;
+  if (/^https?:\/\/\S+$/iu.test(trimmed)) return true;
+  if (/^@[A-Za-z0-9_]{2,}$/u.test(trimmed)) return true;
+  if (/^[+()\d\s.-]{5,}$/u.test(trimmed) && !/[\p{L}]/u.test(trimmed)) return true;
+  if (/^(.)\1{4,}$/u.test(trimmed)) return true;
+  if (!/[\p{L}\p{N}]/u.test(trimmed)) return true;
+
+  const lettersAndNumbers = Array.from(trimmed.matchAll(/[\p{L}\p{N}]/gu)).length;
+  return lettersAndNumbers <= 1;
 }
 
 async function telegramApi(env: Env, method: string, body: unknown): Promise<any | null> {
@@ -88,25 +126,6 @@ async function hasInteractiveSession(db: D1Database | undefined, userId: number)
   } catch {
     return false;
   }
-}
-
-function isLowInformation(text: string): boolean {
-  const trimmed = text.trim();
-  const normalized = trimmed.toLocaleLowerCase();
-  if (!trimmed) return false;
-  if (SHORT_MEANINGFUL.has(normalized.replace(/[?!.,]+$/u, ""))) return false;
-  if (LOW_INFORMATION.has(normalized)) return true;
-  if (/^\d+(?:[\s,._-]*\d+)*$/u.test(trimmed)) return true;
-  if (/^[\p{P}\p{S}\s]+$/u.test(trimmed)) return true;
-  if (/^https?:\/\/\S+$/iu.test(trimmed)) return true;
-  if (/^@[A-Za-z0-9_]{2,}$/u.test(trimmed)) return true;
-  if (/^[+()\d\s.-]{5,}$/u.test(trimmed) && !/[\p{L}]/u.test(trimmed)) return true;
-  if (/^(.)\1{4,}$/u.test(trimmed)) return true;
-  if (!/[\p{L}\p{N}]/u.test(trimmed)) return true;
-
-  const lettersAndNumbers = Array.from(trimmed.matchAll(/[\p{L}\p{N}]/gu)).length;
-  if (lettersAndNumbers <= 1) return true;
-  return false;
 }
 
 async function shouldBypassQualityGate(env: Env, userId: number): Promise<boolean> {
