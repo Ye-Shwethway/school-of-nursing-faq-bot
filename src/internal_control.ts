@@ -1,13 +1,36 @@
-import { getHandoffRoute, getStaffInboxChatId } from "./handoff";
-import { getMonitoringMode } from "./monitoring";
+import {
+  getDedicatedStaffId,
+  getHandoffRoute,
+  getStaffInboxChatId,
+  setHandoffRoute,
+  type HandoffRoute,
+} from "./handoff";
+import {
+  getMonitoringMode,
+  setMonitoringMode,
+  type MonitoringMode,
+} from "./monitoring";
 
 export type InternalControlEnv = {
   APP_ENV: string;
   DB?: D1Database;
   IANEO_SERVICE_TOKEN?: string;
+  BOT_OWNER_TELEGRAM_ID?: string;
 };
 
 export type InternalCapabilitySafety = "read" | "write" | "sensitive";
+
+export type InternalCapabilityChoice = {
+  value: string;
+  label: string;
+};
+
+export type InternalCapabilityInput = {
+  name: string;
+  label: string;
+  type: "choice";
+  choices: InternalCapabilityChoice[];
+};
 
 export type InternalCapability = {
   id: string;
@@ -15,6 +38,7 @@ export type InternalCapability = {
   description: string;
   safety: InternalCapabilitySafety;
   requiresConfirmation: boolean;
+  input?: InternalCapabilityInput;
 };
 
 const CAPABILITIES: InternalCapability[] = [
@@ -33,11 +57,46 @@ const CAPABILITIES: InternalCapability[] = [
     requiresConfirmation: false,
   },
   {
+    id: "monitoring.set",
+    label: "Set Monitoring Mode",
+    description: "Change the FAQ shadow-monitoring mode",
+    safety: "write",
+    requiresConfirmation: true,
+    input: {
+      name: "mode",
+      label: "Monitoring mode",
+      type: "choice",
+      choices: [
+        { value: "all_alerts", label: "All alerts" },
+        { value: "silent_all", label: "Silent all" },
+        { value: "alerts_only", label: "Alerts only" },
+        { value: "off", label: "Off" },
+      ],
+    },
+  },
+  {
     id: "handoff.status",
     label: "Handoff Status",
     description: "Read human-handoff routing and Staff Inbox configuration",
     safety: "read",
     requiresConfirmation: false,
+  },
+  {
+    id: "handoff.set",
+    label: "Set Handoff Route",
+    description: "Change the FAQ human-handoff routing mode",
+    safety: "write",
+    requiresConfirmation: true,
+    input: {
+      name: "route",
+      label: "Handoff route",
+      type: "choice",
+      choices: [
+        { value: "auto", label: "Auto" },
+        { value: "group", label: "Staff Inbox group" },
+        { value: "dedicated", label: "Dedicated staff" },
+      ],
+    },
   },
   {
     id: "admins.summary",
@@ -67,6 +126,14 @@ function authorized(request: Request, env: InternalControlEnv): boolean {
     env.IANEO_SERVICE_TOKEN &&
     request.headers.get("authorization") === `Bearer ${env.IANEO_SERVICE_TOKEN}`,
   );
+}
+
+function ownerId(env: InternalControlEnv): number {
+  const raw = env.BOT_OWNER_TELEGRAM_ID?.trim();
+  if (!raw || !/^\d+$/.test(raw)) throw new Error("owner_unconfigured");
+  const id = Number(raw);
+  if (!Number.isSafeInteger(id)) throw new Error("owner_unconfigured");
+  return id;
 }
 
 async function countQuery(db: D1Database, sql: string): Promise<number> {
@@ -122,10 +189,7 @@ async function executeReadAction(actionId: string, env: InternalControlEnv): Pro
   if (!env.DB) throw new Error("storage_unavailable");
 
   if (actionId === "operations.status") return operationsStatus(env);
-
-  if (actionId === "monitoring.status") {
-    return { mode: await getMonitoringMode(env.DB) };
-  }
+  if (actionId === "monitoring.status") return { mode: await getMonitoringMode(env.DB) };
 
   if (actionId === "handoff.status") {
     const [route, staffInboxId] = await Promise.all([
@@ -155,6 +219,48 @@ async function executeReadAction(actionId: string, env: InternalControlEnv): Pro
   throw new Error("unsupported_action");
 }
 
+function paramString(params: Record<string, unknown> | undefined, key: string): string | null {
+  const value = params?.[key];
+  return typeof value === "string" ? value : null;
+}
+
+async function executeWriteAction(
+  actionId: string,
+  env: InternalControlEnv,
+  params: Record<string, unknown> | undefined,
+): Promise<unknown> {
+  if (!env.DB) throw new Error("storage_unavailable");
+  const actorId = ownerId(env);
+
+  if (actionId === "monitoring.set") {
+    const mode = paramString(params, "mode");
+    if (!mode || !["all_alerts", "silent_all", "alerts_only", "off"].includes(mode)) {
+      throw new Error("invalid_monitoring_mode");
+    }
+    await setMonitoringMode(env.DB, actorId, mode as MonitoringMode);
+    return { mode: await getMonitoringMode(env.DB) };
+  }
+
+  if (actionId === "handoff.set") {
+    const route = paramString(params, "route");
+    if (!route || !["auto", "group", "dedicated"].includes(route)) {
+      throw new Error("invalid_handoff_route");
+    }
+
+    if (route === "group" && (await getStaffInboxChatId(env.DB)) === null) {
+      throw new Error("staff_inbox_not_configured");
+    }
+    if (route === "dedicated" && (await getDedicatedStaffId(env.DB)) === null) {
+      throw new Error("dedicated_staff_not_configured");
+    }
+
+    await setHandoffRoute(env.DB, actorId, route as HandoffRoute);
+    return { route: await getHandoffRoute(env.DB) };
+  }
+
+  throw new Error("unsupported_action");
+}
+
 export async function handleInternalControl(request: Request, env: InternalControlEnv): Promise<Response | null> {
   const url = new URL(request.url);
   if (!url.pathname.startsWith("/internal/v1/")) return null;
@@ -170,7 +276,7 @@ export async function handleInternalControl(request: Request, env: InternalContr
     return json({
       ok: true,
       service: "school-of-nursing-faq-bot",
-      version: 1,
+      version: 2,
       capabilities: CAPABILITIES,
     });
   }
@@ -189,20 +295,36 @@ export async function handleInternalControl(request: Request, env: InternalContr
     const actionId = actionMatch[1];
     const capability = CAPABILITIES.find((item) => item.id === actionId);
     if (!capability) return json({ ok: false, error: "unsupported_action" }, 404);
-    if (capability.safety !== "read") {
+
+    let body: { confirmed?: boolean; params?: Record<string, unknown> } = {};
+    try {
+      body = (await request.json()) as typeof body;
+    } catch {
+      body = {};
+    }
+
+    if (capability.safety !== "read" && capability.requiresConfirmation && body.confirmed !== true) {
+      return json({ ok: false, error: "confirmation_required" }, 409);
+    }
+    if (capability.safety === "sensitive") {
       return json({ ok: false, error: "action_not_enabled" }, 403);
     }
 
     try {
+      const data = capability.safety === "read"
+        ? await executeReadAction(actionId, env)
+        : await executeWriteAction(actionId, env, body.params);
       return json({
         ok: true,
         action: actionId,
         safety: capability.safety,
-        data: await executeReadAction(actionId, env),
+        data,
       });
     } catch (error) {
+      const message = String((error as Error)?.message ?? "action_failed");
       console.error("IANEO internal action failed", actionId, error);
-      return json({ ok: false, error: String((error as Error)?.message ?? "action_failed") }, 500);
+      const status = message.startsWith("invalid_") || message.endsWith("_not_configured") ? 400 : 500;
+      return json({ ok: false, error: message }, status);
     }
   }
 
