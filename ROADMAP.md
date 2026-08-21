@@ -11,35 +11,38 @@ Production Telegram FAQ assistant for a university School of Nursing in Burmese,
 - relevant main pushes run the production workflow.
 
 ## Current checkpoint
-Core FAQ/Human Staff production behavior remains authoritative. The newest integration slice adds a minimal read-only remote control surface for IANEO Orchestrator without replacing Telegram-native management.
+Core FAQ/Human Staff production behavior remains authoritative. IANEO integration now uses a dedicated authenticated internal control plane rather than Telegram bot-to-bot forwarding.
 
-### IANEO remote bridge — implemented, live auth verification pending
+### IANEO remote bridge — scalable capability registry
 
-`src/interaction_guard_entry.ts` now exposes:
+`src/internal_control.ts` is the canonical internal service-action registry. `src/interaction_guard_entry.ts` delegates `/internal/v1/...` requests to it before normal Telegram routing.
 
-`GET /internal/v1/status`
+Authenticated surfaces:
+
+- `GET /internal/v1/capabilities` — discover available service actions and safety metadata;
+- `GET /internal/v1/status` — backwards-compatible aggregate operational summary;
+- `POST /internal/v1/actions/<action-id>` — generic action dispatcher.
 
 Security contract:
 - dedicated `IANEO_SERVICE_TOKEN` Worker secret;
 - Bearer authorization required;
 - missing token -> HTTP 503 `internal_control_unconfigured`;
 - wrong/missing bearer -> HTTP 401 `unauthorized`;
-- no Telegram bot-to-bot forwarding;
-- no user identities, names, chat IDs, question bodies, or other private records returned.
+- no Telegram bot-to-bot command forwarding;
+- no private Telegram identities/question bodies returned by current actions;
+- action manifest declares `read`, `write`, or `sensitive` safety and whether confirmation is required;
+- current dispatcher enables read actions only. Write/sensitive registration is deferred until the matching confirmation/audit semantics are implemented.
 
-The first payload is intentionally read-only and aggregate-only:
-- service/environment identity;
-- monitoring mode;
-- handoff route + whether Staff Inbox is configured;
-- total users;
-- total questions;
-- pending questions;
-- active escalation cases;
-- active staff count;
-- Sudo Admin count;
-- human-controlled conversation count.
+Current registered read actions:
+- `operations.status`
+- `monitoring.status`
+- `handoff.status`
+- `admins.summary`
+- `cases.summary`
 
-This endpoint must not be considered live-integrated until `IANEO_SERVICE_TOKEN` is configured in the FAQ Worker, the same credential is configured as IANEO's `FAQ_SERVICE_TOKEN`, and an authenticated request through IANEO is verified.
+This architecture intentionally avoids one endpoint or IANEO UI implementation per Telegram Owner command. New remote-safe functionality should be added as a capability registry entry backed by the existing domain function, not by replaying Telegram command text.
+
+Current Telegram command registry remains schema revision **11**: Public 4, Sudo 12, Owner 19. Telegram commands and remote capabilities are separate interfaces over shared domain behavior; not every Telegram command must or should be exposed remotely.
 
 ## Input-quality precedence contract
 Low-information/incomplete input must be evaluated **before deterministic FAQ matching, AI, or escalation** for normal private users.
@@ -71,17 +74,15 @@ Timezone: **Asia/Yangon / UTC+06:30**.
 ## Migrations
 Current range: `0001` through `0035`.
 
-## Command registry
-Schema revision **11**. Public 4, Sudo 12, Owner 19.
-
 ## Validation boundary
-For the new IANEO bridge:
-1. production workflow for source commit `01dabf8e...` must be green;
-2. unauthenticated `/internal/v1/status` must not disclose data;
-3. before token configuration, endpoint may correctly return 503;
-4. after token configuration, correct bearer must return HTTP 200 with aggregate status only;
-5. wrong bearer must return 401;
-6. existing `/health` and Telegram webhook behavior must remain unchanged;
-7. IANEO must consume this endpoint through direct HTTPS using its own `FAQ_SERVICE_TOKEN` secret.
+For the capability-registry slice:
+1. production workflow after `src/internal_control.ts` / `src/interaction_guard_entry.ts` changes must be green;
+2. unauthenticated internal endpoints must not disclose data;
+3. `GET /internal/v1/capabilities` with the correct bearer must list the five registered read actions;
+4. `POST /internal/v1/actions/monitoring.status`, `handoff.status`, `admins.summary`, and `cases.summary` must return only their intended read-only data;
+5. unknown actions must return 404;
+6. non-read actions, when later declared, must remain blocked until explicitly enabled;
+7. existing `/health`, Telegram webhook, FAQ behavior, Owner commands and production scheduled behavior must remain unchanged;
+8. IANEO must consume capability discovery over direct HTTPS.
 
 Existing input-quality, FAQ integrity/edit, staff availability, human-control lease, AI outage, and Owner command validation remain required production boundaries.
