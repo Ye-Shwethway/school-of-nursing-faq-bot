@@ -16,42 +16,55 @@ Live repository plus verified production evidence outranks remembered chat conte
 ## Current checkpoint
 Main-only production Telegram FAQ assistant. FAQ and Human Staff are primary continuity; grounded AI is supplementary.
 
-Newest integration work adds a minimal authenticated remote read surface for IANEO Orchestrator while preserving all existing Telegram-native Owner/Admin behavior.
+IANEO integration has advanced from one aggregate status endpoint to a scalable authenticated internal capability registry. Telegram-native Owner/Admin commands remain unchanged and are not replayed bot-to-bot.
 
-## IANEO remote bridge
+## IANEO internal control plane
 
-Implemented in `src/interaction_guard_entry.ts`:
+Canonical implementation:
+- `src/internal_control.ts` — capability manifest + generic action dispatcher
+- `src/interaction_guard_entry.ts` — delegates `/internal/v1/...` before normal Telegram routing
 
-`GET /internal/v1/status`
-
-The bridge is intentionally tiny, read-only, and aggregate-only.
+Authenticated surfaces:
+- `GET /internal/v1/capabilities`
+- `GET /internal/v1/status` (backwards compatibility)
+- `POST /internal/v1/actions/<action-id>`
 
 Authentication:
 - FAQ Worker secret: `IANEO_SERVICE_TOKEN`
 - request header: `Authorization: Bearer <token>`
-- no token configured -> HTTP 503 `internal_control_unconfigured`
-- invalid/missing bearer -> HTTP 401 `unauthorized`
+- missing configured secret -> 503
+- invalid/missing bearer -> 401
 
-Returned information is limited to:
-- service/environment identity
-- monitoring mode
-- handoff route + Staff Inbox configured boolean
-- aggregate counts for users, questions, pending questions, active cases, active staff, Sudo Admins, and human-controlled conversations
+Current remote-safe read capabilities:
+- `operations.status`
+- `monitoring.status`
+- `handoff.status`
+- `admins.summary`
+- `cases.summary`
 
-It never returns Telegram user IDs, usernames, names, chat IDs, question bodies, or other private records.
+Each capability declares:
+- id
+- label/description
+- safety: `read`, `write`, or `sensitive`
+- `requiresConfirmation`
 
-The same credential must later be configured on IANEO as `FAQ_SERVICE_TOKEN`. Do not place the actual token in source/docs/chat.
+Current dispatcher intentionally executes only `read` actions. This gives future Owner-control expansion one reusable service-action registry rather than one HTTP endpoint/UI implementation per Telegram command.
 
-### Current verification boundary
-Source commit implementing the bridge: `01dabf8e...`.
+Important architecture rule:
+- Telegram command registry and IANEO capability registry are separate interfaces over shared domain behavior.
+- Do not forward `/admin`, `/sudo`, `/staff`, `/ai`, etc. as Telegram bot-to-bot messages.
+- When a command becomes useful remotely, expose the underlying domain operation as one capability entry.
+- Not every Owner command needs remote exposure.
 
-Do not call the bridge live-integrated until:
-1. FAQ production workflow is green;
-2. `IANEO_SERVICE_TOKEN` exists in the FAQ Worker;
-3. matching `FAQ_SERVICE_TOKEN` exists in the IANEO Worker;
-4. wrong/missing bearer is confirmed blocked;
-5. correct bearer returns HTTP 200 aggregate status;
-6. IANEO Telegram UI successfully displays the operational status through direct HTTPS.
+## Verified integration evidence before this slice
+
+The dedicated service credential is configured on both production Workers:
+- FAQ: `IANEO_SERVICE_TOKEN`
+- IANEO: `FAQ_SERVICE_TOKEN`
+
+A Cloudflare version mismatch was fixed by activating secret-bearing production versions at 100% traffic.
+
+IANEO successfully displayed the production FAQ Operational Summary through authenticated direct HTTPS, including monitoring/handoff and aggregate workload counts. Secret values are never documented.
 
 ## Existing production contracts retained
 
@@ -71,19 +84,27 @@ Draft edit keeps live content unchanged until Approve & Save. `✕ Cancel Edit` 
 Timezone Asia/Yangon / UTC+06:30. Recurring schedules survive temporary manual state changes and resume at schedule boundaries unless explicitly cleared.
 
 ## Commands
-Command schema revision 11. Public 4; Sudo 12; Owner 19.
+Telegram command schema revision remains 11. Public 4; Sudo 12; Owner 19.
 
 ## Secrets boundary
-Existing Worker secrets remain private. New bridge secret is `IANEO_SERVICE_TOKEN`. Never commit or expose its value.
+Existing Worker secrets remain private. IANEO bridge secret is `IANEO_SERVICE_TOKEN`. Never commit or expose its value.
+
+## Current validation boundary
+1. production workflow for capability-registry source changes must be green;
+2. correct bearer must read `/internal/v1/capabilities`;
+3. wrong/missing bearer must remain blocked;
+4. each of the five read actions must return its intended limited payload;
+5. unknown action must return 404;
+6. existing `/internal/v1/status` must remain compatible with current IANEO production until dynamic discovery is deployed;
+7. Telegram webhook, `/health`, schedules, FAQ behavior and Owner/Admin commands must remain unchanged.
 
 ## Next exact work
-1. verify production workflow for the bridge source change;
-2. configure dedicated bridge token in FAQ Worker and matching token in IANEO Worker;
-3. verify unauthorized/authorized HTTP behavior;
-4. extend IANEO `FaqAdapter` with `operations/status` capability;
-5. add a read-only Operational Status action to the IANEO FAQ submenu;
-6. live-test through Telegram;
-7. only then consider later write/sensitive actions with explicit confirmation.
+1. deploy/verify FAQ capability registry;
+2. deploy IANEO dynamic capability discovery;
+3. live-test Telegram FAQ menu showing discovered actions;
+4. verify Monitoring, Handoff, Admin Summary and Cases Summary reads;
+5. then register selected write actions in the same registry, with IANEO confirmation UX and server-side authorization/audit requirements;
+6. add sensitive actions such as Sudo/AI configuration only after their explicit confirmation and audit design is validated.
 
 ## Documentation rule
 After behavior/schema/deployment work, keep ROADMAP, this file, FAQ policy, manuals, and relevant design rules synchronized with repository reality.
