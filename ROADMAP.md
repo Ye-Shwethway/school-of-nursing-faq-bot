@@ -11,78 +11,73 @@ Production Telegram FAQ assistant for a university School of Nursing in Burmese,
 - relevant main pushes run the production workflow.
 
 ## Current checkpoint
-Core FAQ/Human Staff production behavior remains authoritative. IANEO integration now uses a dedicated authenticated internal control plane rather than Telegram bot-to-bot forwarding.
+Core FAQ/Human Staff production behavior remains authoritative. IANEO integration uses a dedicated authenticated internal control plane rather than Telegram bot-to-bot forwarding.
 
 ### IANEO remote bridge — scalable capability registry
 
 `src/internal_control.ts` is the canonical internal service-action registry. `src/interaction_guard_entry.ts` delegates `/internal/v1/...` requests to it before normal Telegram routing.
 
 Authenticated surfaces:
-
-- `GET /internal/v1/capabilities` — discover available service actions and safety metadata;
-- `GET /internal/v1/status` — backwards-compatible aggregate operational summary;
-- `POST /internal/v1/actions/<action-id>` — generic action dispatcher.
+- `GET /internal/v1/capabilities`
+- `GET /internal/v1/status`
+- `POST /internal/v1/actions/<action-id>`
 
 Security contract:
 - dedicated `IANEO_SERVICE_TOKEN` Worker secret;
 - Bearer authorization required;
-- missing token -> HTTP 503 `internal_control_unconfigured`;
-- wrong/missing bearer -> HTTP 401 `unauthorized`;
+- missing token -> HTTP 503;
+- wrong/missing bearer -> HTTP 401;
 - no Telegram bot-to-bot command forwarding;
-- no private Telegram identities/question bodies returned by current actions;
-- action manifest declares `read`, `write`, or `sensitive` safety and whether confirmation is required;
-- current dispatcher enables read actions only. Write/sensitive registration is deferred until the matching confirmation/audit semantics are implemented.
+- capability manifest declares `read`, `write`, or `sensitive` safety plus confirmation metadata;
+- sensitive actions remain disabled until separately authorized and audited.
 
-Current registered read actions:
+Current registered reads:
 - `operations.status`
 - `monitoring.status`
 - `handoff.status`
 - `admins.summary`
 - `cases.summary`
 
-This architecture intentionally avoids one endpoint or IANEO UI implementation per Telegram Owner command. New remote-safe functionality should be added as a capability registry entry backed by the existing domain function, not by replaying Telegram command text.
+Current bounded writes:
+- `monitoring.set` — choice input: `all_alerts`, `silent_all`, `alerts_only`, `off`;
+- `handoff.set` — choice input: `auto`, `group`, `dedicated`.
 
-Current Telegram command registry remains schema revision **11**: Public 4, Sudo 12, Owner 19. Telegram commands and remote capabilities are separate interfaces over shared domain behavior; not every Telegram command must or should be exposed remotely.
+Both writes require an explicit confirmed request. Target-side validation remains authoritative. `handoff.set` rejects `group` when Staff Inbox is not configured and rejects `dedicated` when no dedicated staff member is configured. Mutations reuse the existing domain functions and attribute the change to the configured Bot Owner ID.
 
-## Input-quality precedence contract
-Low-information/incomplete input must be evaluated **before deterministic FAQ matching, AI, or escalation** for normal private users.
+The capability manifest now supports one reusable `choice` input descriptor (`name`, `label`, choices). IANEO should render this generically rather than hard-coding per-command buttons.
 
-`src/pre_faq_quality_entry.ts` sits before `faq_ai_entry.ts`; the older lower `src/input_quality_entry.ts` remains a secondary guard. Both bypass active authorized setup/edit sessions and active human-controlled conversations.
+This architecture intentionally avoids one endpoint or one IANEO handler per Telegram Owner command. Telegram commands and remote capabilities are separate interfaces over shared domain functions. Current Telegram command registry remains schema revision **11**: Public 4, Sudo 12, Owner 19.
 
-Greeting/noise coverage includes common English/Burmese/Chinese greetings, acknowledgements, thanks, bare yes/no, numeric-only, punctuation-only, URL-only, username-only, phone-like, repeated-character, and other very low-content input. Short meaningful School terms such as `fee`, `exam`, `cdm`, `loan`, and `bond` remain allowed through.
+## Existing production contracts retained
 
-## FAQ current-row and archive contract
-- D1 `faq_entries` is the only live canonical FAQ store.
-- one current published row per stable `faq_key`.
-- approved update overwrites current row and increments `version`.
-- `faq_revisions` stores audit/recovery history.
-- `src/faq.ts` is seed/bootstrap data after D1 exists.
+### Input quality
+Low-information input is guarded before deterministic FAQ matching and again lower in the stack. Authorized setup/edit sessions and active Human Take Over conversations bypass the gate.
 
-## FAQ integrity and edit UX
-`src/faq_store.ts` rejects command/control text and rendered management blocks as canonical FAQ content. Owner `/faq repair` restores the newest clean same-key revision snapshot as a new live version while preserving history.
+### FAQ live/current/history
+- `faq_entries` is the only live canonical FAQ store;
+- one current row per `faq_key`;
+- approved edits overwrite current row and increment version;
+- `faq_revisions` stores audit/recovery history;
+- `/faq repair` restores the newest clean archived snapshot as a new live version.
 
-Edit-from-one-language keeps the current live row unchanged until Approve & Save. `✕ Cancel Edit` clears only the draft/session.
+### FAQ edit UX
+Draft editing keeps live content unchanged until Approve & Save. `✕ Cancel Edit` clears only the draft/session.
 
-## Staff availability contract
-Timezone: **Asia/Yangon / UTC+06:30**.
-- recurring schedule survives plain `/available` and `/unavailable`;
-- plain state commands override until next schedule boundary;
-- timed unavailability preserves recurring schedule;
-- explicit cancel/clear removes recurring schedule;
-- transitions are declared to private chat + Staff Inbox.
+### Staff availability
+Timezone: **Asia/Yangon / UTC+06:30**. Recurring schedules survive temporary manual state changes and resume at schedule boundaries unless explicitly cleared.
 
 ## Migrations
 Current range: `0001` through `0035`.
 
 ## Validation boundary
-For the capability-registry slice:
-1. production workflow after `src/internal_control.ts` / `src/interaction_guard_entry.ts` changes must be green;
-2. unauthenticated internal endpoints must not disclose data;
-3. `GET /internal/v1/capabilities` with the correct bearer must list the five registered read actions;
-4. `POST /internal/v1/actions/monitoring.status`, `handoff.status`, `admins.summary`, and `cases.summary` must return only their intended read-only data;
-5. unknown actions must return 404;
-6. non-read actions, when later declared, must remain blocked until explicitly enabled;
-7. existing `/health`, Telegram webhook, FAQ behavior, Owner commands and production scheduled behavior must remain unchanged;
-8. IANEO must consume capability discovery over direct HTTPS.
+For the bounded-write capability slice:
+1. production workflow after the `src/internal_control.ts` change must be green;
+2. capability discovery must list five reads plus `monitoring.set` and `handoff.set` with choice metadata;
+3. missing confirmation for either write must return `confirmation_required`;
+4. invalid choice values must fail closed;
+5. `monitoring.set` must persist and read back the selected monitoring mode;
+6. `handoff.set` must validate destination prerequisites and persist/read back the selected route;
+7. existing read actions, `/health`, Telegram webhook, Owner commands and scheduled behavior must remain unchanged;
+8. sensitive actions must remain unavailable.
 
 Existing input-quality, FAQ integrity/edit, staff availability, human-control lease, AI outage, and Owner command validation remain required production boundaries.
