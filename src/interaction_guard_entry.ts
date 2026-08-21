@@ -2,13 +2,13 @@ import app from "./rate_limit_entry";
 import type { Language } from "./faq";
 import { checkInteractionFlood, interactionFloodMessage } from "./interaction_flood";
 import { sweepExpiredHumanControls } from "./human_control_lease";
+import { handleInternalControl } from "./internal_control";
 import {
   countAvailableStaff,
   sweepStaffAvailability,
   type StaffAvailabilityTransition,
 } from "./staff_presence";
-import { getHandoffRoute, getStaffInboxChatId } from "./handoff";
-import { getMonitoringMode } from "./monitoring";
+import { getStaffInboxChatId } from "./handoff";
 
 interface Env {
   APP_ENV: string;
@@ -116,78 +116,6 @@ async function announceStaffAvailabilityTransitions(
   }
 }
 
-async function countQuery(db: D1Database, sql: string): Promise<number> {
-  const row = await db.prepare(sql).first<{ count: number }>();
-  const count = Number(row?.count ?? 0);
-  return Number.isFinite(count) ? count : 0;
-}
-
-function internalAuthorized(request: Request, env: Env): boolean {
-  if (!env.IANEO_SERVICE_TOKEN) return false;
-  return request.headers.get("authorization") === `Bearer ${env.IANEO_SERVICE_TOKEN}`;
-}
-
-async function handleInternalStatus(request: Request, env: Env): Promise<Response> {
-  if (!env.IANEO_SERVICE_TOKEN) {
-    return json({ ok: false, error: "internal_control_unconfigured" }, 503);
-  }
-  if (!internalAuthorized(request, env)) {
-    return json({ ok: false, error: "unauthorized" }, 401);
-  }
-  if (!env.DB) {
-    return json({ ok: false, error: "storage_unavailable" }, 503);
-  }
-
-  try {
-    const [
-      monitoringMode,
-      handoffRoute,
-      staffInboxId,
-      users,
-      questions,
-      pendingQuestions,
-      activeCases,
-      activeStaff,
-      sudoAdmins,
-      humanControlledConversations,
-    ] = await Promise.all([
-      getMonitoringMode(env.DB),
-      getHandoffRoute(env.DB),
-      getStaffInboxChatId(env.DB),
-      countQuery(env.DB, "SELECT COUNT(*) AS count FROM users"),
-      countQuery(env.DB, "SELECT COUNT(*) AS count FROM questions"),
-      countQuery(env.DB, "SELECT COUNT(*) AS count FROM questions WHERE resolution='pending'"),
-      countQuery(env.DB, "SELECT COUNT(*) AS count FROM escalation_cases WHERE status IN ('open','claimed')"),
-      countQuery(env.DB, "SELECT COUNT(*) AS count FROM staff_members WHERE active=1"),
-      countQuery(env.DB, "SELECT COUNT(*) AS count FROM admin_roles WHERE role='sudo_admin'"),
-      countQuery(env.DB, "SELECT COUNT(*) AS count FROM conversation_control WHERE mode='human'"),
-    ]);
-
-    return json({
-      ok: true,
-      service: "school-of-nursing-faq-bot",
-      environment: env.APP_ENV,
-      monitoring: { mode: monitoringMode },
-      handoff: {
-        route: handoffRoute,
-        staffInboxConfigured: staffInboxId !== null,
-      },
-      stats: {
-        users,
-        questions,
-        pendingQuestions,
-        activeCases,
-        activeStaff,
-        sudoAdmins,
-        humanControlledConversations,
-      },
-    });
-  } catch (error) {
-    console.error("IANEO internal status failed", error);
-    return json({ ok: false, error: "internal_status_failed" }, 500);
-  }
-}
-
 async function handleWebhook(request: Request, env: Env): Promise<Response> {
   if (env.TELEGRAM_WEBHOOK_SECRET) {
     const supplied = request.headers.get("X-Telegram-Bot-Api-Secret-Token");
@@ -237,10 +165,10 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
+    const internal = await handleInternalControl(request, env);
+    if (internal) return internal;
+
     const url = new URL(request.url);
-    if (request.method === "GET" && url.pathname === "/internal/v1/status") {
-      return handleInternalStatus(request, env);
-    }
     if (request.method === "POST" && url.pathname === "/telegram/webhook") {
       return handleWebhook(request, env);
     }
